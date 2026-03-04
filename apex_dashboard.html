@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APEX — Live Trading Intelligence</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+
+:root {
+  --bg:#050608; --s1:#090c10; --s2:#0d1219; --s3:#111820;
+  --b1:#162030; --b2:#1e2d40; --b3:#243650;
+  --acc:#e8ff47; --acc2:#00cfff; --bull:#00e87a; --bear:#ff3e5e;
+  --warn:#ff9d00; --purple:#b47fff;
+  --t1:#e4eef8; --t2:#7a96b0; --t3:#3a5268; --t4:#1e3448;
+  --glow-acc:0 0 24px rgba(232,255,71,0.2);
+  --glow-bull:0 0 20px rgba(0,232,122,0.25);
+  --glow-bear:0 0 20px rgba(255,62,94,0.25);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;overflow:hidden;background:var(--bg);}
+body{font-family:'DM Sans',sans-serif;color:var(--t1);font-size:13px;display:flex;flex-direction:column;}
+
+/* ── TOPBAR ── */
+.topbar{display:flex;align-items:center;height:50px;background:var(--s1);border-bottom:1px solid var(--b1);flex-shrink:0;padding:0 16px;gap:12px;}
+.logo{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;letter-spacing:3px;color:var(--acc);text-shadow:var(--glow-acc);white-space:nowrap;}
+.logo em{color:var(--t3);font-style:normal;}
+.vsep{width:1px;height:24px;background:var(--b1);}
+
+.t-pill{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 14px;cursor:pointer;height:100%;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:var(--t3);border-bottom:2px solid transparent;transition:all .15s;user-select:none;gap:1px;}
+.t-pill:hover{color:var(--t2);background:var(--s2);}
+.t-pill.active{color:var(--acc);border-bottom-color:var(--acc);}
+.t-pill .psub{font-size:8px;font-weight:400;color:var(--t4);letter-spacing:1px;}
+.t-pill.active .psub{color:var(--t3);}
+
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--bear);transition:background .3s;}
+.status-dot.live{background:var(--bull);box-shadow:var(--glow-bull);animation:pip 2s ease-in-out infinite;}
+@keyframes pip{0%,100%{opacity:1}50%{opacity:.3}}
+.status-txt{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--t3);}
+.clk{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--t4);}
+.api-in{background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:5px 9px;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:10px;outline:none;width:180px;transition:border-color .2s;}
+.api-in:focus{border-color:var(--acc);}
+.api-in::placeholder{color:var(--t4);}
+.btn{background:var(--acc);color:#050608;border:none;padding:6px 16px;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;letter-spacing:2px;cursor:pointer;white-space:nowrap;transition:all .2s;text-transform:uppercase;}
+.btn:hover:not(:disabled){box-shadow:var(--glow-acc);transform:translateY(-1px);}
+.btn:disabled{opacity:.35;cursor:not-allowed;}
+.btn-sm{padding:4px 10px;font-size:9px;letter-spacing:1px;}
+.btn-outline{background:transparent;border:1px solid var(--b2);color:var(--t2);}
+.btn-outline:hover:not(:disabled){border-color:var(--acc2);color:var(--acc2);box-shadow:none;transform:none;}
+
+/* ── MAIN ── */
+.main{display:grid;grid-template-columns:260px 1fr 1fr 280px;flex:1;overflow:hidden;}
+.col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--b1);}
+.col:last-child{border-right:none;}
+.col-hd{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--s1);border-bottom:1px solid var(--b1);flex-shrink:0;}
+.col-title{font-family:'Syne',sans-serif;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--t2);}
+.col-scroll{flex:1;overflow-y:auto;padding:12px 14px;}
+.col-scroll::-webkit-scrollbar{width:3px;}
+.col-scroll::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
+
+/* ── COMPONENTS ── */
+.sec-hd{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--t4);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+.sec-hd::after{content:'';flex:1;height:1px;background:var(--b1);}
+.sec{margin-bottom:14px;}
+
+/* Bias bars */
+.bias-row{display:flex;align-items:center;justify-content:space-between;background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:9px 12px;margin-bottom:6px;}
+.bias-period{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;color:var(--t3);text-transform:uppercase;}
+.bias-tag{font-family:'Syne',sans-serif;font-size:13px;font-weight:800;letter-spacing:1px;}
+.bias-tag.bull{color:var(--bull);}
+.bias-tag.bear{color:var(--bear);}
+.bias-tag.neutral{color:var(--warn);}
+.bias-bar{height:3px;background:var(--b1);border-radius:2px;overflow:hidden;margin-top:5px;width:80px;}
+.bias-fill{height:100%;border-radius:2px;transition:width 1s ease;}
+.bias-fill.bull{background:var(--bull);}
+.bias-fill.bear{background:var(--bear);}
+.bias-fill.neutral{background:var(--warn);}
+
+/* Signal card */
+.signal-card{background:var(--s2);border:2px solid var(--b2);border-radius:8px;padding:14px;margin-bottom:12px;transition:all .3s;}
+.signal-card.bull{border-color:var(--bull);box-shadow:var(--glow-bull);}
+.signal-card.bear{border-color:var(--bear);box-shadow:var(--glow-bear);}
+.signal-card.neutral{border-color:var(--warn);}
+.sig-dir{font-family:'Syne',sans-serif;font-size:30px;font-weight:800;letter-spacing:3px;line-height:1;}
+.sig-dir.bull{color:var(--bull);}
+.sig-dir.bear{color:var(--bear);}
+.sig-dir.neutral{color:var(--warn);}
+.sig-sub{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;color:var(--t3);margin-top:4px;}
+.conv-row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;}
+.conv-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t4);}
+.conv-num{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--acc);}
+.conv-bar{height:4px;background:var(--b1);border-radius:2px;overflow:hidden;margin-top:6px;}
+.conv-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc2),var(--acc));transition:width 1.3s cubic-bezier(.4,0,.2,1);width:0;}
+
+/* Risk */
+.risk-card{background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:11px;margin-bottom:10px;}
+.risk-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.risk-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;color:var(--t4);}
+.risk-val{font-family:'Syne',sans-serif;font-size:15px;font-weight:800;}
+.risk-val.low{color:var(--bull);}
+.risk-val.medium{color:var(--warn);}
+.risk-val.high{color:var(--bear);}
+.risk-val.extreme{color:var(--bear);text-shadow:0 0 8px rgba(255,62,94,.5);}
+.rf-item{display:flex;align-items:flex-start;gap:6px;font-size:11px;color:var(--t2);padding:3px 0;}
+.rf-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0;margin-top:4px;}
+.rf-dot.bull{background:var(--bull);}
+.rf-dot.bear{background:var(--bear);}
+.rf-dot.warn{background:var(--warn);}
+
+/* Macro grid */
+.macro-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px;}
+.mm{background:var(--s2);border:1px solid var(--b1);border-radius:4px;padding:8px;}
+.mm-lbl{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1px;color:var(--t4);text-transform:uppercase;}
+.mm-val{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;margin-top:2px;}
+
+/* Price cards */
+.price-card{background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:10px;margin-bottom:6px;cursor:pointer;transition:all .15s;}
+.price-card:hover{border-color:var(--b2);}
+.price-card.active{border-color:var(--acc);}
+.pc-hd{display:flex;justify-content:space-between;}
+.pc-sym{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;letter-spacing:1px;}
+.pc-name{font-size:9px;color:var(--t3);font-family:'IBM Plex Mono',monospace;margin-top:1px;}
+.pc-price{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;text-align:right;}
+.pc-chg{font-family:'IBM Plex Mono',monospace;font-size:10px;text-align:right;margin-top:1px;}
+.pc-chg.up{color:var(--bull);}
+.pc-chg.down{color:var(--bear);}
+.pc-live{font-family:'IBM Plex Mono',monospace;font-size:8px;color:var(--t4);margin-top:3px;}
+.pc-live.live{color:var(--bull);}
+
+/* Chart */
+.chart-col{display:flex;flex-direction:column;overflow:hidden;}
+.chart-hd{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--s1);border-bottom:1px solid var(--b1);flex-shrink:0;}
+.ch-ticker{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;letter-spacing:2px;}
+.ch-price{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:700;}
+.ch-chg{font-family:'IBM Plex Mono',monospace;font-size:11px;}
+.tf-tabs{display:flex;gap:3px;margin-left:auto;}
+.tf-tab{padding:3px 9px;border-radius:3px;background:var(--s2);border:1px solid var(--b1);color:var(--t3);font-family:'IBM Plex Mono',monospace;font-size:9px;cursor:pointer;transition:all .15s;letter-spacing:1px;}
+.tf-tab.active,.tf-tab:hover{border-color:var(--acc2);color:var(--acc2);background:rgba(0,207,255,.08);}
+.chart-wrap{flex:1;min-height:0;padding:10px;position:relative;}
+.chart-wrap canvas{width:100%!important;height:100%!important;}
+
+/* Indicators */
+.ind-strip{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--b1);flex-shrink:0;background:var(--s1);}
+.ind-cell{padding:7px 11px;border-right:1px solid var(--b1);}
+.ind-cell:last-child{border-right:none;}
+.ind-n{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1px;color:var(--t4);text-transform:uppercase;}
+.ind-v{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;margin-top:1px;}
+.ind-s{font-family:'IBM Plex Mono',monospace;font-size:9px;margin-top:1px;}
+
+/* Tabs */
+.tab-bar{display:flex;border-bottom:1px solid var(--b1);background:var(--s1);flex-shrink:0;}
+.tab-btn{padding:7px 12px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;cursor:pointer;color:var(--t4);border-bottom:2px solid transparent;transition:all .15s;text-transform:uppercase;white-space:nowrap;}
+.tab-btn.active{color:var(--acc);border-bottom-color:var(--acc);}
+.tab-content{flex:1;overflow-y:auto;padding:11px 14px;}
+.tab-content::-webkit-scrollbar{width:3px;}
+.tab-content::-webkit-scrollbar-thumb{background:var(--b2);}
+.tab-pane{display:none;font-size:12px;line-height:1.85;color:var(--t2);}
+.tab-pane.active{display:block;}
+
+/* Trade card */
+.trade-card{background:var(--s2);border:1px solid var(--b2);border-radius:6px;overflow:hidden;margin-bottom:10px;}
+.tc-hd{padding:9px 12px;background:var(--s3);border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center;}
+.tc-title{font-family:'Syne',sans-serif;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--t2);}
+.tr-row{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-bottom:1px solid var(--b1);}
+.tr-row:last-child{border-bottom:none;}
+.tr-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;color:var(--t4);text-transform:uppercase;}
+.tr-val{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;}
+.tr-val.bull{color:var(--bull);}
+.tr-val.bear{color:var(--bear);}
+.tr-val.acc{color:var(--acc);}
+.tr-val.acc2{color:var(--acc2);}
+.tr-val.warn{color:var(--warn);}
+
+/* Checklist */
+.check-item{display:flex;align-items:flex-start;gap:7px;padding:6px 9px;background:var(--s2);border:1px solid var(--b1);border-radius:4px;margin-bottom:5px;font-size:11px;color:var(--t2);line-height:1.5;}
+.ci-icon{font-size:11px;flex-shrink:0;margin-top:1px;}
+
+/* News */
+.news-item{padding:9px 0;border-bottom:1px solid var(--b1);}
+.news-item:last-child{border-bottom:none;}
+.ni-headline{font-size:11px;color:var(--t1);line-height:1.5;margin-bottom:3px;}
+.ni-meta{display:flex;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t4);}
+.ni-sent{padding:1px 6px;border-radius:2px;font-size:8px;}
+.ni-sent.bull{background:rgba(0,232,122,.1);color:var(--bull);}
+.ni-sent.bear{background:rgba(255,62,94,.1);color:var(--bear);}
+.ni-sent.neutral{background:rgba(255,157,0,.1);color:var(--warn);}
+
+/* Tags */
+.tag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:2px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;}
+.tag.bull{background:rgba(0,232,122,.12);color:var(--bull);border:1px solid rgba(0,232,122,.3);}
+.tag.bear{background:rgba(255,62,94,.12);color:var(--bear);border:1px solid rgba(255,62,94,.3);}
+.tag.warn{background:rgba(255,157,0,.12);color:var(--warn);border:1px solid rgba(255,157,0,.3);}
+.tag.acc{background:rgba(232,255,71,.1);color:var(--acc);border:1px solid rgba(232,255,71,.3);}
+.tag.acc2{background:rgba(0,207,255,.1);color:var(--acc2);border:1px solid rgba(0,207,255,.3);}
+
+/* Setup modal */
+.setup-modal{position:fixed;inset:0;background:rgba(5,6,8,.9);backdrop-filter:blur(6px);z-index:500;display:none;align-items:center;justify-content:center;}
+.setup-modal.show{display:flex;}
+.setup-box{background:var(--s1);border:1px solid var(--b2);border-radius:10px;padding:28px;width:480px;max-height:90vh;overflow-y:auto;}
+.setup-title{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;letter-spacing:2px;color:var(--acc);margin-bottom:4px;}
+.setup-sub{font-size:12px;color:var(--t3);margin-bottom:24px;line-height:1.6;}
+.setup-group{margin-bottom:18px;}
+.setup-label{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:1px;color:var(--t3);text-transform:uppercase;margin-bottom:6px;}
+.setup-input{width:100%;background:var(--s2);border:1px solid var(--b2);color:var(--t1);padding:9px 12px;border-radius:5px;font-family:'IBM Plex Mono',monospace;font-size:11px;outline:none;transition:border-color .2s;}
+.setup-input:focus{border-color:var(--acc);}
+.setup-input::placeholder{color:var(--t4);}
+.setup-hint{font-size:10px;color:var(--t4);margin-top:4px;}
+.setup-link{color:var(--acc2);text-decoration:none;}
+.setup-link:hover{text-decoration:underline;}
+.setup-status{padding:8px 12px;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:10px;margin-top:12px;display:none;}
+.setup-status.ok{background:rgba(0,232,122,.1);color:var(--bull);border:1px solid rgba(0,232,122,.3);}
+.setup-status.err{background:rgba(255,62,94,.1);color:var(--bear);border:1px solid rgba(255,62,94,.3);}
+
+/* Loader */
+.loader{position:fixed;inset:0;background:rgba(5,6,8,.9);backdrop-filter:blur(6px);z-index:400;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;}
+.loader.show{display:flex;}
+.spin{width:34px;height:34px;border:2px solid var(--b2);border-top-color:var(--acc);border-radius:50%;animation:spin .6s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.load-txt{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--acc);letter-spacing:2px;}
+.load-prog{width:260px;height:2px;background:var(--b1);border-radius:1px;overflow:hidden;}
+.load-bar{height:100%;background:linear-gradient(90deg,var(--acc2),var(--acc));transition:width .4s ease;width:0;}
+.load-sub{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t4);letter-spacing:1px;}
+
+/* DB badge */
+.db-badge{display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:3px;background:var(--s2);border:1px solid var(--b1);font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t3);}
+
+/* Streaming */
+.typing::after{content:'▋';color:var(--acc);animation:blink .6s step-end infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* Regime bar */
+.regime-bar{background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:9px 12px;margin-bottom:10px;}
+.regime-label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;color:var(--t4);margin-bottom:4px;}
+.regime-val{font-family:'Syne',sans-serif;font-size:12px;font-weight:700;color:var(--acc2);}
+
+::-webkit-scrollbar{width:3px;}
+::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="logo">APEX<em>FX</em></div>
+  <div class="vsep"></div>
+
+  <div style="display:flex;height:100%;" id="tickerPills">
+    <div class="t-pill active" data-sym="NQ" data-name="Nasdaq 100 Futures">NQ<span class="psub">NAS 100</span></div>
+    <div class="t-pill" data-sym="ES" data-name="S&P 500 E-Mini">ES<span class="psub">S&P 500</span></div>
+    <div class="t-pill" data-sym="GC" data-name="Gold Futures">GC<span class="psub">GOLD</span></div>
+    <div class="t-pill" data-sym="CL" data-name="Crude Oil">CL<span class="psub">CRUDE OIL</span></div>
+    <div class="t-pill" data-sym="BTC" data-name="Bitcoin USD">BTC<span class="psub">BITCOIN</span></div>
+    <div class="t-pill" data-sym="VIX" data-name="CBOE VIX">VIX<span class="psub">VOLATILITY</span></div>
+  </div>
+
+  <div class="topbar-right">
+    <div class="status-dot" id="statusDot"></div>
+    <div class="status-txt" id="statusTxt">CONNECTING…</div>
+    <div class="vsep"></div>
+    <div class="clk" id="clk">--:--:-- UTC</div>
+    <div class="vsep"></div>
+    <input class="api-in" type="password" id="anthropicKey" placeholder="Anthropic API key"/>
+    <button class="btn" id="runBtn" onclick="runAnalysis()">⚡ DAILY BRIEF</button>
+    <button class="btn btn-outline btn-sm" onclick="showSetup()">⚙ SETUP</button>
+  </div>
+</div>
+
+<!-- MAIN GRID -->
+<div class="main">
+
+  <!-- COL 1: THESIS + SIGNAL + RISK + MACRO -->
+  <div class="col">
+    <div class="col-hd"><span>🎯</span><div class="col-title">Daily Thesis</div></div>
+    <div class="col-scroll">
+
+      <div class="sec">
+        <div class="sec-hd">Market Regime</div>
+        <div class="regime-bar">
+          <div class="regime-label">CURRENT REGIME</div>
+          <div class="regime-val" id="regimeVal">Loading…</div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-hd">Multi-Timeframe Bias</div>
+        <div id="biasBars">
+          <div class="bias-row"><div><div class="bias-period">Monthly</div><div class="bias-bar"><div class="bias-fill" id="fillM" style="width:0%"></div></div></div><div class="bias-tag" id="tagM">—</div></div>
+          <div class="bias-row"><div><div class="bias-period">Weekly</div><div class="bias-bar"><div class="bias-fill" id="fillW" style="width:0%"></div></div></div><div class="bias-tag" id="tagW">—</div></div>
+          <div class="bias-row"><div><div class="bias-period">Daily</div><div class="bias-bar"><div class="bias-fill" id="fillD" style="width:0%"></div></div></div><div class="bias-tag" id="tagD">—</div></div>
+          <div class="bias-row"><div><div class="bias-period">Intraday 1H</div><div class="bias-bar"><div class="bias-fill" id="fillH" style="width:0%"></div></div></div><div class="bias-tag" id="tagH">—</div></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-hd">Today's Signal</div>
+        <div class="signal-card" id="signalCard">
+          <div class="sig-dir" id="sigDir">AWAITING<br>BRIEF</div>
+          <div class="sig-sub" id="sigSub">Run Daily Brief to generate live signal</div>
+          <div class="conv-row">
+            <div><div class="conv-lbl">CONVICTION</div><div class="conv-num" id="convNum">—</div></div>
+            <div id="sigTag"></div>
+          </div>
+          <div class="conv-bar"><div class="conv-fill" id="convFill"></div></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-hd">Session Risk</div>
+        <div class="risk-card">
+          <div class="risk-hd"><div class="risk-lbl">RISK RATING</div><div class="risk-val" id="riskVal">—</div></div>
+          <div id="riskFactors"><div style="font-size:11px;color:var(--t4);font-style:italic;">Run brief to evaluate…</div></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-hd">Live Macro</div>
+        <div class="macro-grid">
+          <div class="mm"><div class="mm-lbl">10Y Yield</div><div class="mm-val" id="mTnx">—</div></div>
+          <div class="mm"><div class="mm-lbl">VIX</div><div class="mm-val" id="mVix">—</div></div>
+          <div class="mm"><div class="mm-lbl">DXY</div><div class="mm-val" id="mDxy">—</div></div>
+          <div class="mm"><div class="mm-lbl">Gold</div><div class="mm-val" id="mGold">—</div></div>
+          <div class="mm"><div class="mm-lbl">Oil</div><div class="mm-val" id="mOil">—</div></div>
+          <div class="mm"><div class="mm-lbl">Fed Rate</div><div class="mm-val" id="mFed">4.25–4.50%</div></div>
+          <div class="mm"><div class="mm-lbl">2s/10s</div><div class="mm-val" id="mCurve">—</div></div>
+          <div class="mm"><div class="mm-lbl">Regime</div><div class="mm-val" id="mRegime" style="font-size:9px;">—</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- COL 2: LIVE CHART -->
+  <div class="col chart-col">
+    <div class="chart-hd">
+      <div class="ch-ticker" id="chTicker">NQ</div>
+      <div>
+        <div class="ch-price" id="chPrice">—</div>
+        <div class="ch-chg" id="chChg">—</div>
+      </div>
+      <div class="tf-tabs">
+        <div class="tf-tab active" onclick="setTF(this,'5min')">5M</div>
+        <div class="tf-tab" onclick="setTF(this,'1hour')">1H</div>
+        <div class="tf-tab" onclick="setTF(this,'1day')">1D</div>
+        <div class="tf-tab" onclick="setTF(this,'1week')">1W</div>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chartWrap">
+      <canvas id="mainChart"></canvas>
+    </div>
+    <div class="ind-strip">
+      <div class="ind-cell"><div class="ind-n">RSI 14</div><div class="ind-v" id="iRsi">—</div><div class="ind-s" id="iRsiS" style="color:var(--t4)">—</div></div>
+      <div class="ind-cell"><div class="ind-n">MACD</div><div class="ind-v" id="iMacd">—</div><div class="ind-s" id="iMacdS" style="color:var(--t4)">—</div></div>
+      <div class="ind-cell"><div class="ind-n">MA 20/50</div><div class="ind-v" id="iMa">—</div><div class="ind-s" id="iMaS" style="color:var(--t4)">—</div></div>
+      <div class="ind-cell"><div class="ind-n">ATR 14</div><div class="ind-v" id="iAtr">—</div><div class="ind-s" id="iAtrS" style="color:var(--t4)">—</div></div>
+      <div class="ind-cell"><div class="ind-n">Volume</div><div class="ind-v" id="iVol">—</div><div class="ind-s" id="iVolS" style="color:var(--t4)">—</div></div>
+    </div>
+
+    <!-- Analysis tabs -->
+    <div style="flex-shrink:0;border-top:1px solid var(--b1);display:flex;flex-direction:column;height:200px;">
+      <div class="tab-bar">
+        <div class="tab-btn active" onclick="setTab(this,'thesis')">📋 Thesis</div>
+        <div class="tab-btn" onclick="setTab(this,'macro')">🌐 Macro</div>
+        <div class="tab-btn" onclick="setTab(this,'technical')">📈 Technical</div>
+        <div class="tab-btn" onclick="setTab(this,'catalysts')">⚡ Catalysts</div>
+        <div class="tab-btn" onclick="setTab(this,'news')">📰 Live News</div>
+        <div class="tab-btn" onclick="setTab(this,'risk')">⚠ Risk</div>
+      </div>
+      <div class="tab-content">
+        <div class="tab-pane active" id="tab-thesis" style="color:var(--t4);font-style:italic;">Run Daily Brief to generate full analysis…</div>
+        <div class="tab-pane" id="tab-macro" style="color:var(--t4);font-style:italic;">Deep macro analysis will appear here…</div>
+        <div class="tab-pane" id="tab-technical" style="color:var(--t4);font-style:italic;">Technical analysis across all timeframes will appear here…</div>
+        <div class="tab-pane" id="tab-catalysts" style="color:var(--t4);font-style:italic;">Today's catalysts and key events will appear here…</div>
+        <div class="tab-pane" id="tab-news"><div id="newsList" style="color:var(--t4);font-size:11px;font-style:italic;">Loading live news…</div></div>
+        <div class="tab-pane" id="tab-risk" style="color:var(--t4);font-style:italic;">Risk factors and invalidation scenarios will appear here…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COL 3: INTRADAY + LEVELS + SESSIONS -->
+  <div class="col">
+    <div class="col-hd"><span>⏱</span><div class="col-title">Intraday Plan</div></div>
+    <div class="col-scroll">
+
+      <div class="sec">
+        <div class="sec-hd">Key Levels</div>
+        <div id="levelsGrid" style="display:flex;flex-direction:column;gap:5px;">
+          <div style="color:var(--t4);font-size:11px;font-style:italic;">Levels populate after brief…</div>
+        </div>
+      </div>
+
+      <div class="sec" style="margin-top:12px;">
+        <div class="sec-hd">Session Playbook</div>
+        <div id="sessionCards">
+          <div style="background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:11px;margin-bottom:7px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+              <div style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;">Pre-Market</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t3);">FUTURES → 09:30</div>
+            </div>
+            <div id="sesPre" style="font-size:11px;color:var(--t4);font-style:italic;">Pre-market context will appear here…</div>
+          </div>
+          <div style="background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:11px;margin-bottom:7px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;">NY Open</div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t3);">09:30–11:00</div>
+                <div id="sesOpenBias" style="font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;border-radius:2px;">—</div>
+              </div>
+            </div>
+            <div id="sesOpen" style="font-size:11px;color:var(--t4);font-style:italic;">Opening session strategy will appear here…</div>
+          </div>
+          <div style="background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:11px;margin-bottom:7px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;">Midday</div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t3);">11:00–14:00</div>
+                <div id="sesMidBias" style="font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;border-radius:2px;">—</div>
+              </div>
+            </div>
+            <div id="sesMid" style="font-size:11px;color:var(--t4);font-style:italic;">Midday guidance will appear here…</div>
+          </div>
+          <div style="background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:11px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;">Power Hour</div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t3);">15:00–16:00</div>
+                <div id="sesPowBias" style="font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;border-radius:2px;">—</div>
+              </div>
+            </div>
+            <div id="sesPow" style="font-size:11px;color:var(--t4);font-style:italic;">Power hour strategy will appear here…</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec" style="margin-top:4px;">
+        <div class="sec-hd">DB Status</div>
+        <div id="dbStats" style="display:flex;flex-direction:column;gap:4px;">
+          <div style="color:var(--t4);font-size:10px;font-family:'IBM Plex Mono',monospace;">Loading database stats…</div>
+        </div>
+        <button class="btn btn-outline btn-sm" style="margin-top:8px;width:100%;" onclick="triggerBackfill()">⬇ Backfill History</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- COL 4: TRADE EXECUTION -->
+  <div class="col">
+    <div class="col-hd"><span>💼</span><div class="col-title">Trade Execution</div></div>
+    <div class="col-scroll">
+
+      <div class="sec">
+        <div class="sec-hd">Primary Setup</div>
+        <div class="trade-card">
+          <div class="tc-hd"><div class="tc-title">Live Setup</div><div id="setupTag" class="tag acc">AWAITING</div></div>
+          <div class="tr-row"><div class="tr-lbl">Instrument</div><div class="tr-val" id="trInst">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Direction</div><div class="tr-val" id="trDir">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Entry Zone</div><div class="tr-val acc2" id="trEntry">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Stop Loss</div><div class="tr-val bear" id="trStop">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Target 1</div><div class="tr-val bull" id="trT1">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Target 2</div><div class="tr-val bull" id="trT2">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Risk/Reward</div><div class="tr-val acc" id="trRR">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Hold Period</div><div class="tr-val" id="trHold">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Max Risk</div><div class="tr-val warn" id="trRisk">—</div></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-hd">Alt / Reversal Setup</div>
+        <div class="trade-card">
+          <div class="tc-hd"><div class="tc-title">Secondary</div><div id="altTag" class="tag warn">STANDBY</div></div>
+          <div class="tr-row"><div class="tr-lbl">Trigger</div><div class="tr-val" id="altTrig">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Direction</div><div class="tr-val" id="altDir">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Entry</div><div class="tr-val acc2" id="altEntry">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Stop</div><div class="tr-val bear" id="altStop">—</div></div>
+          <div class="tr-row"><div class="tr-lbl">Target</div><div class="tr-val bull" id="altTarget">—</div></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-hd">Pre-Trade Checklist</div>
+        <div id="checklist"><div style="color:var(--t4);font-size:11px;font-style:italic;">Checklist generates after brief…</div></div>
+      </div>
+
+      <div class="sec" style="margin-top:4px;">
+        <div class="sec-hd">Live Signals</div>
+        <div id="keySignals"><div style="color:var(--t4);font-size:11px;font-style:italic;">Signals will populate after brief…</div></div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- SETUP MODAL -->
+<div class="setup-modal" id="setupModal">
+  <div class="setup-box">
+    <div class="setup-title">⚙ APEX SETUP</div>
+    <div class="setup-sub">Configure your API keys. All keys are saved locally on your machine in config.json — never sent anywhere except to the respective API providers.</div>
+
+    <div class="setup-group">
+      <div class="setup-label">Polygon.io API Key <span style="color:var(--bear)">*</span></div>
+      <input class="setup-input" type="password" id="polyKey" placeholder="Enter your Polygon.io API key"/>
+      <div class="setup-hint">Free tier at <a href="https://polygon.io" target="_blank" class="setup-link">polygon.io</a> — provides live prices + 2yr history. Takes 2 min to sign up.</div>
+    </div>
+
+    <div class="setup-group">
+      <div class="setup-label">NewsAPI Key</div>
+      <input class="setup-input" type="password" id="newsKey" placeholder="Enter your NewsAPI key"/>
+      <div class="setup-hint">Free tier at <a href="https://newsapi.org" target="_blank" class="setup-link">newsapi.org</a> — live financial news fed into macro analysis.</div>
+    </div>
+
+    <div class="setup-group">
+      <div class="setup-label">Anthropic API Key <span style="color:var(--bear)">*</span></div>
+      <input class="setup-input" type="password" id="anthropicSetupKey" placeholder="sk-ant-api03-..."/>
+      <div class="setup-hint">From <a href="https://console.anthropic.com" target="_blank" class="setup-link">console.anthropic.com</a> — powers all AI analysis.</div>
+    </div>
+
+    <div style="display:flex;gap:8px;">
+      <button class="btn" onclick="saveSetup()">SAVE CONFIGURATION</button>
+      <button class="btn btn-outline" onclick="closeSetup()">CANCEL</button>
+    </div>
+    <div class="setup-status" id="setupStatus"></div>
+  </div>
+</div>
+
+<!-- LOADER -->
+<div class="loader" id="loader">
+  <div class="spin"></div>
+  <div class="load-txt" id="loadTxt">INITIALISING…</div>
+  <div class="load-prog"><div class="load-bar" id="loadBar"></div></div>
+  <div class="load-sub" id="loadSub">CONNECTING TO APEX ENGINE</div>
+</div>
+
+<script>
+const API = 'https://apex-trading-production-ddb3.up.railway.app/api';
+const S = { sym:'NQ', name:'Nasdaq 100 Futures', tf:'1day', chart:null, prices:{}, macro:{} };
+
+// ── Clock ──
+setInterval(() => {
+  const n = new Date();
+  document.getElementById('clk').textContent = n.toUTCString().slice(17,25) + ' UTC';
+}, 1000);
+
+// ── API helpers ──
+async function apiFetch(path, opts={}) {
+  try {
+    const r = await fetch(API + path, { ...opts, headers: { 'Content-Type':'application/json', ...(opts.headers||{}) } });
+    return await r.json();
+  } catch(e) {
+    console.warn('API fetch failed:', path, e.message);
+    return null;
+  }
+}
+
+// ── Server status check ──
+async function checkServer() {
+  const data = await apiFetch('/status');
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusTxt');
+  if (data && data.status === 'online') {
+    dot.classList.add('live');
+    txt.textContent = `LIVE${data.polygon?' · POLYGON':''} · ENGINE ONLINE`;
+    return true;
+  } else {
+    dot.classList.remove('live');
+    txt.textContent = 'ENGINE OFFLINE — run server.py';
+    return false;
+  }
+}
+
+// ── Ticker selection ──
+document.querySelectorAll('.t-pill').forEach(p => {
+  p.addEventListener('click', () => {
+    document.querySelectorAll('.t-pill').forEach(x => x.classList.remove('active'));
+    p.classList.add('active');
+    S.sym = p.dataset.sym;
+    S.name = p.dataset.name;
+    document.getElementById('chTicker').textContent = S.sym;
+    loadChart();
+    loadPrices();
+  });
+});
+
+// ── Timeframe ──
+function setTF(btn, tf) {
+  document.querySelectorAll('.tf-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  S.tf = tf;
+  loadChart();
+}
+
+// ── Tabs ──
+function setTab(btn, id) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-' + id).classList.add('active');
+}
+
+// ── Chart ──
+async function loadChart() {
+  const data = await apiFetch(`/chart/${S.sym}?tf=${S.tf}&limit=300`);
+  if (!data || !data.bars || data.bars.length < 5) { return; }
+
+  const bars = data.bars;
+  const closes = bars.map(b => b.c).filter(x => x != null);
+  const price = closes[closes.length-1];
+
+  // Update header
+  document.getElementById('chPrice').textContent = fmt(price);
+
+  const canvas = document.getElementById('mainChart');
+  const wrap = document.getElementById('chartWrap');
+  canvas.width  = wrap.clientWidth  || 600;
+  canvas.height = wrap.clientHeight || 300;
+  const ctx = canvas.getContext('2d');
+  if (S.chart) { S.chart.destroy(); S.chart = null; }
+
+  // Labels
+  const labels = bars.map(b => {
+    const d = new Date(b.t * 1000);
+    if (S.tf === '5min' || S.tf === '1hour') return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    return d.toLocaleDateString([],{month:'short',day:'numeric'});
+  });
+
+  const first = closes[0];
+  const isBull = price >= first;
+  const lc = isBull ? '#00e87a' : '#ff3e5e';
+  const gc = isBull ? 'rgba(0,232,122,' : 'rgba(255,62,94,';
+
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, gc + '0.2)');
+  grad.addColorStop(1, gc + '0)');
+
+  const ma20 = calcMA(closes, 20);
+  const ma50 = calcMA(closes, 50);
+
+  S.chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: S.sym, data: closes, borderColor: lc, borderWidth: 2, backgroundColor: grad, fill: true, pointRadius: 0, tension: 0.3, order:1 },
+        { label: 'MA20', data: ma20, borderColor: 'rgba(255,157,0,0.65)', borderWidth:1.5, borderDash:[4,4], pointRadius:0, fill:false, tension:0.3, order:2 },
+        { label: 'MA50', data: ma50, borderColor: 'rgba(0,207,255,0.5)', borderWidth:1.5, borderDash:[6,3], pointRadius:0, fill:false, tension:0.3, order:3 }
+      ]
+    },
+    options: {
+      responsive: false, animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode:'index', intersect:false, backgroundColor:'#111820', borderColor:'#162030', borderWidth:1, titleColor:'#7a96b0', bodyColor:'#e4eef8', titleFont:{family:'IBM Plex Mono',size:9}, bodyFont:{family:'IBM Plex Mono',size:11}, callbacks:{label:c=>c.dataset.label+': '+(c.parsed.y!=null?fmt(c.parsed.y):'n/a')} }
+      },
+      scales: {
+        x: { grid:{color:'rgba(22,32,48,0.7)'}, ticks:{color:'#3a5268',font:{family:'IBM Plex Mono',size:8},maxTicksLimit:10} },
+        y: { position:'right', grid:{color:'rgba(22,32,48,0.7)'}, ticks:{color:'#7a96b0',font:{family:'IBM Plex Mono',size:9},callback:v=>fmt(v)} }
+      }
+    }
+  });
+
+  // Update indicators from server
+  loadTechnicals();
+}
+
+async function loadTechnicals() {
+  const data = await apiFetch(`/technicals/${S.sym}?tf=${S.tf}`);
+  if (!data) return;
+  S.prices = data;
+
+  setInd('iRsi', data.rsi?.toFixed(1), data.rsi > 70 ? 'OVERBOUGHT' : data.rsi < 30 ? 'OVERSOLD' : 'NEUTRAL', data.rsi > 70 ? 'var(--bear)' : data.rsi < 30 ? 'var(--bull)' : 'var(--t4)');
+  setInd('iMacd', data.macd?.toFixed(2), data.macd > data.macd_signal ? 'BULL X' : 'BEAR X', data.macd > data.macd_signal ? 'var(--bull)' : 'var(--bear)');
+  setInd('iMa', fmt(data.ma20), data.ma_cross === 'golden' ? 'GOLDEN X' : 'DEATH X', data.ma_cross === 'golden' ? 'var(--bull)' : 'var(--bear)');
+  setInd('iAtr', fmt(data.atr), data.atr ? (data.atr/data.price*100).toFixed(2)+'%' : '—', 'var(--t3)');
+  setInd('iVol', data.vol_ratio?.toFixed(2)+'x', data.vol_ratio > 1.5 ? 'HIGH VOL' : data.vol_ratio < 0.5 ? 'LOW VOL' : 'NORMAL', data.vol_ratio > 1.5 ? 'var(--warn)' : 'var(--t4)');
+}
+
+function setInd(id, val, sig, sigColor) {
+  const el = document.getElementById(id);
+  const sigEl = document.getElementById(id+'S');
+  if (el) el.textContent = val || '—';
+  if (sigEl) { sigEl.textContent = sig || '—'; sigEl.style.color = sigColor || 'var(--t4)'; }
+}
+
+// ── Prices ──
+async function loadPrices() {
+  const data = await apiFetch('/prices?symbols=NQ,ES,GC,CL,BTC,VIX');
+  if (!data) return;
+
+  // Update price header
+  const p = data[S.sym];
+  if (p) {
+    document.getElementById('chPrice').textContent = fmt(p.price);
+    const chEl = document.getElementById('chChg');
+    chEl.textContent = (p.change >= 0?'+':'') + fmt(p.change) + ' (' + (p.change_pct >= 0?'+':'') + p.change_pct?.toFixed(2) + '%)';
+    chEl.style.color = p.change >= 0 ? 'var(--bull)' : 'var(--bear)';
+  }
+}
+
+// ── Macro ──
+async function loadMacro() {
+  const data = await apiFetch('/macro');
+  if (!data) return;
+  S.macro = data;
+
+  const fmt2 = (v, dec=2) => v != null ? (+v).toFixed(dec) : '—';
+  setMM('mTnx', fmt2(data.tnx, 3) + '%', data.tnx);
+  setMM('mVix', fmt2(data.vix), data.vix, true);
+  setMM('mDxy', fmt2(data.dxy), data.dxy, true);
+  setMM('mGold', '$' + fmt(data.gold));
+  setMM('mOil', '$' + fmt2(data.oil));
+  setMM('mFed', '4.25–4.50%');
+
+  const curve = data.curve_2s10s;
+  const cEl = document.getElementById('mCurve');
+  if (cEl) { cEl.textContent = (curve >= 0 ? '+' : '') + curve?.toFixed(3); cEl.style.color = curve < 0 ? 'var(--bear)' : 'var(--bull)'; }
+
+  const regime = data.regime;
+  if (regime) {
+    document.getElementById('regimeVal').textContent = regime.description || regime.label || '—';
+    document.getElementById('mRegime').textContent = regime.risk_appetite?.replace('_',' ').toUpperCase() || '—';
+  }
+}
+
+function setMM(id, val, raw, invertColor) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = val;
+  if (raw != null) {
+    // For VIX and DXY, lower is better for equities
+    el.style.color = 'var(--t1)';
+  }
+}
+
+// ── News ──
+async function loadNews() {
+  const data = await apiFetch(`/news?symbol=${S.sym}`);
+  const container = document.getElementById('newsList');
+  if (!data || !data.articles || data.articles.length === 0) {
+    container.innerHTML = '<div style="color:var(--t4);font-size:11px;font-style:italic;">No live news — add NewsAPI key in Setup</div>';
+    return;
+  }
+  container.innerHTML = data.articles.slice(0, 12).map(a => {
+    const bull = /surge|rally|gain|rise|bull|beat|strong|growth|positive|up/i.test(a.headline);
+    const bear = /fall|drop|crash|decline|bear|miss|weak|negative|down|loss|concern|fear/i.test(a.headline);
+    const sent = bull ? 'bull' : bear ? 'bear' : 'neutral';
+    const sentTxt = bull ? 'BULLISH' : bear ? 'BEARISH' : 'NEUTRAL';
+    return `<div class="news-item">
+      <div class="ni-headline">${a.headline}</div>
+      <div class="ni-meta">
+        <span>${a.source}</span>
+        <span>${new Date(a.published).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
+        <span class="ni-sent ${sent}">${sentTxt}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── DB Stats ──
+async function loadDBStats() {
+  const data = await apiFetch('/db/stats');
+  const container = document.getElementById('dbStats');
+  if (!data || !data.stats || data.stats.length === 0) {
+    container.innerHTML = '<div style="color:var(--t4);font-size:10px;font-family:IBM Plex Mono,monospace;">No historical data yet — click Backfill History</div>';
+    return;
+  }
+  const grouped = {};
+  data.stats.forEach(s => { if (!grouped[s.symbol]) grouped[s.symbol] = []; grouped[s.symbol].push(s); });
+  container.innerHTML = Object.entries(grouped).map(([sym, tfs]) =>
+    `<div class="db-badge" style="flex-wrap:wrap;gap:3px;margin-bottom:3px;">
+      <span style="color:var(--t1);font-weight:700;">${sym}</span>
+      ${tfs.map(t=>`<span style="color:var(--t4);">${t.timeframe}:${t.bars}bars</span>`).join(' ')}
+    </div>`
+  ).join('');
+}
+
+async function triggerBackfill() {
+  const sym = S.sym;
+  const ok = confirm(`Backfill ${sym} historical data (up to 5 years)? This runs in the background and may take a few minutes.`);
+  if (!ok) return;
+  const data = await apiFetch('/db/backfill', { method:'POST', body: JSON.stringify({ symbol: sym, years: 5 }) });
+  if (data && data.ok) alert(`✓ Backfill started for ${sym}. Check console for progress.`);
+}
+
+// ── MAIN AI ANALYSIS ──
+async function runAnalysis() {
+  const key = document.getElementById('anthropicKey').value.trim();
+  if (!key) { alert('Please enter your Anthropic API key.'); return; }
+
+  const online = await checkServer();
+  if (!online) { alert('Cannot connect to APEX engine.\n\nMake sure server.py is running:\n  python server.py'); return; }
+
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  showLoader(true);
+
+  try {
+    stage('FETCHING LIVE PRICES…', 10, 'Polygon.io live data');
+    await loadPrices();
+
+    stage('FETCHING MACRO DATA…', 20, 'Yields, VIX, DXY, commodities');
+    await loadMacro();
+
+    stage('LOADING CHART DATA…', 30, 'Historical OHLCV from database');
+    await loadChart();
+
+    stage('FETCHING LIVE NEWS…', 40, 'NewsAPI financial headlines');
+    await loadNews();
+
+    stage('LOADING MULTI-TIMEFRAME DATA…', 50, 'Daily, weekly, monthly analysis');
+    const mtf = await apiFetch(`/multitf/${S.sym}`);
+
+    stage('RUNNING AI DEEP ANALYSIS…', 65, 'Claude synthesising all data layers');
+    const result = await callAI(key, mtf);
+
+    stage('RENDERING DAILY BRIEF…', 88, 'Populating all panels');
+    renderResult(result);
+
+    stage('COMPLETE', 100, '');
+    await sleep(400);
+
+  } catch(e) {
+    console.error(e);
+    document.getElementById('tab-thesis').innerHTML = `<div style="color:var(--bear);font-family:IBM Plex Mono,monospace;font-size:11px;">Error: ${e.message}</div>`;
+  } finally {
+    showLoader(false);
+    btn.disabled = false;
+  }
+}
+
+async function callAI(key, mtf) {
+  const p = S.prices;
+  const m = S.macro;
+  const regime = m.regime || {};
+
+  // Build news summary for prompt
+  const newsData = await apiFetch(`/news?symbol=${S.sym}`);
+  const newsSummary = (newsData?.articles || []).slice(0, 8).map(a => `• ${a.headline} [${a.source}]`).join('\n') || 'No live news available';
+
+  const prompt = `You are an elite institutional futures trader and macro strategist generating a COMPLETE DAILY TRADING BRIEF.
+
+TODAY: ${new Date().toUTCString()}
+INSTRUMENT: ${S.sym} — ${S.name}
+
+══ LIVE PRICE DATA ══
+Current Price: ${fmt(p.price)} ${p.price ? '(LIVE from Polygon.io)' : '(reference)'}
+RSI(14): ${p.rsi} — ${p.rsi > 70 ? 'OVERBOUGHT' : p.rsi < 30 ? 'OVERSOLD' : 'NEUTRAL'}
+MA20: ${fmt(p.ma20)} | MA50: ${fmt(p.ma50)} | MA200: ${fmt(p.ma200)}
+MA Cross: ${p.ma_cross === 'golden' ? 'GOLDEN CROSS — bullish structure' : 'DEATH CROSS — bearish structure'}
+MACD: ${p.macd} | Signal: ${p.macd_signal} | ${p.macd > p.macd_signal ? 'Above signal — bullish' : 'Below signal — bearish'}
+ATR(14): ${fmt(p.atr)} | Vol ratio: ${p.vol_ratio}x avg
+BB Upper: ${fmt(p.bb_upper)} | Mid: ${fmt(p.bb_mid)} | Lower: ${fmt(p.bb_lower)}
+Trend 20d: ${p.trend_20} | 50d: ${p.trend_50} | 200d: ${p.trend_200}
+
+══ MULTI-TIMEFRAME STRUCTURE ══
+5-Min:  RSI ${mtf?.['5min']?.rsi||'n/a'} | MA ${mtf?.['5min']?.ma_cross||'n/a'} | Trend ${mtf?.['5min']?.trend_20||'n/a'}
+1-Hour: RSI ${mtf?.['1hour']?.rsi||'n/a'} | MA ${mtf?.['1hour']?.ma_cross||'n/a'} | Trend ${mtf?.['1hour']?.trend_20||'n/a'}
+Daily:  RSI ${mtf?.['1day']?.rsi||'n/a'} | MA ${mtf?.['1day']?.ma_cross||'n/a'} | Trend ${mtf?.['1day']?.trend_20||'n/a'}
+Weekly: RSI ${mtf?.['1week']?.rsi||'n/a'} | MA ${mtf?.['1week']?.ma_cross||'n/a'} | Trend ${mtf?.['1week']?.trend_20||'n/a'}
+
+══ LIVE MACRO ENVIRONMENT ══
+Market Regime: ${regime.description || 'Unknown'}
+Risk Appetite: ${regime.risk_appetite || 'neutral'}
+VIX: ${m.vix} (${regime.vol_regime})
+10Y Yield: ${m.tnx}% (${regime.rate_regime})
+DXY: ${m.dxy} (${regime.dollar_regime})
+Yield Curve 2s/10s: ${m.curve_2s10s}% (${regime.curve_regime})
+Gold: $${m.gold} | Oil: $${m.oil}
+Fed Funds: ${m.fed_funds}
+
+══ LIVE NEWS HEADLINES ══
+${newsSummary}
+
+CRITICAL INSTRUCTION: All price levels (entry, stop, targets) MUST be within realistic range of the current price ${fmt(p.price)}. Entries must be within 1-2% of current price for intraday setups.
+
+Return ONLY valid JSON:
+{
+  "monthly_bias":"bullish/bearish/neutral","monthly_strength":<0-100>,"monthly_note":"<1 sentence>",
+  "weekly_bias":"bullish/bearish/neutral","weekly_strength":<0-100>,"weekly_note":"<1 sentence>",
+  "daily_bias":"bullish/bearish/neutral","daily_strength":<0-100>,"daily_note":"<1 sentence>",
+  "intraday_bias":"bullish/bearish/neutral","intraday_strength":<0-100>,"intraday_note":"<1 sentence>",
+  "today_signal":"BUY/SELL/HOLD",
+  "today_conviction":<0-100>,
+  "today_signal_reason":"<10 words max>",
+  "risk_rating":"LOW/MEDIUM/HIGH/EXTREME",
+  "risk_explanation":"<1 sentence>",
+  "risk_factors":[{"type":"bull/bear/warn","text":"<factor>"},{"type":"bull/bear/warn","text":"<factor>"},{"type":"bull/bear/warn","text":"<factor>"},{"type":"bull/bear/warn","text":"<factor>"}],
+  "thesis":"<4-5 sentences using actual live data>",
+  "macro_analysis":"<4-5 sentences referencing actual VIX/yields/DXY values and news>",
+  "technical_analysis":"<4-5 sentences referencing actual indicator values>",
+  "catalysts":"<4 sentences on specific catalysts including news items above>",
+  "risk_analysis":"<3 sentences on what invalidates this thesis>",
+  "key_levels":[
+    {"type":"res","price":"<above current ${fmt(p.price)}>","note":"<why>"},
+    {"type":"res","price":"<above current>","note":"<why>"},
+    {"type":"pivot","price":"<near current>","note":"Key decision level"},
+    {"type":"sup","price":"<below current>","note":"<why>"},
+    {"type":"sup","price":"<below current>","note":"<why>"}
+  ],
+  "session_premarket":"<2-3 sentences>",
+  "session_open_bias":"bullish/bearish/neutral",
+  "session_open":"<2-3 sentences>",
+  "session_mid_bias":"bullish/bearish/neutral",
+  "session_mid":"<2 sentences>",
+  "session_power_bias":"bullish/bearish/neutral",
+  "session_power":"<2-3 sentences>",
+  "primary_direction":"LONG/SHORT/FLAT",
+  "primary_entry":"<price within 1% of ${fmt(p.price)}>",
+  "primary_stop":"<price>",
+  "primary_t1":"<price>",
+  "primary_t2":"<price>",
+  "primary_rr":"<e.g. 1:2.5>",
+  "primary_hold":"<intraday / swing>",
+  "primary_risk_pct":"<e.g. 0.5-1% of account>",
+  "alt_trigger":"<condition>",
+  "alt_direction":"LONG/SHORT",
+  "alt_entry":"<price>",
+  "alt_stop":"<price>",
+  "alt_target":"<price>",
+  "checklist":[
+    {"pass":true/false,"text":"<condition 1>"},
+    {"pass":true/false,"text":"<condition 2>"},
+    {"pass":true/false,"text":"<condition 3>"},
+    {"pass":true/false,"text":"<condition 4>"},
+    {"pass":true/false,"text":"<condition 5>"},
+    {"pass":true/false,"text":"<condition 6>"}
+  ],
+  "key_signals":["<signal referencing actual data 1>","<signal 2>","<signal 3>","<signal 4>","<signal 5>"]
+}`;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:4000, messages:[{role:'user',content:prompt}] })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  const txt = data.content[0].text.trim();
+  const match = txt.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Could not parse AI response');
+  return JSON.parse(match[0]);
+}
+
+function renderResult(r) {
+  // Bias bars
+  setBias('M', r.monthly_bias, r.monthly_strength);
+  setBias('W', r.weekly_bias, r.weekly_strength);
+  setBias('D', r.daily_bias, r.daily_strength);
+  setBias('H', r.intraday_bias, r.intraday_strength);
+
+  // Signal
+  const sig = r.today_signal || 'HOLD';
+  const sc = sig==='BUY'?'bull':sig==='SELL'?'bear':'neutral';
+  document.getElementById('signalCard').className = 'signal-card ' + sc;
+  const sd = document.getElementById('sigDir');
+  sd.textContent = sig==='BUY'?'▲ BUY':sig==='SELL'?'▼ SELL':'— HOLD';
+  sd.className = 'sig-dir ' + sc;
+  document.getElementById('sigSub').textContent = r.today_signal_reason || '';
+  document.getElementById('convNum').textContent = r.today_conviction + '/100';
+  document.getElementById('convFill').style.width = r.today_conviction + '%';
+  document.getElementById('sigTag').innerHTML = `<span class="tag ${sc}">${sig}</span>`;
+
+  // Risk
+  const rv = document.getElementById('riskVal');
+  rv.textContent = r.risk_rating || '—';
+  rv.className = 'risk-val ' + (r.risk_rating||'').toLowerCase();
+  document.getElementById('riskFactors').innerHTML = (r.risk_factors||[]).map(f =>
+    `<div class="rf-item"><div class="rf-dot ${f.type}"></div><div>${f.text}</div></div>`
+  ).join('');
+
+  // Tabs
+  typeIn('tab-thesis', r.thesis);
+  typeIn('tab-macro', r.macro_analysis);
+  typeIn('tab-technical', r.technical_analysis);
+  typeIn('tab-catalysts', r.catalysts);
+  typeIn('tab-risk', r.risk_analysis);
+
+  // Levels
+  const lg = document.getElementById('levelsGrid');
+  const curr = S.prices.price;
+  lg.innerHTML = [
+    {type:'current', price: fmt(curr), note:'Current market price'},
+    ...(r.key_levels||[])
+  ].map(l => `
+    <div style="display:flex;align-items:center;background:var(--s2);border:1px solid var(--b1);border-radius:4px;padding:7px 10px;gap:8px;">
+      <div style="font-family:IBM Plex Mono,monospace;font-size:8px;letter-spacing:1px;padding:2px 6px;border-radius:2px;min-width:55px;text-align:center;${
+        l.type==='res'?'background:rgba(255,62,94,.12);color:var(--bear);':
+        l.type==='sup'?'background:rgba(0,232,122,.12);color:var(--bull);':
+        l.type==='pivot'?'background:rgba(0,207,255,.12);color:var(--acc2);':
+        l.type==='current'?'background:rgba(180,127,255,.12);color:var(--purple);':
+        'background:rgba(232,255,71,.1);color:var(--acc);'
+      }">${l.type.toUpperCase()}</div>
+      <div style="font-size:10px;color:var(--t3);flex:1;">${l.note}</div>
+      <div style="font-family:IBM Plex Mono,monospace;font-size:12px;font-weight:600;">${l.price}</div>
+    </div>`
+  ).join('');
+
+  // Sessions
+  setText('sesPre', r.session_premarket);
+  setText('sesOpen', r.session_open);
+  setText('sesMid', r.session_mid);
+  setText('sesPow', r.session_power);
+  setSessionBias('sesOpenBias', r.session_open_bias);
+  setSessionBias('sesMidBias', r.session_mid_bias);
+  setSessionBias('sesPowBias', r.session_power_bias);
+
+  // Trade card
+  const dc = r.primary_direction==='LONG'?'bull':r.primary_direction==='SHORT'?'bear':'';
+  document.getElementById('trInst').textContent = S.sym + ' — ' + S.name;
+  document.getElementById('trDir').textContent = r.primary_direction==='LONG'?'▲ LONG':r.primary_direction==='SHORT'?'▼ SHORT':'— FLAT';
+  document.getElementById('trDir').className = 'tr-val ' + dc;
+  document.getElementById('trEntry').textContent = r.primary_entry||'—';
+  document.getElementById('trStop').textContent  = r.primary_stop||'—';
+  document.getElementById('trT1').textContent    = r.primary_t1||'—';
+  document.getElementById('trT2').textContent    = r.primary_t2||'—';
+  document.getElementById('trRR').textContent    = r.primary_rr||'—';
+  document.getElementById('trHold').textContent  = r.primary_hold||'—';
+  document.getElementById('trRisk').textContent  = r.primary_risk_pct||'—';
+  document.getElementById('setupTag').textContent = r.primary_direction||'—';
+  document.getElementById('setupTag').className = 'tag ' + dc;
+
+  // Alt
+  document.getElementById('altTrig').textContent   = r.alt_trigger||'—';
+  document.getElementById('altDir').textContent    = r.alt_direction||'—';
+  document.getElementById('altDir').className = 'tr-val ' + (r.alt_direction==='LONG'?'bull':'bear');
+  document.getElementById('altEntry').textContent  = r.alt_entry||'—';
+  document.getElementById('altStop').textContent   = r.alt_stop||'—';
+  document.getElementById('altTarget').textContent = r.alt_target||'—';
+
+  // Checklist
+  document.getElementById('checklist').innerHTML = (r.checklist||[]).map(c =>
+    `<div class="check-item"><div class="ci-icon">${c.pass?'✅':'❌'}</div><div>${c.text}</div></div>`
+  ).join('');
+
+  // Signals
+  document.getElementById('keySignals').innerHTML = (r.key_signals||[]).map(s => {
+    const bc = /bull|buy|long|above|strong|break/i.test(s)?'bull':/bear|sell|short|below|weak/i.test(s)?'bear':'warn';
+    return `<div class="rf-item" style="padding:5px 0;border-bottom:1px solid var(--b1);">
+      <div class="rf-dot ${bc}"></div><div style="font-size:11px;color:var(--t2);">${s}</div></div>`;
+  }).join('');
+}
+
+// ── Helpers ──
+function setBias(id, bias, strength) {
+  const tag = document.getElementById('tag'+id);
+  const fill = document.getElementById('fill'+id);
+  if (!tag||!fill) return;
+  const cls = bias==='bullish'?'bull':bias==='bearish'?'bear':'neutral';
+  tag.textContent = bias==='bullish'?'BULLISH':bias==='bearish'?'BEARISH':'NEUTRAL';
+  tag.className = 'bias-tag ' + cls;
+  fill.className = 'bias-fill ' + cls;
+  setTimeout(() => fill.style.width = (strength||50)+'%', 100);
+}
+
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (!el||!text) return;
+  el.textContent = text;
+  el.style.color = 'var(--t2)';
+  el.style.fontStyle = 'normal';
+}
+
+function setSessionBias(id, bias) {
+  const el = document.getElementById(id);
+  if (!el||!bias) return;
+  const cls = bias==='bullish'?'bull':bias==='bearish'?'bear':'neutral';
+  const txt = bias==='bullish'?'↑ BULL':bias==='bearish'?'↓ BEAR':'→ NEUT';
+  el.textContent = txt;
+  el.className = 'tag ' + cls;
+}
+
+function typeIn(id, text) {
+  if (!text) return;
+  const el = document.getElementById(id);
+  el.classList.add('typing');
+  el.style.color = 'var(--t2)';
+  el.style.fontStyle = 'normal';
+  el.textContent = '';
+  let i = 0;
+  const speed = Math.max(5, 2500/text.length);
+  const iv = setInterval(() => {
+    el.textContent += text[i++];
+    if (i >= text.length) { clearInterval(iv); el.classList.remove('typing'); }
+  }, speed);
+}
+
+function calcMA(data, p) {
+  return data.map((_,i) => {
+    if (i < p-1) return null;
+    return data.slice(i-p+1,i+1).reduce((a,b)=>a+b,0)/p;
+  });
+}
+
+function fmt(v) {
+  if (v==null||isNaN(v)) return '—';
+  if (v > 10000) return v.toLocaleString('en',{minimumFractionDigits:0,maximumFractionDigits:0});
+  if (v > 100)   return v.toFixed(2);
+  if (v > 10)    return v.toFixed(3);
+  return v.toFixed(4);
+}
+
+function showLoader(show) { document.getElementById('loader').classList.toggle('show',show); }
+function stage(txt,pct,sub) {
+  document.getElementById('loadTxt').textContent = txt;
+  document.getElementById('loadBar').style.width = pct+'%';
+  document.getElementById('loadSub').textContent = sub||'';
+}
+function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+// ── Setup modal ──
+function showSetup() { document.getElementById('setupModal').classList.add('show'); }
+function closeSetup() { document.getElementById('setupModal').classList.remove('show'); }
+async function saveSetup() {
+  const data = {
+    polygon_key:   document.getElementById('polyKey').value.trim(),
+    news_key:      document.getElementById('newsKey').value.trim(),
+    anthropic_key: document.getElementById('anthropicSetupKey').value.trim(),
+  };
+  const res = await apiFetch('/config', { method:'POST', body: JSON.stringify(data) });
+  const st = document.getElementById('setupStatus');
+  if (res && res.ok) {
+    st.className = 'setup-status ok';
+    st.textContent = '✓ Configuration saved. Refresh the page to apply.';
+    st.style.display = 'block';
+    // Also copy anthropic key to main input
+    if (data.anthropic_key) document.getElementById('anthropicKey').value = data.anthropic_key;
+  } else {
+    st.className = 'setup-status err';
+    st.textContent = '✗ Could not save — is server.py running?';
+    st.style.display = 'block';
+  }
+}
+
+// ── Init ──
+(async () => {
+  showLoader(true);
+  stage('CONNECTING TO APEX ENGINE…', 15, 'https://apex-trading-production-ddb3.up.railway.app');
+  const online = await checkServer();
+
+  if (online) {
+    stage('LOADING LIVE PRICES…', 35, 'Fetching from Polygon.io');
+    await loadPrices();
+    stage('LOADING MACRO DATA…', 55, 'Yields, VIX, DXY');
+    await loadMacro();
+    stage('LOADING CHART DATA…', 70, 'Fetching OHLCV from database');
+    await loadChart();
+    stage('LOADING NEWS…', 85, 'Financial headlines');
+    await loadNews();
+    stage('LOADING DB STATS…', 92, 'Historical database');
+    await loadDBStats();
+  }
+
+  stage('READY', 100, online ? 'All systems online' : 'Start server.py to enable live data');
+  await sleep(400);
+  showLoader(false);
+})();
+
+// Auto-refresh every 30s
+setInterval(async () => {
+  await checkServer();
+  await loadPrices();
+  await loadMacro();
+}, 30000);
+</script>
+</body>
+</html>
