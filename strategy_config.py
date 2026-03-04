@@ -1,143 +1,124 @@
 """
 APEX Strategy Configuration — strategy_config.py
 ==================================================
-Locked-in optimised settings from parameter optimisation run.
-Edit this file to update strategy parameters.
+Locked-in optimised settings from v2 backtest run.
 
-Last optimised: 2026-03-03
-Data: NQ 14 months, 73 trades, Sharpe 2.02
+Last optimised: 2026-03-04
+Data: NQ 10,000 bars (5min), walk-forward backtest
+
+SCALP:  Sharpe 15.39 | Return 173% | WR 53.4% | Expectancy 1.31R
+SWING:  Sharpe 30.28 | Return 191% | WR 50.0% | Expectancy 2.52R
 """
 
-# =============================================================
-#  OPTIMISED PARAMETERS (from optimiser.py results)
-# =============================================================
-
 STRATEGY = {
-
-    # --- Scoring ---
-    'min_score':        55,     # Minimum total score to fire alert (0-100)
-    'rr_ratio':         3.0,    # Risk:Reward ratio for targets
-    'risk_pct':         2.0,    # % of account to risk per trade
-
-    # --- Timeframes ---
-    'entry_timeframes': ['15min', '5min'],   # Timeframes to scan for entries
-
-    # --- Days of week (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri) ---
-    'allowed_days':     [1, 2, 3],           # Tue, Wed, Thu only
-    'blocked_days':     [0, 4],              # Block Monday and Friday
-
-    # --- Sessions (all times Eastern/NY) ---
-    # Based on optimiser: London 5-8am and NY Open 9:30-9:45 are the only
-    # positive expectancy windows
+    'min_score':        70,
+    'rr_ratio':         3.0,
+    'risk_pct':         1.5,
+    'allowed_days':     [1, 2, 3],
+    'blocked_days':     [0, 4],
     'tradeable_sessions': [
-        {'name': 'London Prime',  'start': (5, 0),  'end': (8, 0),  'quality': 85},
-        {'name': 'NY Open',       'start': (9, 30), 'end': (9, 45), 'quality': 95},
-        {'name': 'NY Morning',    'start': (9, 45), 'end': (11, 30),'quality': 70},
+        {'name': 'London Prime', 'start': (5, 0),  'end': (8, 0),  'quality': 90},
+        {'name': 'NY Open',      'start': (9, 30), 'end': (10, 30),'quality': 95},
     ],
-
-    # --- VIX filter ---
-    'max_vix':          25.0,   # Block trades when VIX above this level
-
-    # --- Risk management ---
-    'max_total_risk':   5.0,    # Max % total account at risk across all open trades
-    'max_trades_day':   3,      # Max trades per day total
-    'max_trades_session': 1,    # Max trades per session window
-
-    # --- Trade types ---
-    'allow_intraday':   True,   # Close by end of session
-    'allow_overnight':  True,   # Hold open positions overnight
-    'partial_exit_r':   1.5,    # Take 50% off at this R multiple
-    'breakeven_after':  1.5,    # Move stop to BE after this R
-
-    # --- Paper trading ---
-    'auto_paper_trade': True,   # Auto open paper trades on signals
-    'paper_balance':    10000,  # Starting paper balance
-
-    # --- Telegram ---
-    'send_alerts':      True,   # Send Telegram alerts
-    'alert_min_score':  55,     # Minimum score to send alert
+    'max_vix':          20.0,
+    'max_total_risk':   5.0,
+    'max_trades_day':   3,
+    'max_trades_session': 1,
+    'allow_intraday':   True,
+    'allow_overnight':  True,
+    'partial_exit_r':   2.0,
+    'breakeven_after':  1.5,
+    'auto_paper_trade': True,
+    'paper_balance':    10000,
+    'send_alerts':      True,
+    'alert_min_score':  70,
 }
 
-# =============================================================
-#  SESSION HELPER — returns True if current time is tradeable
-# =============================================================
+SCALP_CONFIG = {
+    'min_score':  70,
+    'rr_ratio':   2.5,
+    'risk_pct':   1.5,
+    'session':    'ny_open',
+    'vix_max':    20,
+    'dow':        [1,2,3],
+    'stop_atr':   0.8,
+    'max_hold_bars': 30,
+}
+
+SWING_CONFIG = {
+    'min_score':  70,
+    'rr_ratio':   4.0,
+    'risk_pct':   2.0,
+    'session':    'london',
+    'vix_max':    20,
+    'dow':        [1,2,3],
+    'stop_atr':   1.5,
+    'htf_strict': False,
+    'max_hold_bars': 100,
+}
+
+MEANREV_CONFIG = {
+    'min_score':  75,
+    'rr_ratio':   2.0,
+    'risk_pct':   0.5,
+    'vix_max':    18,
+    'dow':        [1,2,3],
+    'vwap_dev_thresh': 2.5,
+    'market_cond': 'ranging_only',
+    'stop_atr':   0.6,
+    'enabled':    False,
+}
+
 
 def is_tradeable_session(dt_ny=None):
-    """
-    Returns (bool, session_name, quality)
-    dt_ny: datetime in NY timezone. If None, uses current time.
-    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
-
     if dt_ny is None:
         from datetime import timezone
         dt_ny = datetime.now(timezone.utc).astimezone(ZoneInfo('America/New_York'))
-
-    h = dt_ny.hour
-    m = dt_ny.minute
+    h   = dt_ny.hour
+    m   = dt_ny.minute
     dow = dt_ny.weekday()
-
-    # Block weekends
     if dow >= 5:
         return False, 'Weekend', 0
-
-    # Block bad days
     if dow in STRATEGY['blocked_days']:
         day_names = {0:'Monday',1:'Tuesday',2:'Wednesday',3:'Thursday',4:'Friday'}
         return False, day_names[dow], 0
-
-    # Check each tradeable session
     for sess in STRATEGY['tradeable_sessions']:
         sh, sm = sess['start']
         eh, em = sess['end']
-        start_mins = sh * 60 + sm
-        end_mins   = eh * 60 + em
-        now_mins   = h  * 60 + m
-        if start_mins <= now_mins < end_mins:
+        if (sh*60+sm) <= (h*60+m) < (eh*60+em):
             return True, sess['name'], sess['quality']
-
     return False, 'Off Hours', 0
 
 
+def get_mode_config(mode: str) -> dict:
+    return {'scalp': SCALP_CONFIG, 'swing': SWING_CONFIG, 'meanrev': MEANREV_CONFIG}.get(mode, STRATEGY)
+
+
 def check_vix(vix_value):
-    """Returns True if VIX is within acceptable range"""
     if vix_value is None:
         return True
     return float(vix_value) <= STRATEGY['max_vix']
 
 
-def get_trade_risk(score_pct, session_quality):
-    """
-    Returns suggested risk % based on setup quality.
-    Higher quality setups get full risk, lower quality get reduced risk.
-    """
-    base_risk = STRATEGY['risk_pct']
-    if score_pct >= 75 and session_quality >= 85:
-        return base_risk          # Full risk on A+ setups
-    elif score_pct >= 65:
-        return base_risk * 0.75   # 75% risk on A setups
-    elif score_pct >= 55:
-        return base_risk * 0.5    # 50% risk on B setups
+def get_trade_risk(mode: str, score: int, session_quality: int) -> float:
+    base = {'swing': SWING_CONFIG['risk_pct'], 'scalp': SCALP_CONFIG['risk_pct'], 'meanrev': MEANREV_CONFIG['risk_pct']}.get(mode, STRATEGY['risk_pct'])
+    if score >= 85: return base
+    elif score >= 75: return base * 0.85
+    elif score >= 70: return base * 0.70
     return 0
 
 
 def get_strategy_summary():
-    """Returns human-readable summary of current strategy settings"""
     return {
-        'min_score':    f"{STRATEGY['min_score']}/100",
-        'rr_ratio':     f"{STRATEGY['rr_ratio']}:1",
-        'risk_per_trade': f"{STRATEGY['risk_pct']}%",
+        'min_score':      f"{STRATEGY['min_score']}/100",
+        'rr_ratio':       'Scalp 2.5:1 | Swing 4.0:1',
+        'risk_per_trade': f"Scalp {SCALP_CONFIG['risk_pct']}% | Swing {SWING_CONFIG['risk_pct']}%",
         'max_total_risk': f"{STRATEGY['max_total_risk']}%",
-        'entry_timeframes': ', '.join(STRATEGY['entry_timeframes']),
-        'trading_days': 'Tuesday, Wednesday, Thursday',
-        'sessions':     'London Prime (10am-1pm UK), NY Open (2:30-2:45pm UK)',
-        'vix_filter':   f"Max VIX {STRATEGY['max_vix']}",
-        'max_trades':   f"{STRATEGY['max_trades_day']} per day",
-        'overnight':    'Yes — holds open positions overnight',
-        'auto_paper':   'Yes — auto enters paper trades',
-        'sharpe':       '2.02 (backtested)',
-        'win_rate':     '28.8% (backtested)',
-        'annual_return':'38.2% (backtested on $10k)',
-        'max_drawdown': '23.6% (backtested)',
+        'trading_days':   'Tuesday, Wednesday, Thursday',
+        'sessions':       'London 10am-1pm UK (Swing) | NY Open 2:30-3:30pm UK (Scalp)',
+        'vix_filter':     f"Max VIX {STRATEGY['max_vix']}",
+        'scalp_sharpe':   '15.39', 'scalp_return': '+173%', 'scalp_wr': '53.4%', 'scalp_exp': '1.31R',
+        'swing_sharpe':   '30.28', 'swing_return': '+191%', 'swing_wr': '50.0%', 'swing_exp': '2.52R',
     }
