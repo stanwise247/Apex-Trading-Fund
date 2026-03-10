@@ -20,7 +20,7 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger('APEX')
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
 CONFIG_FILE = 'config.json'
@@ -141,17 +141,6 @@ def init_db():
     conn.commit()
     conn.close()
     logger.info('Database initialised: ' + DB_PATH)
-    try:
-        _c = sqlite3.connect(DB_PATH)
-        _c.execute("CREATE TABLE IF NOT EXISTS paper_account (id INTEGER PRIMARY KEY, key TEXT UNIQUE, value TEXT)")
-        _c.execute("INSERT OR IGNORE INTO paper_account (key, value) VALUES ('balance', '10000')")
-        _c.execute("INSERT OR IGNORE INTO paper_account (key, value) VALUES ('starting_balance', '10000')")
-        _c.execute("INSERT OR IGNORE INTO paper_account (key, value) VALUES ('peak_balance', '10000')")
-        _c.commit()
-        _c.close()
-        logger.info('Paper account seeded OK')
-    except Exception as _e:
-        logger.warning('Paper seed error: ' + str(_e))
 
 
 def store_ohlcv(symbol, timeframe, bars):
@@ -1284,6 +1273,22 @@ def paper_update():
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
+
+@app.route('/api/paper/init')
+def paper_init():
+    """Initialise paper account with $10k if not already set"""
+    try:
+        from paper_trader import init_paper_db, get_account_value, set_account_value
+        init_paper_db()
+        bal = get_account_value('balance')
+        if not bal or float(bal) == 0:
+            set_account_value('balance', 10000)
+            set_account_value('starting_balance', 10000)
+            set_account_value('peak_balance', 10000)
+            return jsonify({'ok': True, 'message': 'Account initialised', 'balance': 10000})
+        return jsonify({'ok': True, 'message': 'Already initialised', 'balance': float(bal)})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 @app.route('/api/paper/reset', methods=['POST'])
 def paper_reset():
