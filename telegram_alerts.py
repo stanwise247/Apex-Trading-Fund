@@ -71,7 +71,14 @@ def send_telegram(message, token, chat_id, parse_mode='HTML', silent=False):
 
 
 def load_telegram_config():
-    """Load Telegram credentials from config.json"""
+    """Load Telegram credentials — env vars take priority over config.json"""
+    import os
+    # Environment variables take priority (Railway deployment)
+    token   = os.environ.get('TELEGRAM_TOKEN', '')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+    if token and chat_id:
+        return token, chat_id
+    # Fall back to config.json (local development)
     try:
         with open('config.json') as f:
             cfg = json.load(f)

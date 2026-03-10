@@ -390,12 +390,16 @@ function timeAgo(ts) {
 // ── MACRO PRICES ──
 async function loadMacro() {
   try {
-    const r = await fetch(BASE + '/api/macro');
-    const d = await r.json();
+    const [macroR, pricesR] = await Promise.all([
+      fetch(BASE + '/api/macro'),
+      fetch(BASE + '/api/prices?symbols=NQ,ES'),
+    ]);
+    const d  = await macroR.json();
+    const px = await pricesR.json();
 
     const map = {
-      'nq':   ['m-nq',  'mc-nq',  d.nq_futures || d.nq],
-      'es':   ['m-es',  'mc-es',  d.es_futures || d.es],
+      'nq':   ['m-nq',  'mc-nq',  px.NQ?.price || d.nq_futures || d.nq],
+      'es':   ['m-es',  'mc-es',  px.ES?.price || d.es_futures || d.es],
       'vix':  ['m-vix', 'mc-vix', d.vix],
       'gold': ['m-gold','mc-gold', d.gold],
       'dxy':  ['m-dxy', 'mc-dxy', d.dxy],
@@ -406,6 +410,14 @@ async function loadMacro() {
       const ce = document.getElementById(chgId);
       if (el && val != null) {
         el.textContent = key === 'vix' ? Number(val).toFixed(1) : fmt(val);
+        if ((key === 'nq' || key === 'es') && ce) {
+          const pxData = key === 'nq' ? px.NQ : px.ES;
+          if (pxData?.change_pct != null) {
+            const pct = parseFloat(pxData.change_pct);
+            ce.className = 'macro-chg ' + (pct >= 0 ? 'up' : 'down');
+            ce.textContent = (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct).toFixed(2) + '%';
+          }
+        }
         if (key === 'vix') {
           const vixNum = parseFloat(val);
           el.style.color = vixNum > 25 ? 'var(--red)' : vixNum > 20 ? 'var(--amber)' : 'var(--green)';
