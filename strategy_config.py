@@ -20,7 +20,7 @@ STRATEGY = {
         {'name': 'London Prime', 'start': (5, 0),  'end': (8, 0),  'quality': 90},
         {'name': 'NY Open',      'start': (9, 30), 'end': (10, 30),'quality': 95},
     ],
-    'max_vix':          20.0,
+    'max_vix':          25.0,
     'max_total_risk':   5.0,
     'max_trades_day':   3,
     'max_trades_session': 1,
