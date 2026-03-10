@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apex</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root {
+  --bg:      #F2F2F7;
+  --card:    #FFFFFF;
+  --border:  rgba(0,0,0,0.07);
+  --text:    #1C1C1E;
+  --sub:     #8E8E93;
+  --accent:  #0A84FF;
+  --green:   #30D158;
+  --red:     #FF453A;
+  --amber:   #FF9F0A;
+  --r:       16px;
+  --sh:      0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05);
+}
+
+body {
+  font-family:'DM Sans',-apple-system,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  padding:28px 32px 48px;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── HEADER ── */
+header {
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:36px;
+}
+.wordmark {
+  font-family:'Instrument Serif',serif;
+  font-size:24px;letter-spacing:-0.3px;color:var(--text);
+}
+.wordmark span {
+  font-size:12px;font-family:'DM Sans',sans-serif;
+  font-weight:400;color:var(--sub);margin-left:8px;letter-spacing:0;
+}
+.hdr-right { display:flex;align-items:center;gap:16px; }
+.live-badge {
+  display:flex;align-items:center;gap:6px;
+  background:rgba(48,209,88,0.1);border:1px solid rgba(48,209,88,0.25);
+  padding:5px 12px;border-radius:100px;font-size:12px;font-weight:500;color:#1a7a35;
+}
+.dot { width:6px;height:6px;background:var(--green);border-radius:50%;animation:blink 2s infinite; }
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#clock { font-family:'DM Mono',monospace;font-size:13px;color:var(--sub); }
+
+/* ── BANNER ── */
+#banner {
+  display:none;
+  align-items:center;gap:12px;
+  background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.22);
+  border-radius:12px;padding:13px 18px;margin-bottom:20px;
+  font-size:13px;font-weight:500;color:#7a4800;
+}
+#banner.show { display:flex; }
+#banner-sub { font-size:12px;color:#9a6820;margin-top:1px; }
+
+/* ── MACRO STRIP ── */
+.macro-strip {
+  display:grid;grid-template-columns:repeat(5,1fr);gap:12px;
+  margin-bottom:20px;
+}
+.macro-tile {
+  background:var(--card);border-radius:var(--r);
+  padding:16px 18px;box-shadow:var(--sh);border:1px solid var(--border);
+}
+.macro-lbl { font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--sub);margin-bottom:5px; }
+.macro-val { font-size:22px;font-weight:300;letter-spacing:-0.8px;line-height:1; }
+.macro-chg { font-size:11px;margin-top:4px; }
+.up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--sub)}
+
+/* ── GRID ── */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+
+/* ── CARD ── */
+.card {
+  background:var(--card);border-radius:var(--r);
+  padding:22px 24px;box-shadow:var(--sh);border:1px solid var(--border);
+}
+.card-lbl { font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);margin-bottom:14px; }
+
+/* ── ACCOUNT HERO ── */
+.acct-card {
+  background:var(--text);border-radius:var(--r);
+  padding:26px 28px;box-shadow:0 8px 32px rgba(0,0,0,0.14);
+  position:relative;overflow:hidden;
+}
+.acct-card::after {
+  content:'';position:absolute;top:-80px;right:-80px;
+  width:220px;height:220px;background:rgba(255,255,255,0.025);border-radius:50%;
+}
+.acct-lbl { font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px; }
+.acct-bal { font-size:40px;font-weight:300;letter-spacing:-2px;color:#fff;line-height:1; }
+.acct-ret { display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:13px;font-weight:500;color:var(--green); }
+.acct-grid { display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:20px;padding-top:18px;border-top:1px solid rgba(255,255,255,.08); }
+.acct-stat-lbl { font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:rgba(255,255,255,.35);margin-bottom:2px; }
+.acct-stat-val { font-size:15px;font-weight:400;color:rgba(255,255,255,.85); }
+
+/* ── SESSIONS ── */
+.sess-row { display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--border); }
+.sess-row:last-child{border-bottom:none}
+.sess-name{font-size:14px;font-weight:500}
+.sess-time{font-size:11px;color:var(--sub);margin-top:1px}
+.pill{font-size:10px;font-weight:700;padding:3px 10px;border-radius:100px;letter-spacing:.03em;white-space:nowrap}
+.pill-green{background:rgba(48,209,88,.1);color:#1a7a35;border:1px solid rgba(48,209,88,.25)}
+.pill-amber{background:rgba(255,159,10,.1);color:#7a4800;border:1px solid rgba(255,159,10,.25)}
+.pill-grey {background:rgba(142,142,147,.1);color:var(--sub);border:1px solid rgba(142,142,147,.2)}
+.pill-red  {background:rgba(255,69,58,.08);color:#8a1a12;border:1px solid rgba(255,69,58,.2)}
+
+/* ── METRIC ROWS ── */
+.mrow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)}
+.mrow:last-child{border-bottom:none}
+.mrow-lbl{font-size:13px;color:var(--sub)}
+.mrow-val{font-size:13px;font-weight:500;font-family:'DM Mono',monospace}
+
+/* ── SIGNALS ── */
+.sig-item{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--border)}
+.sig-item:last-child{border-bottom:none}
+.sig-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.sig-icon.long{background:rgba(48,209,88,.1)}
+.sig-icon.short{background:rgba(255,69,58,.08)}
+.sig-title{font-size:13px;font-weight:500;margin-bottom:2px}
+.sig-meta{font-size:11px;color:var(--sub)}
+.sig-r{font-family:'DM Mono',monospace;font-size:13px;font-weight:500;text-align:right}
+.sig-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 0;gap:6px}
+.sig-empty-icon{font-size:24px;opacity:.15}
+.sig-empty-txt{font-size:12px;color:var(--sub)}
+
+/* ── TRADE LOG ── */
+.tlog-head,.tlog-row{display:grid;grid-template-columns:70px 55px 1fr 65px 75px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
+.tlog-head{color:var(--sub);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.tlog-row:last-child{border-bottom:none}
+.pnl-p{color:var(--green);font-family:'DM Mono',monospace;font-weight:500}
+.pnl-n{color:var(--red);font-family:'DM Mono',monospace;font-weight:500}
+
+/* ── NEWS ── */
+.news-item{padding:13px 0;border-bottom:1px solid var(--border)}
+.news-item:last-child{border-bottom:none}
+.news-row1{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.news-hl{font-size:13px;font-weight:500;line-height:1.4;margin-bottom:3px}
+.news-meta{font-size:11px;color:var(--sub)}
+.imp{font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:4px}
+.imp-h{background:rgba(255,69,58,.1);color:#c0392b}
+.imp-m{background:rgba(255,159,10,.1);color:#d07000}
+.imp-l{background:rgba(142,142,147,.1);color:var(--sub)}
+
+/* ── STAT TILES ── */
+.stat-tile{background:var(--card);border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);border:1px solid var(--border)}
+.stat-lbl{font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--sub);margin-bottom:8px}
+.stat-val{font-size:28px;font-weight:300;letter-spacing:-1px;line-height:1}
+.stat-sub{font-size:11px;color:var(--sub);margin-top:4px}
+
+/* ── TELEGRAM BTN ── */
+.tg-btn{
+  display:inline-flex;align-items:center;gap:7px;
+  background:var(--accent);color:#fff;border:none;
+  padding:9px 18px;border-radius:10px;font-size:13px;font-weight:500;
+  cursor:pointer;font-family:'DM Sans',sans-serif;
+  transition:opacity .15s,transform .1s;
+}
+.tg-btn:hover{opacity:.88}
+.tg-btn:active{transform:scale(.97)}
+.tg-btn:disabled{opacity:.5;cursor:not-allowed}
+#tg-result{font-size:12px;margin-top:8px;color:var(--sub)}
+
+/* ── PROGRESS ── */
+.prog-wrap{margin-top:12px}
+.prog-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-bottom:5px}
+.prog-bg{height:4px;background:rgba(0,0,0,.06);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;border-radius:2px;transition:width .6s ease}
+
+/* ── SECTION LABEL ── */
+.sec-lbl{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--sub);margin:24px 0 12px}
+
+/* ── FADE IN ── */
+.fade{opacity:0;transform:translateY(8px);animation:fadein .4s ease forwards}
+@keyframes fadein{to{opacity:1;transform:none}}
+.fade:nth-child(1){animation-delay:.05s}
+.fade:nth-child(2){animation-delay:.1s}
+.fade:nth-child(3){animation-delay:.15s}
+.fade:nth-child(4){animation-delay:.2s}
+.fade:nth-child(5){animation-delay:.25s}
+
+@media(max-width:1100px){
+  .macro-strip{grid-template-columns:repeat(3,1fr)}
+  .grid3{grid-template-columns:1fr 1fr}
+  .grid4{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:760px){
+  body{padding:16px}
+  .macro-strip,.grid2,.grid3,.grid4{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="wordmark">Apex <span>Trading Engine v2</span></div>
+  <div class="hdr-right">
+    <div class="live-badge"><div class="dot"></div> Live</div>
+    <div id="clock">--:--:-- GMT</div>
+  </div>
+</header>
+
+<!-- BANNER (VIX / news block) -->
+<div id="banner">
+  <span style="font-size:18px">⚠️</span>
+  <div>
+    <div id="banner-msg">Scanner paused</div>
+    <div id="banner-sub"></div>
+  </div>
+</div>
+
+<!-- MACRO STRIP -->
+<div class="macro-strip" id="macro-strip">
+  <div class="macro-tile fade"><div class="macro-lbl">NQ</div><div class="macro-val" id="m-nq">—</div><div class="macro-chg" id="mc-nq"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">ES</div><div class="macro-val" id="m-es">—</div><div class="macro-chg" id="mc-es"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">VIX</div><div class="macro-val" id="m-vix">—</div><div class="macro-chg flat" id="mc-vix"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">Gold</div><div class="macro-val" id="m-gold">—</div><div class="macro-chg" id="mc-gold"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">DXY</div><div class="macro-val" id="m-dxy">—</div><div class="macro-chg" id="mc-dxy"></div></div>
+</div>
+
+<div class="sec-lbl">Account</div>
+
+<!-- ROW 1: account + sessions + strategy -->
+<div class="grid3">
+
+  <!-- ACCOUNT -->
+  <div class="acct-card fade">
+    <div class="acct-lbl">Paper Account</div>
+    <div class="acct-bal" id="acct-bal">$—</div>
+    <div class="acct-ret" id="acct-ret">— all time</div>
+    <div class="acct-grid">
+      <div><div class="acct-stat-lbl">Open P&L</div><div class="acct-stat-val" id="acct-open">—</div></div>
+      <div><div class="acct-stat-lbl">Win Rate</div><div class="acct-stat-val" id="acct-wr">—</div></div>
+      <div><div class="acct-stat-lbl">Drawdown</div><div class="acct-stat-val" id="acct-dd">—</div></div>
+      <div><div class="acct-stat-lbl">Trades</div><div class="acct-stat-val" id="acct-trades">—</div></div>
+    </div>
+  </div>
+
+  <!-- SESSIONS -->
+  <div class="card fade">
+    <div class="card-lbl">Sessions · Today</div>
+    <div class="sess-row">
+      <div><div class="sess-name">London Prime</div><div class="sess-time">10:00–13:00 UK · Swing</div></div>
+      <span class="pill" id="sess-london">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">NY Open</div><div class="sess-time">14:30–15:30 UK · Scalp</div></div>
+      <span class="pill" id="sess-ny">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">VIX Filter</div><div class="sess-time" id="vix-filter-sub">Max 25 · Current —</div></div>
+      <span class="pill" id="sess-vix">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">Day Filter</div><div class="sess-time" id="day-filter-sub">Tue / Wed / Thu only</div></div>
+      <span class="pill" id="sess-day">—</span>
+    </div>
+  </div>
+
+  <!-- STRATEGY METRICS -->
+  <div class="card fade">
+    <div class="card-lbl">Strategy · Backtest</div>
+    <div class="mrow"><span class="mrow-lbl">Swing Sharpe</span><span class="mrow-val">30.28</span></div>
+    <div class="mrow"><span class="mrow-lbl">Scalp Sharpe</span><span class="mrow-val">15.39</span></div>
+    <div class="mrow"><span class="mrow-lbl">Swing WR / Exp</span><span class="mrow-val">50% · 2.52R</span></div>
+    <div class="mrow"><span class="mrow-lbl">Scalp WR / Exp</span><span class="mrow-val">53% · 1.31R</span></div>
+    <div class="mrow"><span class="mrow-lbl">Score threshold</span><span class="mrow-val">70 / 100</span></div>
+    <div class="mrow"><span class="mrow-lbl">Risk · Swing / Scalp</span><span class="mrow-val">2% · 1.5%</span></div>
+  </div>
+
+</div>
+
+<div class="sec-lbl">Signals & Trades</div>
+
+<!-- ROW 2: signals + trade log -->
+<div class="grid2">
+
+  <!-- SIGNALS -->
+  <div class="card fade">
+    <div class="card-lbl">Recent Signals</div>
+    <div id="signals-list">
+      <div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">Loading signals...</div></div>
+    </div>
+  </div>
+
+  <!-- TRADE LOG -->
+  <div class="card fade">
+    <div class="card-lbl">Trade Log</div>
+    <div class="tlog-head"><span>Date</span><span>Mode</span><span>Setup</span><span>Result</span><span>P&L</span></div>
+    <div id="trade-log">
+      <div style="padding:24px 0;text-align:center;color:var(--sub);font-size:12px">No trades yet</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="sec-lbl">Macro & News</div>
+
+<!-- ROW 3: news + regime + telegram -->
+<div class="grid3">
+
+  <!-- NEWS -->
+  <div class="card fade" style="grid-column:span 2">
+    <div class="card-lbl">News & Calendar</div>
+    <div id="news-list">
+      <div style="padding:20px 0;text-align:center;color:var(--sub);font-size:12px">Loading news...</div>
+    </div>
+  </div>
+
+  <!-- REGIME + TELEGRAM -->
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+    <div class="card fade">
+      <div class="card-lbl">Macro Regime</div>
+      <div class="mrow"><span class="mrow-lbl">Trend</span><span class="mrow-val" id="reg-trend">—</span></div>
+      <div class="mrow"><span class="mrow-lbl">Volatility</span><span class="mrow-val" id="reg-vol">—</span></div>
+      <div class="mrow"><span class="mrow-lbl">Risk Appetite</span><span class="mrow-val" id="reg-risk">—</span></div>
+      <div class="mrow"><span class="mrow-lbl">Bias</span><span class="mrow-val" id="reg-bias">—</span></div>
+      <div class="prog-wrap">
+        <div class="prog-labels"><span>Stability</span><span id="stab-score">—</span></div>
+        <div class="prog-bg"><div class="prog-fill" id="stab-bar" style="width:0%;background:var(--accent)"></div></div>
+      </div>
+    </div>
+
+    <div class="card fade">
+      <div class="card-lbl">Telegram</div>
+      <div style="font-size:13px;color:var(--sub);margin-bottom:14px">Send a test message to confirm alerts are working.</div>
+      <button class="tg-btn" id="tg-btn" onclick="testTelegram()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        Send Test
+      </button>
+      <div id="tg-result"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+const BASE = '';
+
+// ── CLOCK ──
+function tick() {
+  const n = new Date();
+  const p = v => String(v).padStart(2,'0');
+  document.getElementById('clock').textContent =
+    `${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())} GMT`;
+}
+tick(); setInterval(tick, 1000);
+
+// ── HELPERS ──
+function fmt(n, dec=0) {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-US', {minimumFractionDigits:dec, maximumFractionDigits:dec});
+}
+function fmtUSD(n) {
+  if (n == null || isNaN(n)) return '—';
+  const sign = n >= 0 ? '+' : '';
+  return sign + '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function chgHtml(chg, pct) {
+  if (chg == null) return '';
+  const cls = chg >= 0 ? 'up' : 'down';
+  const arrow = chg >= 0 ? '▲' : '▼';
+  return `<span class="${cls}">${arrow} ${pct != null ? Math.abs(pct).toFixed(2)+'%' : Math.abs(chg).toFixed(2)}</span>`;
+}
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now()/1000) - ts);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  return `${Math.floor(diff/3600)}h ago`;
+}
+
+// ── MACRO PRICES ──
+async function loadMacro() {
+  try {
+    const r = await fetch(BASE + '/api/macro');
+    const d = await r.json();
+
+    const map = {
+      'nq':   ['m-nq',  'mc-nq',  d.nq_futures || d.nq],
+      'es':   ['m-es',  'mc-es',  d.es_futures || d.es],
+      'vix':  ['m-vix', 'mc-vix', d.vix],
+      'gold': ['m-gold','mc-gold', d.gold],
+      'dxy':  ['m-dxy', 'mc-dxy', d.dxy],
+    };
+
+    for (const [key, [valId, chgId, val]] of Object.entries(map)) {
+      const el = document.getElementById(valId);
+      const ce = document.getElementById(chgId);
+      if (el && val != null) {
+        el.textContent = key === 'vix' ? Number(val).toFixed(1) : fmt(val);
+        if (key === 'vix') {
+          const vixNum = parseFloat(val);
+          el.style.color = vixNum > 25 ? 'var(--red)' : vixNum > 20 ? 'var(--amber)' : 'var(--green)';
+          if (ce) ce.textContent = vixNum > 25 ? 'Elevated · Trades blocked' : vixNum > 20 ? 'Caution · Threshold 25' : 'Normal · Trading OK';
+          if (ce) ce.className = 'macro-chg ' + (vixNum > 25 ? 'down' : vixNum > 20 ? 'flat' : 'up');
+          // Update VIX filter pill
+          document.getElementById('vix-filter-sub').textContent = `Max 25 · Current ${vixNum.toFixed(1)}`;
+          const vp = document.getElementById('sess-vix');
+          if (vp) {
+            if (vixNum <= 25) { vp.textContent='OK'; vp.className='pill pill-green'; }
+            else { vp.textContent='Blocking'; vp.className='pill pill-red'; }
+          }
+          // Banner
+          const banner = document.getElementById('banner');
+          if (vixNum > 25) {
+            document.getElementById('banner-msg').textContent = `Scanner paused — VIX elevated at ${vixNum.toFixed(1)}`;
+            document.getElementById('banner-sub').textContent = `All trades blocked above VIX 25.0 · Monitoring for normalisation`;
+            banner.classList.add('show');
+          } else {
+            banner.classList.remove('show');
+          }
+        }
+      }
+    }
+
+    // Regime
+    const reg = d.regime || {};
+    const setReg = (id, val, colorMap) => {
+      const el = document.getElementById(id);
+      if (!el || !val) return;
+      el.textContent = val;
+      if (colorMap) el.style.color = colorMap[val.toLowerCase()] || 'var(--text)';
+    };
+    setReg('reg-trend', reg.trend, {bullish:'var(--green)',bearish:'var(--red)',neutral:'var(--sub)'});
+    setReg('reg-vol',   reg.volatility || reg.vol_regime, {low:'var(--green)',elevated:'var(--amber)',high:'var(--red)',extreme:'var(--red)'});
+    setReg('reg-risk',  reg.risk_appetite, {'risk-on':'var(--green)','risk-off':'var(--red)',neutral:'var(--sub)'});
+    setReg('reg-bias',  reg.bias || reg.direction || '—', null);
+
+    // Stability score
+    const vixNow = parseFloat(d.vix || 20);
+    const stab = Math.max(0, Math.min(100, Math.round(100 - (vixNow - 10) * 2.5)));
+    document.getElementById('stab-score').textContent = stab + ' / 100';
+    const bar = document.getElementById('stab-bar');
+    bar.style.width = stab + '%';
+    bar.style.background = stab > 60 ? 'var(--green)' : stab > 35 ? 'var(--amber)' : 'var(--red)';
+
+  } catch(e) { console.warn('macro', e); }
+}
+
+// ── SESSION STATUS ──
+async function loadSession() {
+  try {
+    const r = await fetch(BASE + '/api/strategy/status');
+    const d = await r.json();
+    if (!d.ok) return;
+
+    const now = new Date();
+    const ukHour = new Date(now.toLocaleString('en-US', {timeZone:'Europe/London'})).getHours();
+    const ukMin  = new Date(now.toLocaleString('en-US', {timeZone:'Europe/London'})).getMinutes();
+    const ukMins = ukHour * 60 + ukMin;
+    const dow = now.getDay(); // 0=Sun
+
+    // Day filter
+    const dayEl = document.getElementById('sess-day');
+    const goodDay = [2,3,4].includes(dow); // Tue/Wed/Thu
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    document.getElementById('day-filter-sub').textContent = `Today: ${days[dow]} · ${goodDay ? 'Trading day' : 'Blocked'}`;
+    dayEl.textContent = goodDay ? 'OK' : 'Blocked';
+    dayEl.className = 'pill ' + (goodDay ? 'pill-green' : 'pill-red');
+
+    // London 10:00–13:00 UK
+    const inLondon = ukMins >= 600 && ukMins < 780;
+    const lonEl = document.getElementById('sess-london');
+    if (inLondon) { lonEl.textContent='Active'; lonEl.className='pill pill-green'; }
+    else if (ukMins < 600) {
+      const wait = 600 - ukMins;
+      lonEl.textContent = `In ${Math.floor(wait/60)}h ${wait%60}m`;
+      lonEl.className = 'pill pill-amber';
+    } else { lonEl.textContent='Closed'; lonEl.className='pill pill-grey'; }
+
+    // NY Open 14:30–15:30 UK
+    const inNY = ukMins >= 870 && ukMins < 930;
+    const nyEl = document.getElementById('sess-ny');
+    if (inNY) { nyEl.textContent='Active'; nyEl.className='pill pill-green'; }
+    else if (ukMins < 870) {
+      const wait = 870 - ukMins;
+      nyEl.textContent = `In ${Math.floor(wait/60)}h ${wait%60}m`;
+      nyEl.className = 'pill pill-amber';
+    } else { nyEl.textContent='Closed'; nyEl.className='pill pill-grey'; }
+
+  } catch(e) { console.warn('session', e); }
+}
+
+// ── ACCOUNT ──
+async function loadAccount() {
+  try {
+    const r = await fetch(BASE + '/api/paper/account');
+    const d = await r.json();
+
+    const bal  = parseFloat(d.balance || d.current_balance || 10000);
+    const start= parseFloat(d.starting_balance || 10000);
+    const ret  = ((bal - start) / start * 100);
+    const retSign = ret >= 0 ? '+' : '';
+
+    document.getElementById('acct-bal').textContent = '$' + bal.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const retEl = document.getElementById('acct-ret');
+    retEl.textContent = `${retSign}${ret.toFixed(2)}% all time`;
+    retEl.style.color = ret >= 0 ? 'var(--green)' : 'var(--red)';
+
+    // Open P&L
+    const positions = d.open_positions || [];
+    let openPnl = positions.reduce((s,p) => s + (parseFloat(p.pnl_usd||0)), 0);
+    const openEl = document.getElementById('acct-open');
+    openEl.textContent = fmtUSD(openPnl);
+    openEl.style.color = openPnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+    document.getElementById('acct-wr').textContent     = d.win_rate != null ? d.win_rate.toFixed(1) + '%' : '—';
+    document.getElementById('acct-dd').textContent     = d.current_drawdown != null ? d.current_drawdown.toFixed(1) + '%' : '—';
+    document.getElementById('acct-trades').textContent = d.total_trades != null ? d.total_trades : '—';
+
+    // Trade log
+    const trades = (d.recent_trades || d.closed_trades || []).slice(0, 6);
+    const logEl  = document.getElementById('trade-log');
+    if (!trades.length) {
+      logEl.innerHTML = '<div style="padding:24px 0;text-align:center;color:var(--sub);font-size:12px">No trades yet</div>';
+    } else {
+      logEl.innerHTML = trades.map(t => {
+        const pnl  = parseFloat(t.pnl_usd || 0);
+        const win  = pnl > 0;
+        const date = t.opened_at ? new Date(t.opened_at).toLocaleDateString('en-GB', {day:'numeric',month:'short'}) : '—';
+        return `<div class="tlog-row">
+          <span style="color:var(--sub)">${date}</span>
+          <span>${t.mode || t.setup_name?.split(' ')[0] || '—'}</span>
+          <span style="font-size:11px">${t.symbol || 'NQ'} ${t.direction || ''}</span>
+          <span class="pill ${win?'pill-green':'pill-red'}" style="font-size:9px">${win?'Win':'Loss'}</span>
+          <span class="${win?'pnl-p':'pnl-n'}">${fmtUSD(pnl)}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // Signals (open positions as active signals)
+    const sigEl = document.getElementById('signals-list');
+    if (!positions.length) {
+      sigEl.innerHTML = `<div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">No active signals</div></div>`;
+    } else {
+      sigEl.innerHTML = positions.map(p => {
+        const pnl   = parseFloat(p.pnl_usd || 0);
+        const dir   = p.direction || 'long';
+        const arrow = dir === 'long' ? '↑' : '↓';
+        return `<div class="sig-item">
+          <div class="sig-icon ${dir}">${arrow}</div>
+          <div style="flex:1">
+            <div class="sig-title">${p.symbol} — ${p.mode || 'Signal'} ${dir.charAt(0).toUpperCase()+dir.slice(1)}</div>
+            <div class="sig-meta">Score ${p.setup_score||'—'} · Entry ${fmt(p.entry_price,0)} · Stop ${fmt(p.stop,0)} · Target ${fmt(p.target1,0)}</div>
+          </div>
+          <div class="sig-r" style="color:${pnl>=0?'var(--green)':'var(--red)'}">
+            ${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(0)}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+  } catch(e) { console.warn('account', e); }
+}
+
+// ── NEWS ──
+async function loadNews() {
+  try {
+    const r = await fetch(BASE + '/api/news?symbol=NQ');
+    const d = await r.json();
+    const articles = (d.articles || []).slice(0, 5);
+    const el = document.getElementById('news-list');
+    if (!articles.length) {
+      el.innerHTML = '<div style="padding:16px 0;color:var(--sub);font-size:12px">No news available</div>';
+      return;
+    }
+    el.innerHTML = articles.map(a => {
+      const imp   = (a.impact || a.sentiment || '').toLowerCase();
+      const impCls= imp.includes('high') || imp.includes('negative') ? 'imp-h' : imp.includes('med') ? 'imp-m' : 'imp-l';
+      const impTxt= imp.includes('high') || imp.includes('negative') ? 'HIGH' : imp.includes('med') ? 'MED' : 'LOW';
+      const ago   = a.published_at ? timeAgo(new Date(a.published_at).getTime()/1000) : '';
+      return `<div class="news-item">
+        <div class="news-row1"><span class="imp ${impCls}">${impTxt}</span><span style="font-size:10px;color:var(--sub);font-family:'DM Mono',monospace">${ago}</span></div>
+        <div class="news-hl">${a.headline || a.title || ''}</div>
+        <div class="news-meta">${a.source || ''}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { console.warn('news', e); }
+}
+
+// ── TELEGRAM TEST ──
+async function testTelegram() {
+  const btn = document.getElementById('tg-btn');
+  const res = document.getElementById('tg-result');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  res.textContent = '';
+  try {
+    const r = await fetch(BASE + '/api/telegram/test', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      res.textContent = '✅ Message sent — check your Telegram';
+      res.style.color = 'var(--green)';
+    } else {
+      res.textContent = '❌ ' + (d.message || d.error || 'Failed');
+      res.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    res.textContent = '❌ Connection error';
+    res.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Test';
+}
+
+// ── REFRESH ALL ──
+async function refreshAll() {
+  await Promise.all([loadMacro(), loadSession(), loadAccount(), loadNews()]);
+}
+
+// Initial load + poll every 60s
+refreshAll();
+setInterval(refreshAll, 60000);
+</script>
+</body>
+</html>
