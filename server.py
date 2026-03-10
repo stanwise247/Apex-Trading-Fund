@@ -1408,7 +1408,7 @@ def strategy_status():
 
 
 # Telegram
-@app.route('/api/telegram/test', methods=['POST'])
+@app.route('/api/telegram/test', methods=['GET','POST'])
 def telegram_test():
     try:
         from telegram_alerts import test_telegram
