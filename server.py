@@ -970,54 +970,7 @@ def background_scheduler():
         time.sleep(60)
 
 
-if __name__ == '__main__':
-    logger.info('=' * 55)
-    logger.info('  APEX Trading Engine - Phase 1 v1.1')
-    logger.info('=' * 55)
-    logger.info('  Polygon API:   ' + ('configured' if POLYGON_KEY   else 'not set'))
-    logger.info('  News API:      ' + ('configured' if NEWS_KEY      else 'not set'))
-    logger.info('  Anthropic API: ' + ('configured' if ANTHROPIC_KEY else 'not set'))
-    logger.info('  Database:      ' + DB_PATH)
-    logger.info('=' * 55)
-    init_db()
-
-    # Seed paper account
-    try:
-        from paper_trader import init_paper_db, get_account_value, set_account_value
-        init_paper_db()
-        bal = get_account_value('balance')
-        if not bal or float(bal) == 0:
-            set_account_value('balance', 10000)
-            set_account_value('starting_balance', 10000)
-            set_account_value('peak_balance', 10000)
-        logger.info('  Paper account seeded OK')
-    except Exception as e:
-        logger.warning('  Paper account seed failed: ' + str(e))
-
-    # Backfill ES if missing
-    def startup_backfill():
-        import time as _t
-        _t.sleep(10)
-        try:
-            import sqlite3 as _sq
-            conn = _sq.connect(DB_PATH)
-            count = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol='ES'").fetchone()[0]
-            conn.close()
-            if count < 100:
-                logger.info('  ES data missing — running backfill...')
-                backfill_history('ES', years=2)
-                logger.info('  ES backfill complete')
-            else:
-                logger.info(f'  ES data OK ({count} bars)')
-        except Exception as e:
-            logger.warning('  ES backfill check failed: ' + str(e))
-    threading.Thread(target=startup_backfill, daemon=True).start()
-
-    threading.Thread(target=background_scheduler, daemon=True).start()
-    logger.info('  Server running at: http://localhost:5000')
-    logger.info('  Open apex_dashboard_v3.html in your browser')
-    logger.info('=' * 55)
-    app.run(host='0.0.0.0', port=5000, debug=False)
+# startup moved to end of file
 
 
 # =============================================================
@@ -1443,3 +1396,56 @@ def telegram_config():
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
+
+
+# =============================================================
+#  STARTUP
+# =============================================================
+
+def _startup():
+    logger.info('=' * 55)
+    logger.info('  APEX Trading Engine - Phase 1 v1.1')
+    logger.info('=' * 55)
+    logger.info('  Polygon API:   ' + ('configured' if POLYGON_KEY   else 'not set'))
+    logger.info('  News API:      ' + ('configured' if NEWS_KEY      else 'not set'))
+    logger.info('  Anthropic API: ' + ('configured' if ANTHROPIC_KEY else 'not set'))
+    logger.info('  Database:      ' + DB_PATH)
+    logger.info('=' * 55)
+    init_db()
+    try:
+        from paper_trader import init_paper_db, get_account_value, set_account_value
+        init_paper_db()
+        bal = get_account_value('balance')
+        if not bal or float(bal) == 0:
+            set_account_value('balance', 10000)
+            set_account_value('starting_balance', 10000)
+            set_account_value('peak_balance', 10000)
+        logger.info('  Paper account seeded OK')
+    except Exception as e:
+        logger.warning('  Paper account seed failed: ' + str(e))
+    def startup_backfill():
+        import time as _t
+        _t.sleep(10)
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(DB_PATH)
+            count = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol='ES'").fetchone()[0]
+            conn.close()
+            if count < 100:
+                logger.info('  ES data missing — running backfill...')
+                backfill_history('ES', years=2)
+                logger.info('  ES backfill complete')
+            else:
+                logger.info(f'  ES data OK ({count} bars)')
+        except Exception as e:
+            logger.warning('  ES backfill check failed: ' + str(e))
+    threading.Thread(target=startup_backfill, daemon=True).start()
+    threading.Thread(target=background_scheduler, daemon=True).start()
+    logger.info('  Server running at: http://localhost:5000')
+    logger.info('  Open apex_dashboard_v3.html in your browser')
+    logger.info('=' * 55)
+
+_startup()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)
