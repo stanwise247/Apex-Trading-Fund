@@ -815,9 +815,42 @@ def options(path):
     return '', 200
 
 
+
+def send_session_open_alert(sess_name, sess_quality, vix, dt_ny):
+    try:
+        from telegram_alerts import send_telegram, load_telegram_config
+        import zoneinfo as _zi
+        token, chat_id = load_telegram_config()
+        if not token or not chat_id:
+            return
+        mode     = 'Swing' if 'London' in sess_name else 'Scalp'
+        uk_time  = dt_ny.astimezone(_zi.ZoneInfo('Europe/London'))
+        time_str = uk_time.strftime('%H:%M')
+        day_str  = uk_time.strftime('%A')
+        vix_str  = f'{vix:.1f}' if vix else 'N/A'
+        vix_ok   = vix and vix <= 25
+        vix_emoji= '\u2705' if vix and vix <= 20 else ('\u26a0\ufe0f' if vix_ok else '\U0001f534')
+        msg = (
+            f'\U0001f50d <b>APEX Scanner Active</b>\n'
+            f'\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n'
+            f'\U0001f4c5 {day_str} \u00b7 {time_str} UK\n'
+            f'\U0001f4ca Session: <b>{sess_name}</b>\n'
+            f'\U0001f3af Mode: <b>{mode}</b>\n'
+            f'\u2b50 Quality: {sess_quality}/100\n'
+            f'{vix_emoji} VIX: {vix_str}\n'
+            f'\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n'
+            f'Scanning NQ + ES \u00b7 Setups scoring 70+...'
+        )
+        send_telegram(msg, token, chat_id)
+        logger.info(f'Session open alert sent: {sess_name}')
+    except Exception as e:
+        logger.warning(f'Session open alert failed: {e}')
+
+
 def background_scheduler():
     logger.info('Background scheduler started')
     last_daily, last_macro_log = time.time(), time.time()
+    last_session_alerted = {}
     while True:
         now = time.time()
         if now - last_daily > 86400:
@@ -867,6 +900,15 @@ def background_scheduler():
                     pass
 
                 if news_ok:
+                    today_key = f'{dt_ny.date()}:{sess_name}'
+                    if today_key not in last_session_alerted:
+                        try:
+                            from strategy_router import get_latest_vix as _gvix
+                            vix_now = _gvix()
+                        except Exception:
+                            vix_now = None
+                        send_session_open_alert(sess_name, sess_quality, vix_now, dt_ny)
+                        last_session_alerted[today_key] = True
                     logger.info(f'Scanner active — {sess_name} (quality={sess_quality})')
                     from strategy_router import run_strategy_router, check_daily_limit, record_trade
                     for sym in ['NQ', 'ES']:
@@ -931,6 +973,39 @@ if __name__ == '__main__':
     logger.info('  Database:      ' + DB_PATH)
     logger.info('=' * 55)
     init_db()
+
+    # Seed paper account
+    try:
+        from paper_trader import init_paper_db, get_account_value, set_account_value
+        init_paper_db()
+        bal = get_account_value('balance')
+        if not bal or float(bal) == 0:
+            set_account_value('balance', 10000)
+            set_account_value('starting_balance', 10000)
+            set_account_value('peak_balance', 10000)
+        logger.info('  Paper account seeded OK')
+    except Exception as e:
+        logger.warning('  Paper account seed failed: ' + str(e))
+
+    # Backfill ES if missing
+    def startup_backfill():
+        import time as _t
+        _t.sleep(10)
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(DB_PATH)
+            count = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol='ES'").fetchone()[0]
+            conn.close()
+            if count < 100:
+                logger.info('  ES data missing — running backfill...')
+                backfill_history('ES', years=2)
+                logger.info('  ES backfill complete')
+            else:
+                logger.info(f'  ES data OK ({count} bars)')
+        except Exception as e:
+            logger.warning('  ES backfill check failed: ' + str(e))
+    threading.Thread(target=startup_backfill, daemon=True).start()
+
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
     logger.info('  Open apex_dashboard_v3.html in your browser')
