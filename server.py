@@ -589,6 +589,13 @@ def dashboard():
     from flask import send_from_directory
     return send_from_directory('.', 'apex_dashboard_v3.html')
 
+@app.route('/api/debug')
+def debug():
+    import flask
+    rules = [str(r) for r in flask.current_app.url_map.iter_rules()]
+    return flask.jsonify({'routes': sorted(rules), 'count': len(rules)})
+
+
 @app.route('/api/status')
 def status():
     return jsonify({'status': 'online', 'version': '1.1.0',
