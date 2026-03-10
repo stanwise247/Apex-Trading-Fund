@@ -587,7 +587,7 @@ def call_anthropic(api_key, prompt, max_tokens=2500):
 @app.route('/')
 def dashboard():
     from flask import send_from_directory
-    return send_from_directory('.', 'apex_dashboard_v2.html')
+    return send_from_directory('.', 'apex_dashboard_v3.html')
 
 @app.route('/api/status')
 def status():
@@ -933,7 +933,7 @@ if __name__ == '__main__':
     init_db()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
-    logger.info('  Open apex_dashboard.html in your browser')
+    logger.info('  Open apex_dashboard_v3.html in your browser')
     logger.info('=' * 55)
     app.run(host='0.0.0.0', port=5000, debug=False)
 
