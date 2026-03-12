@@ -101,10 +101,11 @@ def get_latest_vix() -> Optional[float]:
 # =============================================================
 
 def run_strategy_router(
-    symbol:      str = 'NQ',
-    min_score:   int = 55,
-    alert:       bool = True,
-    paper_trade: bool = True,
+    symbol:        str = 'NQ',
+    min_score:     int = 55,
+    alert:         bool = True,
+    paper_trade:   bool = True,
+    allowed_modes: list = None,
 ) -> Optional[Dict]:
     """
     Main entry point. Runs all strategy modes and returns the best setup.
@@ -159,8 +160,13 @@ def run_strategy_router(
         # Route to strategy modes based on condition and session
         setups = []
 
+        # Filter modes per instrument (e.g. ES swing only)
+        if allowed_modes is None:
+            from strategy_config import get_instrument_modes
+            allowed_modes = get_instrument_modes(symbol)
+
         # Always try swing in prime sessions
-        if sess_quality >= 70:
+        if sess_quality >= 70 and 'swing' in allowed_modes:
             try:
                 from strategy_swing import scan_swing
                 swing = scan_swing(
@@ -179,7 +185,7 @@ def run_strategy_router(
                 logger.debug(f'Swing scan error: {e}')
 
         # Scalp in NY open or London prime
-        if 'NY Open' in sess_name or 'London' in sess_name:
+        if ('NY Open' in sess_name or 'London' in sess_name) and 'scalp' in allowed_modes:
             try:
                 from strategy_scalp import scan_scalp
                 scalp = scan_scalp(
@@ -198,7 +204,7 @@ def run_strategy_router(
                 logger.debug(f'Scalp scan error: {e}')
 
         # Mean reversion in ranging markets
-        if mc.condition == 'ranging' or mc.condition == 'transitioning':
+        if (mc.condition == 'ranging' or mc.condition == 'transitioning') and 'meanrev' in allowed_modes:
             try:
                 from strategy_meanrev import scan_meanrev
                 mr = scan_meanrev(
