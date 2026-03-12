@@ -918,7 +918,7 @@ def background_scheduler():
                         last_session_alerted[today_key] = True
                     logger.info(f'Scanner active — {sess_name} (quality={sess_quality})')
                     from strategy_router import run_strategy_router, check_daily_limit, record_trade
-                    for sym in ['NQ', 'ES']:
+                    for sym in ['NQ', 'ES', 'GC']:
                         try:
                             if not check_daily_limit(sym):
                                 logger.info(f'[{sym}] Daily trade limit reached')
