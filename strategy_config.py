@@ -57,6 +57,26 @@ SWING_CONFIG = {
     'max_hold_bars': 100,
 }
 
+# ES-specific config — swing only, optimised from ES backtest 2026-03-10
+# Sharpe 6.18 | Return 1241% | WR 33.5% | DD 38%
+ES_SWING_CONFIG = {
+    'min_score':  70,
+    'rr_ratio':   4.0,
+    'risk_pct':   2.0,
+    'session':    'london',
+    'vix_max':    20,
+    'dow':        [1,2,3],
+    'stop_atr':   2.0,
+    'htf_strict': True,
+    'max_hold_bars': 100,
+}
+
+# Instrument → allowed modes
+INSTRUMENT_MODES = {
+    'NQ': ['scalp', 'swing'],
+    'ES': ['swing'],  # scalp excluded — DD 66% too high
+}
+
 MEANREV_CONFIG = {
     'min_score':  75,
     'rr_ratio':   2.0,
@@ -92,8 +112,13 @@ def is_tradeable_session(dt_ny=None):
     return False, 'Off Hours', 0
 
 
-def get_mode_config(mode: str) -> dict:
+def get_mode_config(mode: str, symbol: str = 'NQ') -> dict:
+    if symbol == 'ES' and mode == 'swing':
+        return ES_SWING_CONFIG
     return {'scalp': SCALP_CONFIG, 'swing': SWING_CONFIG, 'meanrev': MEANREV_CONFIG}.get(mode, STRATEGY)
+
+def get_instrument_modes(symbol: str) -> list:
+    return INSTRUMENT_MODES.get(symbol, ['swing'])
 
 
 def check_vix(vix_value):
