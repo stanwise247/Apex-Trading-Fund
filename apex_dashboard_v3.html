@@ -259,7 +259,7 @@ header {
       <span class="pill" id="sess-london">—</span>
     </div>
     <div class="sess-row">
-      <div><div class="sess-name">NY Open</div><div class="sess-time">14:30–15:30 UK · Scalp</div></div>
+      <div><div class="sess-name">NY Open</div><div class="sess-time">13:30–14:30 UK · Scalp</div></div>
       <span class="pill" id="sess-ny">—</span>
     </div>
     <div class="sess-row">
@@ -267,20 +267,35 @@ header {
       <span class="pill" id="sess-vix">—</span>
     </div>
     <div class="sess-row">
-      <div><div class="sess-name">Day Filter</div><div class="sess-time" id="day-filter-sub">Tue / Wed / Thu only</div></div>
+      <div><div class="sess-name">Day Filter</div><div class="sess-time" id="day-filter-sub">NQ/ES: Tue–Thu · GC: All week</div></div>
       <span class="pill" id="sess-day">—</span>
     </div>
   </div>
 
   <!-- STRATEGY METRICS -->
   <div class="card fade">
-    <div class="card-lbl">Strategy · Backtest</div>
-    <div class="mrow"><span class="mrow-lbl">Swing Sharpe</span><span class="mrow-val">30.28</span></div>
-    <div class="mrow"><span class="mrow-lbl">Scalp Sharpe</span><span class="mrow-val">15.39</span></div>
-    <div class="mrow"><span class="mrow-lbl">Swing WR / Exp</span><span class="mrow-val">50% · 2.52R</span></div>
-    <div class="mrow"><span class="mrow-lbl">Scalp WR / Exp</span><span class="mrow-val">53% · 1.31R</span></div>
-    <div class="mrow"><span class="mrow-lbl">Score threshold</span><span class="mrow-val">70 / 100</span></div>
-    <div class="mrow"><span class="mrow-lbl">Risk · Swing / Scalp</span><span class="mrow-val">2% · 1.5%</span></div>
+    <div class="card-lbl">Strategy · Backtest Performance</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">
+      <div style="font-size:10px;font-weight:600;color:var(--sub);text-transform:uppercase;padding-bottom:2px">Instrument</div>
+      <div style="font-size:10px;font-weight:600;color:var(--sub);text-transform:uppercase;padding-bottom:2px">Scalp</div>
+      <div style="font-size:10px;font-weight:600;color:var(--sub);text-transform:uppercase;padding-bottom:2px">Swing</div>
+      <!-- NQ -->
+      <div style="font-size:12px;font-weight:600">NQ</div>
+      <div style="font-size:11px;color:var(--fg)">S:15.4 WR:53%</div>
+      <div style="font-size:11px;color:var(--fg)">S:30.3 WR:50%</div>
+      <!-- ES -->
+      <div style="font-size:12px;font-weight:600">ES</div>
+      <div style="font-size:11px;color:var(--sub)">—</div>
+      <div style="font-size:11px;color:var(--fg)">S:6.18 WR:34%</div>
+      <!-- GC -->
+      <div style="font-size:12px;font-weight:600">GC</div>
+      <div style="font-size:11px;color:var(--fg)">S:9.68 WR:53%</div>
+      <div style="font-size:11px;color:var(--fg)">S:9.03 WR:37%</div>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:6px 0 8px"></div>
+    <div class="mrow"><span class="mrow-lbl">Score threshold</span><span class="mrow-val">70/100 (GC swing: 65)</span></div>
+    <div class="mrow"><span class="mrow-lbl">Risk per trade</span><span class="mrow-val">Scalp 1.5% · Swing 2.0%</span></div>
+    <div class="mrow"><span class="mrow-lbl">Active instruments</span><span class="mrow-val">NQ · ES · GC</span></div>
   </div>
 
 </div>
