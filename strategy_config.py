@@ -117,7 +117,7 @@ def get_strategy_summary():
         'risk_per_trade': f"Scalp {SCALP_CONFIG['risk_pct']}% | Swing {SWING_CONFIG['risk_pct']}%",
         'max_total_risk': f"{STRATEGY['max_total_risk']}%",
         'trading_days':   'Tuesday, Wednesday, Thursday',
-        'sessions':       'London 10am-1pm UK (Swing) | NY Open 2:30-3:30pm UK (Scalp)',
+        'sessions':       'London 10am-1pm UK (Swing) | NY Open 1:30-2:30pm UK (Scalp)',
         'vix_filter':     f"Max VIX {STRATEGY['max_vix']}",
         'scalp_sharpe':   '15.39', 'scalp_return': '+173%', 'scalp_wr': '53.4%', 'scalp_exp': '1.31R',
         'swing_sharpe':   '30.28', 'swing_return': '+191%', 'swing_wr': '50.0%', 'swing_exp': '2.52R',
