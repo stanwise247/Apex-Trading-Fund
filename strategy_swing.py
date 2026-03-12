@@ -329,12 +329,16 @@ def _score_order_flow_swing(df_15min, df_5min, direction) -> Tuple[int, Dict]:
         sweeps = find_liquidity_sweeps(df)
         for sw in sweeps[-5:]:
             if is_long and sw.direction == 'bull_sweep' and sw.reversal_confirmed:
-                score += 6
+                sweep_bonus = min(10, 6 + int(sw.reversal_strength / 20))
+                score += sweep_bonus
                 detail['sweep'] = True
+                detail['sweep_strength'] = sw.reversal_strength
                 break
             elif not is_long and sw.direction == 'bear_sweep' and sw.reversal_confirmed:
-                score += 6
+                sweep_bonus = min(10, 6 + int(sw.reversal_strength / 20))
+                score += sweep_bonus
                 detail['sweep'] = True
+                detail['sweep_strength'] = sw.reversal_strength
                 break
 
         # BOS / CHoCH

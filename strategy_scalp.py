@@ -284,13 +284,17 @@ def _score_order_flow_scalp(df_5min, df_1min, direction) -> Tuple[int, Dict]:
         # Liquidity sweeps
         sweeps = find_liquidity_sweeps(df)
         for sw in sweeps[-3:]:
-            if is_long and sw.direction == 'bull_sweep':
-                score += 6
+            if is_long and sw.direction == 'bull_sweep' and sw.reversal_confirmed:
+                sweep_bonus = min(10, 6 + int(sw.reversal_strength / 20))
+                score += sweep_bonus
                 detail['sweep'] = True
+                detail['sweep_strength'] = sw.reversal_strength
                 break
-            elif not is_long and sw.direction == 'bear_sweep':
-                score += 6
+            elif not is_long and sw.direction == 'bear_sweep' and sw.reversal_confirmed:
+                sweep_bonus = min(10, 6 + int(sw.reversal_strength / 20))
+                score += sweep_bonus
                 detail['sweep'] = True
+                detail['sweep_strength'] = sw.reversal_strength
                 break
 
         # BOS

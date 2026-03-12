@@ -327,6 +327,8 @@ def find_liquidity_sweeps(df, lookback=60, min_wick_pct=0.15):
         lower_wick = min(o[i], c[i]) - l[i]
         body = abs(c[i] - o[i])
         wick_pct = upper_wick / bar_range
+        avg_vol = work['volume'].iloc[max(0,i-20):i].mean() if 'volume' in work.columns else 0
+        vol_spike = work['volume'].iloc[i] > avg_vol * 1.3 if avg_vol > 0 else False
 
         # Bear sweep: long upper wick sweeping above swing high, closing back below
         for sh_idx, sh_price in swing_highs:
@@ -336,6 +338,11 @@ def find_liquidity_sweeps(df, lookback=60, min_wick_pct=0.15):
                     # Check for reversal in next 3 bars
                     reversal = i + 1 < n and c[i+1] < c[i]
                     rev_strength = int(wick_ratio * 100)
+                    # Count equal highs near this level for strength
+                    tol = sh_price * 0.0008
+                    eq_count = sum(1 for _, hp in swing_highs if abs(hp - sh_price) <= tol)
+                    eq_bonus = min(eq_count - 1, 2)  # 0-2 extra points
+                    rev_strength = int(wick_ratio * 100) + (10 if vol_spike else 0) + eq_bonus * 5
                     sweeps.append(LiquiditySweep(
                         direction='bear_sweep',
                         swept_level=sh_price,
@@ -353,6 +360,10 @@ def find_liquidity_sweeps(df, lookback=60, min_wick_pct=0.15):
                 if wick_ratio >= min_wick_pct:
                     reversal = i + 1 < n and c[i+1] > c[i]
                     rev_strength = int(wick_ratio * 100)
+                    tol = sl_price * 0.0008
+                    eq_count = sum(1 for _, lp in swing_lows if abs(lp - sl_price) <= tol)
+                    eq_bonus = min(eq_count - 1, 2)
+                    rev_strength = int(wick_ratio * 100) + (10 if vol_spike else 0) + eq_bonus * 5
                     sweeps.append(LiquiditySweep(
                         direction='bull_sweep',
                         swept_level=sl_price,
