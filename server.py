@@ -889,45 +889,50 @@ def background_scheduler():
 
         # ── Real-time deep edge scanner (every minute) ──────────────
         try:
-            from strategy_config import is_tradeable_session, check_vix, STRATEGY
+            from strategy_config import is_tradeable_now, get_instrument_modes, check_vix, STRATEGY
             from datetime import datetime as _dt, timezone as _tz
             from zoneinfo import ZoneInfo as _ZI
             dt_ny = _dt.now(_tz.utc).astimezone(_ZI('America/New_York'))
-            in_trading_hours, sess_name, sess_quality = is_tradeable_session(dt_ny)
 
-            if in_trading_hours:
-                # Check news blackout before scanning
-                news_ok = True
-                try:
-                    from news_calendar import should_trade
-                    news_ok, news_reason = should_trade(dt_ny)
-                    if not news_ok:
-                        logger.info(f'Scanner paused — {news_reason}')
-                except Exception:
-                    pass
+            # Check news blackout once for all instruments
+            news_ok = True
+            try:
+                from news_calendar import should_trade
+                news_ok, news_reason = should_trade(dt_ny)
+                if not news_ok:
+                    logger.info(f'Scanner paused - {news_reason}')
+            except Exception:
+                pass
 
-                if news_ok:
-                    today_key = f'{dt_ny.date()}:{sess_name}'
-                    if today_key not in last_session_alerted:
-                        try:
-                            from strategy_router import get_latest_vix as _gvix
-                            vix_now = _gvix()
-                        except Exception:
-                            vix_now = None
-                        send_session_open_alert(sess_name, sess_quality, vix_now, dt_ny)
-                        last_session_alerted[today_key] = True
-                    logger.info(f'Scanner active — {sess_name} (quality={sess_quality})')
-                    from strategy_router import run_strategy_router, check_daily_limit, record_trade
-                    for sym in ['NQ', 'ES', 'GC']:
+            if news_ok:
+                from strategy_router import run_strategy_router, check_daily_limit, record_trade
+                for sym in ['NQ', 'ES', 'GC']:
+                    modes = get_instrument_modes(sym)
+                    for mode in modes:
+                        tradeable, reason = is_tradeable_now(sym, mode, dt_ny)
+                        if not tradeable:
+                            logger.debug(f'[{sym}/{mode}] Skip - {reason}')
+                            continue
+                        # Per-instrument session open alert
+                        alert_key = f'{dt_ny.date()}:{sym}:{mode}'
+                        if alert_key not in last_session_alerted:
+                            try:
+                                from strategy_router import get_latest_vix as _gvix
+                                vix_now = _gvix()
+                            except Exception:
+                                vix_now = None
+                            send_session_open_alert(f'{sym} {mode.title()}', 90, vix_now, dt_ny)
+                            last_session_alerted[alert_key] = True
                         try:
                             if not check_daily_limit(sym):
                                 logger.info(f'[{sym}] Daily trade limit reached')
                                 continue
                             result = run_strategy_router(
-                                symbol      = sym,
-                                min_score   = STRATEGY['min_score'],
-                                alert       = STRATEGY['send_alerts'],
-                                paper_trade = STRATEGY['auto_paper_trade'],
+                                symbol        = sym,
+                                min_score     = STRATEGY['min_score'],
+                                alert         = STRATEGY['send_alerts'],
+                                paper_trade   = STRATEGY['auto_paper_trade'],
+                                allowed_modes = [mode],
                             )
                             if result:
                                 record_trade(sym)
@@ -935,9 +940,10 @@ def background_scheduler():
                                     f'🎯 {sym} {result["mode"].upper()} '
                                     f'{result["direction"]} score={result["score"]}'
                                 )
+                            else:
+                                logger.info(f'[{sym}/{mode}] Scanned - no signal')
                         except Exception as e:
-                            logger.debug(f'Scan {sym}: {e}')
-
+                            logger.debug(f'Scan {sym}/{mode}: {e}')
             # Update open paper positions with latest prices
             try:
                 from paper_trader import get_account_state, update_position_price
