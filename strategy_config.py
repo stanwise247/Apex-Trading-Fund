@@ -3,7 +3,7 @@ APEX Strategy Configuration — strategy_config.py
 ==================================================
 Locked-in optimised settings from v2 backtest with liquidity sweep upgrade.
 
-Last optimised: 2026-03-12
+Last optimised: 2026-03-13
 Data: 10,000 bars (5min) per instrument, walk-forward backtest
 
 NQ SCALP:  Sharpe 15.39 | Return 173%   | WR 53.4% | DD 14.5% | Expectancy 1.31R
@@ -55,10 +55,13 @@ NQ_SCALP_CONFIG = {
     'min_score':     70,
     'rr_ratio':      2.5,
     'risk_pct':      1.5,
-    'session':       'ny_open',
+    'session':       'nq_scalp',
+    'session_start': (10, 0),
+    'session_end':   (10, 30),
     'vix_max':       20,
-    'dow':           [1, 2, 3],   # Tue/Wed/Thu only
+    'dow':           [1, 2, 3],
     'stop_atr':      0.8,
+    'htf_strict':    False,
     'max_hold_bars': 30,
 }
 
@@ -66,10 +69,12 @@ NQ_SWING_CONFIG = {
     'min_score':     70,
     'rr_ratio':      4.0,
     'risk_pct':      2.0,
-    'session':       'london',
+    'session':       'nq_swing',
+    'session_start': (6, 0),
+    'session_end':   (7, 0),
     'vix_max':       20,
-    'dow':           [1, 2, 3],   # Tue/Wed/Thu only
-    'stop_atr':      1.5,
+    'dow':           [1, 2, 3],
+    'stop_atr':      1.2,
     'htf_strict':    False,
     'max_hold_bars': 100,
 }
@@ -84,10 +89,12 @@ ES_SWING_CONFIG = {
     'min_score':     70,
     'rr_ratio':      4.0,
     'risk_pct':      2.0,
-    'session':       'london',
+    'session':       'es_swing',
+    'session_start': (6, 0),
+    'session_end':   (7, 0),
     'vix_max':       20,
-    'dow':           [0, 1, 2, 3, 4],  # all week
-    'stop_atr':      2.0,
+    'dow':           [1, 2, 3],
+    'stop_atr':      2.5,
     'htf_strict':    True,
     'max_hold_bars': 100,
 }
@@ -102,10 +109,13 @@ GC_SCALP_CONFIG = {
     'min_score':     70,
     'rr_ratio':      2.0,
     'risk_pct':      1.5,
-    'session':       'ny_open',
+    'session':       'gc_scalp',
+    'session_start': (10, 30),
+    'session_end':   (11, 0),
     'vix_max':       20,
-    'dow':           [0, 1, 2, 3, 4],  # all week
-    'stop_atr':      1.5,
+    'dow':           [1, 2, 3],
+    'stop_atr':      1.0,
+    'htf_strict':    False,
     'max_hold_bars': 30,
 }
 
@@ -113,10 +123,12 @@ GC_SWING_CONFIG = {
     'min_score':     65,
     'rr_ratio':      4.0,
     'risk_pct':      2.0,
-    'session':       'ny_open',
+    'session':       'gc_swing',
+    'session_start': (15, 0),
+    'session_end':   (16, 0),
     'vix_max':       20,
-    'dow':           [0, 1, 2, 3, 4],  # all week
-    'stop_atr':      2.0,
+    'dow':           [0, 1, 2, 3, 4],
+    'stop_atr':      2.5,
     'htf_strict':    True,
     'max_hold_bars': 100,
 }
@@ -250,3 +262,53 @@ def get_strategy_summary():
         'scalp_sharpe': '15.39', 'scalp_return': '+173%', 'scalp_wr': '53.4%', 'scalp_exp': '1.31R',
         'swing_sharpe': '30.28', 'swing_return': '+191%', 'swing_wr': '50.0%', 'swing_exp': '2.52R',
     }
+
+# =============================================================
+#  SESSION WINDOWS
+# =============================================================
+
+SESSION_WINDOWS = {
+    'nq_scalp': {'start': (10, 0),  'end': (10, 30), 'dow': [1, 2, 3]},
+    'nq_swing': {'start': (6,  0),  'end': (7,  0),  'dow': [1, 2, 3]},
+    'es_swing': {'start': (6,  0),  'end': (7,  0),  'dow': [1, 2, 3]},
+    'gc_scalp': {'start': (10, 30), 'end': (11, 0),  'dow': [1, 2, 3]},
+    'gc_swing': {'start': (15, 0),  'end': (16, 0),  'dow': [0, 1, 2, 3, 4]},
+}
+
+def is_in_session(session_key: str, dt_ny=None) -> bool:
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    if dt_ny is None:
+        dt_ny = datetime.now(timezone.utc).astimezone(ZoneInfo('America/New_York'))
+    sess = SESSION_WINDOWS.get(session_key)
+    if not sess:
+        return False
+    dow = dt_ny.weekday()
+    if dow >= 5 or dow not in sess['dow']:
+        return False
+    sh, sm = sess['start']
+    eh, em = sess['end']
+    t = dt_ny.hour * 60 + dt_ny.minute
+    return (sh * 60 + sm) <= t < (eh * 60 + em)
+
+def get_active_sessions(dt_ny=None) -> list:
+    return [k for k in SESSION_WINDOWS if is_in_session(k, dt_ny)]
+
+def is_tradeable_now(symbol: str, mode: str, dt_ny=None) -> tuple:
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    if dt_ny is None:
+        dt_ny = datetime.now(timezone.utc).astimezone(ZoneInfo('America/New_York'))
+    if dt_ny.weekday() >= 5:
+        return False, 'Weekend'
+    cfg = get_mode_config(mode, symbol)
+    allowed_dow = cfg.get('dow', [0,1,2,3,4])
+    if dt_ny.weekday() not in allowed_dow:
+        day_names = {0:'Monday',1:'Tuesday',2:'Wednesday',3:'Thursday',4:'Friday'}
+        return False, f'{day_names[dt_ny.weekday()]} not in schedule'
+    session_key = cfg.get('session')
+    if session_key and not is_in_session(session_key, dt_ny):
+        sh, sm = cfg.get('session_start', (9, 30))
+        eh, em = cfg.get('session_end',   (10, 30))
+        return False, f'Outside session {sh:02d}:{sm:02d}-{eh:02d}:{em:02d} ET'
+    return True, 'In session'

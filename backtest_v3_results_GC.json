@@ -1,0 +1,754 @@
+{
+  "symbol": "GC",
+  "timestamp": "2026-03-13T19:27:37.547889",
+  "results": {
+    "scalp": {
+      "mode": "scalp",
+      "best": {
+        "params": {
+          "min_score": 65,
+          "rr_ratio": 2.5,
+          "risk_pct": 1.5,
+          "vix_max": 20,
+          "stop_atr": 1.0,
+          "mode": "scalp",
+          "session": "10:30-11:00ET",
+          "dow": "tue_wed_thu"
+        },
+        "session": {
+          "label": "10:30-11:00ET",
+          "start_h": 10,
+          "start_m": 30,
+          "end_h": 11,
+          "end_m": 0
+        },
+        "metrics": {
+          "sharpe": 34.809,
+          "total_return": 73.98,
+          "win_rate": 62.9,
+          "max_dd": 8.91,
+          "expectancy": 1.4091,
+          "profit_factor": 4.4,
+          "trades": 35,
+          "trades_per_year": 183.7,
+          "final_balance": 17397.96
+        }
+      },
+      "top10": [
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.5,
+            "vix_max": 20,
+            "stop_atr": 1.0,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "tue_wed_thu"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 34.809,
+            "total_return": 73.98,
+            "win_rate": 62.9,
+            "max_dd": 8.91,
+            "expectancy": 1.4091,
+            "profit_factor": 4.4,
+            "trades": 35,
+            "trades_per_year": 183.7,
+            "final_balance": 17397.96
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.5,
+            "vix_max": 20,
+            "stop_atr": 1.0,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "mon_fri_out"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 34.809,
+            "total_return": 73.98,
+            "win_rate": 62.9,
+            "max_dd": 8.91,
+            "expectancy": 1.4091,
+            "profit_factor": 4.4,
+            "trades": 35,
+            "trades_per_year": 183.7,
+            "final_balance": 17397.96
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.0,
+            "vix_max": 20,
+            "stop_atr": 1.0,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "tue_wed_thu"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 34.276,
+            "total_return": 44.3,
+            "win_rate": 62.9,
+            "max_dd": 6.11,
+            "expectancy": 1.2658,
+            "profit_factor": 4.09,
+            "trades": 35,
+            "trades_per_year": 183.7,
+            "final_balance": 14430.34
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.0,
+            "vix_max": 20,
+            "stop_atr": 1.0,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "mon_fri_out"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 34.276,
+            "total_return": 44.3,
+            "win_rate": 62.9,
+            "max_dd": 6.11,
+            "expectancy": 1.2658,
+            "profit_factor": 4.09,
+            "trades": 35,
+            "trades_per_year": 183.7,
+            "final_balance": 14430.34
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.5,
+            "vix_max": 25,
+            "stop_atr": 1.5,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "tue_wed_thu"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 33.721,
+            "total_return": 82.18,
+            "win_rate": 67.5,
+            "max_dd": 8.93,
+            "expectancy": 1.3697,
+            "profit_factor": 4.87,
+            "trades": 40,
+            "trades_per_year": 209.9,
+            "final_balance": 18218.06
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.5,
+            "vix_max": 25,
+            "stop_atr": 1.5,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "mon_fri_out"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 33.721,
+            "total_return": 82.18,
+            "win_rate": 67.5,
+            "max_dd": 8.93,
+            "expectancy": 1.3697,
+            "profit_factor": 4.87,
+            "trades": 40,
+            "trades_per_year": 209.9,
+            "final_balance": 18218.06
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.0,
+            "vix_max": 25,
+            "stop_atr": 1.5,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "tue_wed_thu"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 33.173,
+            "total_return": 48.67,
+            "win_rate": 67.5,
+            "max_dd": 6.12,
+            "expectancy": 1.2167,
+            "profit_factor": 4.45,
+            "trades": 40,
+            "trades_per_year": 209.9,
+            "final_balance": 14866.75
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.5,
+            "risk_pct": 1.0,
+            "vix_max": 25,
+            "stop_atr": 1.5,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "mon_fri_out"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 33.173,
+            "total_return": 48.67,
+            "win_rate": 67.5,
+            "max_dd": 6.12,
+            "expectancy": 1.2167,
+            "profit_factor": 4.45,
+            "trades": 40,
+            "trades_per_year": 209.9,
+            "final_balance": 14866.75
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.0,
+            "risk_pct": 1.5,
+            "vix_max": 25,
+            "stop_atr": 1.5,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "tue_wed_thu"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 32.756,
+            "total_return": 70.14,
+            "win_rate": 67.5,
+            "max_dd": 8.93,
+            "expectancy": 1.169,
+            "profit_factor": 4.36,
+            "trades": 40,
+            "trades_per_year": 209.9,
+            "final_balance": 17013.71
+          }
+        },
+        {
+          "params": {
+            "min_score": 65,
+            "rr_ratio": 2.0,
+            "risk_pct": 1.5,
+            "vix_max": 25,
+            "stop_atr": 1.5,
+            "mode": "scalp",
+            "session": "10:30-11:00ET",
+            "dow": "mon_fri_out"
+          },
+          "session": {
+            "label": "10:30-11:00ET",
+            "start_h": 10,
+            "start_m": 30,
+            "end_h": 11,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 32.756,
+            "total_return": 70.14,
+            "win_rate": 67.5,
+            "max_dd": 8.93,
+            "expectancy": 1.169,
+            "profit_factor": 4.36,
+            "trades": 40,
+            "trades_per_year": 209.9,
+            "final_balance": 17013.71
+          }
+        }
+      ],
+      "total_tested": 14256,
+      "valid_combos": 6852
+    },
+    "swing": {
+      "mode": "swing",
+      "best": {
+        "params": {
+          "min_score": 70,
+          "rr_ratio": 3.0,
+          "risk_pct": 2.0,
+          "vix_max": 20,
+          "stop_atr": 2.5,
+          "htf_strict": true,
+          "mode": "swing",
+          "session": "15:00-16:00ET",
+          "dow": "all_week"
+        },
+        "session": {
+          "label": "15:00-16:00ET",
+          "start_h": 15,
+          "start_m": 0,
+          "end_h": 16,
+          "end_m": 0
+        },
+        "metrics": {
+          "sharpe": 81.995,
+          "total_return": 44.56,
+          "win_rate": 66.7,
+          "max_dd": 2.3,
+          "expectancy": 1.8565,
+          "profit_factor": 7.24,
+          "trades": 12,
+          "trades_per_year": 88.9,
+          "final_balance": 14455.64
+        }
+      },
+      "top10": [
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 2.0,
+            "vix_max": 20,
+            "stop_atr": 2.5,
+            "htf_strict": true,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 81.995,
+            "total_return": 44.56,
+            "win_rate": 66.7,
+            "max_dd": 2.3,
+            "expectancy": 1.8565,
+            "profit_factor": 7.24,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 14455.64
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 2.0,
+            "vix_max": 20,
+            "stop_atr": 2.5,
+            "htf_strict": false,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 81.995,
+            "total_return": 44.56,
+            "win_rate": 66.7,
+            "max_dd": 2.3,
+            "expectancy": 1.8565,
+            "profit_factor": 7.24,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 14455.64
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 1.5,
+            "vix_max": 20,
+            "stop_atr": 2.5,
+            "htf_strict": true,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 81.568,
+            "total_return": 31.96,
+            "win_rate": 66.7,
+            "max_dd": 1.75,
+            "expectancy": 1.7753,
+            "profit_factor": 7.08,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 13195.52
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 1.5,
+            "vix_max": 20,
+            "stop_atr": 2.5,
+            "htf_strict": false,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 81.568,
+            "total_return": 31.96,
+            "win_rate": 66.7,
+            "max_dd": 1.75,
+            "expectancy": 1.7753,
+            "profit_factor": 7.08,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 13195.52
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 2.0,
+            "vix_max": 20,
+            "stop_atr": 2.0,
+            "htf_strict": true,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 75.776,
+            "total_return": 42.93,
+            "win_rate": 66.7,
+            "max_dd": 4.06,
+            "expectancy": 1.7887,
+            "profit_factor": 5.87,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 14292.78
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 2.0,
+            "vix_max": 20,
+            "stop_atr": 2.0,
+            "htf_strict": false,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 75.776,
+            "total_return": 42.93,
+            "win_rate": 66.7,
+            "max_dd": 4.06,
+            "expectancy": 1.7887,
+            "profit_factor": 5.87,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 14292.78
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 4.0,
+            "risk_pct": 2.0,
+            "vix_max": 20,
+            "stop_atr": 2.5,
+            "htf_strict": true,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 75.39,
+            "total_return": 46.77,
+            "win_rate": 66.7,
+            "max_dd": 2.3,
+            "expectancy": 1.9488,
+            "profit_factor": 7.3,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 14677.15
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 4.0,
+            "risk_pct": 2.0,
+            "vix_max": 20,
+            "stop_atr": 2.5,
+            "htf_strict": false,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 75.39,
+            "total_return": 46.77,
+            "win_rate": 66.7,
+            "max_dd": 2.3,
+            "expectancy": 1.9488,
+            "profit_factor": 7.3,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 14677.15
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 1.5,
+            "vix_max": 20,
+            "stop_atr": 2.0,
+            "htf_strict": true,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 75.37,
+            "total_return": 30.85,
+            "win_rate": 66.7,
+            "max_dd": 3.08,
+            "expectancy": 1.7138,
+            "profit_factor": 5.72,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 13084.88
+          }
+        },
+        {
+          "params": {
+            "min_score": 70,
+            "rr_ratio": 3.0,
+            "risk_pct": 1.5,
+            "vix_max": 20,
+            "stop_atr": 2.0,
+            "htf_strict": false,
+            "mode": "swing",
+            "session": "15:00-16:00ET",
+            "dow": "all_week"
+          },
+          "session": {
+            "label": "15:00-16:00ET",
+            "start_h": 15,
+            "start_m": 0,
+            "end_h": 16,
+            "end_m": 0
+          },
+          "metrics": {
+            "sharpe": 75.37,
+            "total_return": 30.85,
+            "win_rate": 66.7,
+            "max_dd": 3.08,
+            "expectancy": 1.7138,
+            "profit_factor": 5.72,
+            "trades": 12,
+            "trades_per_year": 88.9,
+            "final_balance": 13084.88
+          }
+        }
+      ],
+      "total_tested": 19008,
+      "valid_combos": 12752
+    }
+  },
+  "summary": {
+    "scalp": {
+      "metrics": {
+        "sharpe": 34.809,
+        "total_return": 73.98,
+        "win_rate": 62.9,
+        "max_dd": 8.91,
+        "expectancy": 1.4091,
+        "profit_factor": 4.4,
+        "trades": 35,
+        "trades_per_year": 183.7,
+        "final_balance": 17397.96
+      },
+      "params": {
+        "min_score": 65,
+        "rr_ratio": 2.5,
+        "risk_pct": 1.5,
+        "vix_max": 20,
+        "stop_atr": 1.0,
+        "mode": "scalp",
+        "session": "10:30-11:00ET",
+        "dow": "tue_wed_thu"
+      },
+      "session": {
+        "label": "10:30-11:00ET",
+        "start_h": 10,
+        "start_m": 30,
+        "end_h": 11,
+        "end_m": 0
+      }
+    },
+    "swing": {
+      "metrics": {
+        "sharpe": 81.995,
+        "total_return": 44.56,
+        "win_rate": 66.7,
+        "max_dd": 2.3,
+        "expectancy": 1.8565,
+        "profit_factor": 7.24,
+        "trades": 12,
+        "trades_per_year": 88.9,
+        "final_balance": 14455.64
+      },
+      "params": {
+        "min_score": 70,
+        "rr_ratio": 3.0,
+        "risk_pct": 2.0,
+        "vix_max": 20,
+        "stop_atr": 2.5,
+        "htf_strict": true,
+        "mode": "swing",
+        "session": "15:00-16:00ET",
+        "dow": "all_week"
+      },
+      "session": {
+        "label": "15:00-16:00ET",
+        "start_h": 15,
+        "start_m": 0,
+        "end_h": 16,
+        "end_m": 0
+      }
+    }
+  }
+}
