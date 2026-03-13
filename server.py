@@ -806,6 +806,7 @@ def patterns():
 
 
 @app.route('/api/scan/log')
+@app.route('/api/signals')
 def scan_log():
     limit = int(request.args.get('limit', 50))
     conn  = sqlite3.connect(DB_PATH)
@@ -933,7 +934,43 @@ def background_scheduler():
                                 alert         = STRATEGY['send_alerts'],
                                 paper_trade   = STRATEGY['auto_paper_trade'],
                                 allowed_modes = [mode],
+                                skip_session_check = True,
                             )
+                            # Log every scan result to scan_log table
+                            try:
+                                import sqlite3 as _sq, time as _t
+                                _conn = _sq.connect(DB_PATH)
+                                _c    = _conn.cursor()
+                                if result:
+                                    _c.execute(
+                                        '''INSERT INTO scan_log
+                                            (ts, symbol, pattern_name, score, direction,
+                                             entry, stop, target1, target2, outcome, notes)
+                                            VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                                        (int(_t.time()), sym,
+                                         f"{mode} {result.get('direction','')}",
+                                         result.get('score', 0),
+                                         result.get('direction', ''),
+                                         result.get('entry', 0),
+                                         result.get('stop', 0),
+                                         result.get('target1', 0),
+                                         result.get('target2', 0),
+                                         'signal',
+                                         str(result.get('details', '')))
+                                    )
+                                else:
+                                    _c.execute(
+                                        '''INSERT INTO scan_log
+                                            (ts, symbol, pattern_name, score, outcome, notes)
+                                            VALUES (?,?,?,?,?,?)''',
+                                        (int(_t.time()), sym, mode, 0, 'no_signal',
+                                         f'Scanned {mode} - no qualifying setup')
+                                    )
+                                _conn.commit()
+                                _conn.close()
+                            except Exception as _le:
+                                logger.debug(f'scan_log write error: {_le}')
+
                             if result:
                                 record_trade(sym)
                                 logger.info(

@@ -101,16 +101,18 @@ def get_latest_vix() -> Optional[float]:
 # =============================================================
 
 def run_strategy_router(
-    symbol:        str = 'NQ',
-    min_score:     int = 55,
-    alert:         bool = True,
-    paper_trade:   bool = True,
-    allowed_modes: list = None,
+    symbol:             str = 'NQ',
+    min_score:          int = 55,
+    alert:              bool = True,
+    paper_trade:        bool = True,
+    allowed_modes:      list = None,
+    skip_session_check: bool = False,
 ) -> Optional[Dict]:
     """
     Main entry point. Runs all strategy modes and returns the best setup.
 
     Returns dict with setup details or None if no qualifying setup.
+    skip_session_check: set True when caller already validated session.
     """
     try:
         from strategy_config import is_tradeable_session, STRATEGY
@@ -119,10 +121,12 @@ def run_strategy_router(
 
         dt_ny = datetime.now(timezone.utc).astimezone(NY_TZ)
 
-        # Gate 1: Session check
+        # Gate 1: Session check (skip if caller already validated)
         in_session, sess_name, sess_quality = is_tradeable_session(dt_ny)
-        if not in_session:
+        if not skip_session_check and not in_session:
             return None
+        if skip_session_check:
+            sess_name, sess_quality = "Active", 90
 
         # Gate 2: News blackout
         news_ok, news_reason = should_trade(dt_ny)
