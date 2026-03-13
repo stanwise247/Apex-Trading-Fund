@@ -587,7 +587,7 @@ def call_anthropic(api_key, prompt, max_tokens=2500):
 @app.route('/')
 def dashboard():
     from flask import send_from_directory
-    return send_from_directory('.', 'apex_dashboard_v3.html')
+    return send_from_directory('.', 'apex_dashboard_v4.html')
 
 @app.route('/api/debug')
 def debug():
@@ -1448,7 +1448,7 @@ def _startup():
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
-    logger.info('  Open apex_dashboard_v3.html in your browser')
+    logger.info('  Open apex_dashboard_v4.html in your browser')
     logger.info('=' * 55)
 
 _startup()

@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apex</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root {
+  --bg:      #F2F2F7;
+  --card:    #FFFFFF;
+  --border:  rgba(0,0,0,0.07);
+  --text:    #1C1C1E;
+  --sub:     #8E8E93;
+  --accent:  #0A84FF;
+  --green:   #30D158;
+  --red:     #FF453A;
+  --amber:   #FF9F0A;
+  --nq:      #0A84FF;
+  --es:      #AF52DE;
+  --gc:      #FF9F0A;
+  --r:       16px;
+  --sh:      0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05);
+}
+
+body {
+  font-family:'DM Sans',-apple-system,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  padding:28px 32px 48px;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── HEADER ── */
+header {
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:36px;
+}
+.wordmark {
+  font-family:'Instrument Serif',serif;
+  font-size:24px;letter-spacing:-0.3px;color:var(--text);
+}
+.wordmark span {
+  font-size:12px;font-family:'DM Sans',sans-serif;
+  font-weight:400;color:var(--sub);margin-left:8px;letter-spacing:0;
+}
+.hdr-right { display:flex;align-items:center;gap:16px; }
+.live-badge {
+  display:flex;align-items:center;gap:6px;
+  background:rgba(48,209,88,0.1);border:1px solid rgba(48,209,88,0.25);
+  padding:5px 12px;border-radius:100px;font-size:12px;font-weight:500;color:#1a7a35;
+}
+.dot { width:6px;height:6px;background:var(--green);border-radius:50%;animation:blink 2s infinite; }
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#clock { font-family:'DM Mono',monospace;font-size:13px;color:var(--sub); }
+
+/* ── BANNER ── */
+#banner {
+  display:none;align-items:center;gap:12px;
+  background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.22);
+  border-radius:12px;padding:13px 18px;margin-bottom:20px;
+  font-size:13px;font-weight:500;color:#7a4800;
+}
+#banner.show { display:flex; }
+#banner-sub { font-size:12px;color:#9a6820;margin-top:1px; }
+
+/* ── MACRO STRIP ── */
+.macro-strip {
+  display:grid;grid-template-columns:repeat(5,1fr);gap:12px;
+  margin-bottom:20px;
+}
+.macro-tile {
+  background:var(--card);border-radius:var(--r);
+  padding:16px 18px;box-shadow:var(--sh);border:1px solid var(--border);
+}
+.macro-lbl { font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--sub);margin-bottom:5px; }
+.macro-val { font-size:22px;font-weight:300;letter-spacing:-0.8px;line-height:1; }
+.macro-chg { font-size:11px;margin-top:4px; }
+.up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--sub)}
+
+/* ── GRIDS ── */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+
+/* ── CARD ── */
+.card {
+  background:var(--card);border-radius:var(--r);
+  padding:22px 24px;box-shadow:var(--sh);border:1px solid var(--border);
+}
+.card-lbl { font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);margin-bottom:14px; }
+
+/* ── ACCOUNT HERO ── */
+.acct-card {
+  background:var(--text);border-radius:var(--r);
+  padding:26px 28px;box-shadow:0 8px 32px rgba(0,0,0,0.14);
+  position:relative;overflow:hidden;
+}
+.acct-card::after {
+  content:'';position:absolute;top:-80px;right:-80px;
+  width:220px;height:220px;background:rgba(255,255,255,0.025);border-radius:50%;
+}
+.acct-lbl { font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px; }
+.acct-bal { font-size:40px;font-weight:300;letter-spacing:-2px;color:#fff;line-height:1; }
+.acct-ret { display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:13px;font-weight:500;color:var(--green); }
+.acct-grid { display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:20px;padding-top:18px;border-top:1px solid rgba(255,255,255,.08); }
+.acct-stat-lbl { font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:rgba(255,255,255,.35);margin-bottom:2px; }
+.acct-stat-val { font-size:15px;font-weight:400;color:rgba(255,255,255,.85); }
+
+/* ── PILLS ── */
+.pill{font-size:10px;font-weight:700;padding:3px 10px;border-radius:100px;letter-spacing:.03em;white-space:nowrap}
+.pill-green{background:rgba(48,209,88,.1);color:#1a7a35;border:1px solid rgba(48,209,88,.25)}
+.pill-amber{background:rgba(255,159,10,.1);color:#7a4800;border:1px solid rgba(255,159,10,.25)}
+.pill-grey {background:rgba(142,142,147,.1);color:var(--sub);border:1px solid rgba(142,142,147,.2)}
+.pill-red  {background:rgba(255,69,58,.08);color:#8a1a12;border:1px solid rgba(255,69,58,.2)}
+.pill-blue {background:rgba(10,132,255,.08);color:#003a8a;border:1px solid rgba(10,132,255,.2)}
+
+/* ── METRIC ROWS ── */
+.mrow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)}
+.mrow:last-child{border-bottom:none}
+.mrow-lbl{font-size:13px;color:var(--sub)}
+.mrow-val{font-size:13px;font-weight:500;font-family:'DM Mono',monospace}
+
+/* ── INSTRUMENT TABS ── */
+.inst-tabs {
+  display:flex;gap:8px;margin-bottom:16px;
+}
+.inst-tab {
+  display:flex;align-items:center;gap:7px;
+  padding:8px 16px;border-radius:10px;font-size:13px;font-weight:500;
+  cursor:pointer;border:1px solid var(--border);background:var(--card);
+  color:var(--sub);transition:all .15s;box-shadow:var(--sh);
+}
+.inst-tab:hover { color:var(--text); }
+.inst-tab.active-nq { background:rgba(10,132,255,.08);border-color:rgba(10,132,255,.25);color:var(--nq); }
+.inst-tab.active-es { background:rgba(175,82,222,.08);border-color:rgba(175,82,222,.25);color:var(--es); }
+.inst-tab.active-gc { background:rgba(255,159,10,.08);border-color:rgba(255,159,10,.25);color:var(--gc); }
+.inst-dot { width:7px;height:7px;border-radius:50%; }
+.tab-nq .inst-dot { background:var(--nq); }
+.tab-es .inst-dot { background:var(--es); }
+.tab-gc .inst-dot { background:var(--gc); }
+.inst-tab .tab-badge {
+  font-size:9px;padding:1px 6px;border-radius:4px;font-weight:600;
+  background:rgba(0,0,0,.04);color:var(--sub);
+}
+
+/* ── INSTRUMENT PANEL ── */
+.inst-panel { display:none; }
+.inst-panel.active { display:block; }
+
+/* ── SESSION STATUS ROWS ── */
+.sess-row { display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--border); }
+.sess-row:last-child{border-bottom:none}
+.sess-name{font-size:14px;font-weight:500}
+.sess-time{font-size:11px;color:var(--sub);margin-top:1px}
+
+/* ── SCANNER FEED ── */
+.feed-item {
+  display:grid;grid-template-columns:38px 80px 1fr 52px;
+  gap:10px;align-items:center;
+  padding:10px 0;border-bottom:1px solid var(--border);
+  font-size:12px;
+}
+.feed-item:last-child { border-bottom:none; }
+.feed-time { font-size:10px;color:var(--sub);font-family:'DM Mono',monospace; }
+.feed-mode {
+  font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;
+  text-align:center;white-space:nowrap;
+}
+.feed-mode.scalp { background:rgba(10,132,255,.08);color:var(--nq); }
+.feed-mode.swing { background:rgba(175,82,222,.08);color:var(--es); }
+.feed-desc { font-size:12px;color:var(--text);line-height:1.4; }
+.feed-desc .feed-sub { font-size:10px;color:var(--sub); }
+.feed-score { font-size:12px;font-weight:600;font-family:'DM Mono',monospace;text-align:right; }
+.feed-score.pass { color:var(--green); }
+.feed-score.warn { color:var(--amber); }
+.feed-score.fail { color:var(--sub); }
+.feed-score.skip { color:rgba(0,0,0,.15); }
+
+/* ── BACKTEST STATS TABLE ── */
+.bt-table { width:100%;border-collapse:collapse; }
+.bt-table th { font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--sub);text-align:left;padding:0 0 10px;border-bottom:1px solid var(--border); }
+.bt-table td { font-size:12px;padding:9px 0;border-bottom:1px solid var(--border); }
+.bt-table tr:last-child td { border-bottom:none; }
+.bt-table td:not(:first-child) { font-family:'DM Mono',monospace;font-size:11px; }
+.bt-mode { font-weight:600;font-size:12px; }
+
+/* ── SIGNALS ── */
+.sig-item{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--border)}
+.sig-item:last-child{border-bottom:none}
+.sig-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.sig-icon.long{background:rgba(48,209,88,.1)}
+.sig-icon.short{background:rgba(255,69,58,.08)}
+.sig-title{font-size:13px;font-weight:500;margin-bottom:2px}
+.sig-meta{font-size:11px;color:var(--sub)}
+.sig-r{font-family:'DM Mono',monospace;font-size:13px;font-weight:500;text-align:right}
+.sig-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 0;gap:6px}
+.sig-empty-icon{font-size:24px;opacity:.15}
+.sig-empty-txt{font-size:12px;color:var(--sub)}
+
+/* ── TRADE LOG ── */
+.tlog-head,.tlog-row{display:grid;grid-template-columns:70px 55px 1fr 65px 75px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
+.tlog-head{color:var(--sub);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.tlog-row:last-child{border-bottom:none}
+.pnl-p{color:var(--green);font-family:'DM Mono',monospace;font-weight:500}
+.pnl-n{color:var(--red);font-family:'DM Mono',monospace;font-weight:500}
+
+/* ── NEWS ── */
+.news-item{padding:13px 0;border-bottom:1px solid var(--border)}
+.news-item:last-child{border-bottom:none}
+.news-row1{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.news-hl{font-size:13px;font-weight:500;line-height:1.4;margin-bottom:3px}
+.news-meta{font-size:11px;color:var(--sub)}
+.imp{font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:4px}
+.imp-h{background:rgba(255,69,58,.1);color:#c0392b}
+.imp-m{background:rgba(255,159,10,.1);color:#d07000}
+.imp-l{background:rgba(142,142,147,.1);color:var(--sub)}
+
+/* ── PROGRESS ── */
+.prog-wrap{margin-top:12px}
+.prog-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-bottom:5px}
+.prog-bg{height:4px;background:rgba(0,0,0,.06);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;border-radius:2px;transition:width .6s ease}
+
+/* ── TG BTN ── */
+.tg-btn{
+  display:inline-flex;align-items:center;gap:7px;
+  background:var(--accent);color:#fff;border:none;
+  padding:9px 18px;border-radius:10px;font-size:13px;font-weight:500;
+  cursor:pointer;font-family:'DM Sans',sans-serif;
+  transition:opacity .15s,transform .1s;
+}
+.tg-btn:hover{opacity:.88}
+.tg-btn:active{transform:scale(.97)}
+.tg-btn:disabled{opacity:.5;cursor:not-allowed}
+#tg-result{font-size:12px;margin-top:8px;color:var(--sub)}
+
+/* ── SECTION LABEL ── */
+.sec-lbl{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--sub);margin:24px 0 12px}
+
+/* ── FADE IN ── */
+.fade{opacity:0;transform:translateY(8px);animation:fadein .4s ease forwards}
+@keyframes fadein{to{opacity:1;transform:none}}
+.fade:nth-child(1){animation-delay:.05s}
+.fade:nth-child(2){animation-delay:.1s}
+.fade:nth-child(3){animation-delay:.15s}
+.fade:nth-child(4){animation-delay:.2s}
+.fade:nth-child(5){animation-delay:.25s}
+
+@media(max-width:1100px){
+  .macro-strip{grid-template-columns:repeat(3,1fr)}
+  .grid3{grid-template-columns:1fr 1fr}
+  .grid4{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:760px){
+  body{padding:16px}
+  .macro-strip,.grid2,.grid3,.grid4{grid-template-columns:1fr}
+  .inst-tabs{flex-wrap:wrap}
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="wordmark">Apex <span>Trading Engine v3</span></div>
+  <div class="hdr-right">
+    <div class="live-badge"><div class="dot"></div> Live</div>
+    <div id="clock">--:--:-- GMT</div>
+  </div>
+</header>
+
+<!-- BANNER -->
+<div id="banner">
+  <span style="font-size:18px">⚠️</span>
+  <div>
+    <div id="banner-msg">Scanner paused</div>
+    <div id="banner-sub"></div>
+  </div>
+</div>
+
+<!-- MACRO STRIP -->
+<div class="macro-strip">
+  <div class="macro-tile fade"><div class="macro-lbl">NQ</div><div class="macro-val" id="m-nq">—</div><div class="macro-chg" id="mc-nq"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">ES</div><div class="macro-val" id="m-es">—</div><div class="macro-chg" id="mc-es"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">VIX</div><div class="macro-val" id="m-vix">—</div><div class="macro-chg flat" id="mc-vix"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">Gold</div><div class="macro-val" id="m-gold">—</div><div class="macro-chg" id="mc-gold"></div></div>
+  <div class="macro-tile fade"><div class="macro-lbl">DXY</div><div class="macro-val" id="m-dxy">—</div><div class="macro-chg" id="mc-dxy"></div></div>
+</div>
+
+<div class="sec-lbl">Account</div>
+
+<!-- ROW 1: account + global sessions + vix -->
+<div class="grid3">
+
+  <!-- ACCOUNT -->
+  <div class="acct-card fade">
+    <div class="acct-lbl">Paper Account</div>
+    <div class="acct-bal" id="acct-bal">$—</div>
+    <div class="acct-ret" id="acct-ret">— all time</div>
+    <div class="acct-grid">
+      <div><div class="acct-stat-lbl">Open P&L</div><div class="acct-stat-val" id="acct-open">—</div></div>
+      <div><div class="acct-stat-lbl">Win Rate</div><div class="acct-stat-val" id="acct-wr">—</div></div>
+      <div><div class="acct-stat-lbl">Drawdown</div><div class="acct-stat-val" id="acct-dd">—</div></div>
+      <div><div class="acct-stat-lbl">Trades</div><div class="acct-stat-val" id="acct-trades">—</div></div>
+    </div>
+  </div>
+
+  <!-- GLOBAL SESSION STATUS -->
+  <div class="card fade">
+    <div class="card-lbl">Sessions · Today (ET)</div>
+    <div class="sess-row">
+      <div><div class="sess-name">NQ Swing</div><div class="sess-time">06:00–07:00 ET · Tue–Thu</div></div>
+      <span class="pill" id="sess-nq-swing">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">ES Swing</div><div class="sess-time">06:00–07:00 ET · Tue–Thu</div></div>
+      <span class="pill" id="sess-es-swing">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">NQ Scalp</div><div class="sess-time">10:00–10:30 ET · Tue–Thu</div></div>
+      <span class="pill" id="sess-nq-scalp">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">GC Scalp</div><div class="sess-time">10:30–11:00 ET · Tue–Thu</div></div>
+      <span class="pill" id="sess-gc-scalp">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">GC Swing</div><div class="sess-time">15:00–16:00 ET · All week</div></div>
+      <span class="pill" id="sess-gc-swing">—</span>
+    </div>
+  </div>
+
+  <!-- FILTERS -->
+  <div class="card fade">
+    <div class="card-lbl">Filters</div>
+    <div class="sess-row">
+      <div><div class="sess-name">VIX Filter</div><div class="sess-time" id="vix-filter-sub">Max 25 · Current —</div></div>
+      <span class="pill" id="sess-vix">—</span>
+    </div>
+    <div class="sess-row">
+      <div><div class="sess-name">Day Filter</div><div class="sess-time" id="day-filter-sub">—</div></div>
+      <span class="pill" id="sess-day">—</span>
+    </div>
+    <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:14px">
+      <div class="card-lbl" style="margin-bottom:10px">Today's Scanner</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--sub)">Scans run</span>
+        <span style="font-size:13px;font-weight:500;font-family:'DM Mono',monospace" id="scan-count">—</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--sub)">Signals fired</span>
+        <span style="font-size:13px;font-weight:500;font-family:'DM Mono',monospace;color:var(--green)" id="signal-count">—</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--sub)">Best score</span>
+        <span style="font-size:13px;font-weight:500;font-family:'DM Mono',monospace;color:var(--amber)" id="best-score">—</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="sec-lbl">Instruments</div>
+
+<!-- INSTRUMENT TABS -->
+<div class="inst-tabs">
+  <div class="inst-tab tab-nq active-nq" onclick="switchTab('NQ')">
+    <div class="inst-dot"></div>
+    NQ
+    <span class="tab-badge">Scalp · Swing</span>
+  </div>
+  <div class="inst-tab tab-es" onclick="switchTab('ES')">
+    <div class="inst-dot"></div>
+    ES
+    <span class="tab-badge">Swing</span>
+  </div>
+  <div class="inst-tab tab-gc" onclick="switchTab('GC')">
+    <div class="inst-dot"></div>
+    GC
+    <span class="tab-badge">Scalp · Swing</span>
+  </div>
+</div>
+
+<!-- NQ PANEL -->
+<div class="inst-panel active" id="panel-NQ">
+  <div class="grid3">
+
+    <!-- NQ BACKTEST STATS -->
+    <div class="card fade">
+      <div class="card-lbl">NQ · Backtest Performance (v3)</div>
+      <table class="bt-table">
+        <thead>
+          <tr>
+            <th>Mode</th><th>Sharpe</th><th>WR</th><th>Return</th><th>DD</th><th>Trades/yr</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="bt-mode" style="color:var(--nq)">Scalp</span></td>
+            <td>38.76</td><td>62.5%</td><td>+40.5%</td><td>8.5%</td><td>108</td>
+          </tr>
+          <tr>
+            <td><span class="bt-mode" style="color:var(--es)">Swing</span></td>
+            <td>92.15</td><td>69.2%</td><td>+83.6%</td><td>7.9%</td><td>59</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div class="mrow"><span class="mrow-lbl">Scalp session</span><span class="mrow-val">10:00–10:30 ET</span></div>
+        <div class="mrow"><span class="mrow-lbl">Swing session</span><span class="mrow-val">06:00–07:00 ET</span></div>
+        <div class="mrow"><span class="mrow-lbl">Trading days</span><span class="mrow-val">Tue · Wed · Thu</span></div>
+        <div class="mrow"><span class="mrow-lbl">Score / Risk</span><span class="mrow-val">70 · 1.5% / 2.0%</span></div>
+      </div>
+    </div>
+
+    <!-- NQ SESSION STATUS -->
+    <div class="card fade">
+      <div class="card-lbl">NQ · Session Status</div>
+      <div class="sess-row">
+        <div><div class="sess-name">Swing Window</div><div class="sess-time">06:00–07:00 ET · 11:00–12:00 UK*</div></div>
+        <span class="pill" id="nq-swing-status">—</span>
+      </div>
+      <div class="sess-row">
+        <div><div class="sess-name">Scalp Window</div><div class="sess-time">10:00–10:30 ET · 15:00–15:30 UK*</div></div>
+        <span class="pill" id="nq-scalp-status">—</span>
+      </div>
+      <div class="sess-row">
+        <div><div class="sess-name">Day Schedule</div><div class="sess-time">Blocked Mon & Fri</div></div>
+        <span class="pill" id="nq-day-status">—</span>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--sub);margin-bottom:6px">* UK winter time. After 30 Mar: -1hr</div>
+        <div class="mrow"><span class="mrow-lbl">Next session</span><span class="mrow-val" id="nq-next-sess">—</span></div>
+      </div>
+    </div>
+
+    <!-- NQ SCANNER FEED -->
+    <div class="card fade">
+      <div class="card-lbl">NQ · Live Scanner Feed</div>
+      <div id="feed-NQ">
+        <div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">Waiting for session window...</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ES PANEL -->
+<div class="inst-panel" id="panel-ES">
+  <div class="grid3">
+
+    <!-- ES BACKTEST STATS -->
+    <div class="card fade">
+      <div class="card-lbl">ES · Backtest Performance (v3)</div>
+      <table class="bt-table">
+        <thead>
+          <tr>
+            <th>Mode</th><th>Sharpe</th><th>WR</th><th>Return</th><th>DD</th><th>Trades/yr</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="bt-mode" style="color:var(--es)">Swing</span></td>
+            <td>38.17</td><td>50.0%</td><td>+20.1%</td><td>11.7%</td><td>62</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div class="mrow"><span class="mrow-lbl">Swing session</span><span class="mrow-val">06:00–07:00 ET</span></div>
+        <div class="mrow"><span class="mrow-lbl">Trading days</span><span class="mrow-val">Tue · Wed · Thu</span></div>
+        <div class="mrow"><span class="mrow-lbl">Score / Risk</span><span class="mrow-val">70 · 2.0%</span></div>
+        <div class="mrow"><span class="mrow-lbl">HTF strict</span><span class="mrow-val">Yes</span></div>
+        <div class="mrow"><span class="mrow-lbl">Note</span><span class="mrow-val" style="font-size:10px;color:var(--sub)">Scalp excluded (DD 66%)</span></div>
+      </div>
+    </div>
+
+    <!-- ES SESSION STATUS -->
+    <div class="card fade">
+      <div class="card-lbl">ES · Session Status</div>
+      <div class="sess-row">
+        <div><div class="sess-name">Swing Window</div><div class="sess-time">06:00–07:00 ET · 11:00–12:00 UK*</div></div>
+        <span class="pill" id="es-swing-status">—</span>
+      </div>
+      <div class="sess-row">
+        <div><div class="sess-name">Correlation</div><div class="sess-time">Shares window with NQ Swing</div></div>
+        <span class="pill pill-amber">Watch</span>
+      </div>
+      <div class="sess-row">
+        <div><div class="sess-name">Day Schedule</div><div class="sess-time">Blocked Mon & Fri</div></div>
+        <span class="pill" id="es-day-status">—</span>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--sub);margin-bottom:6px">* UK winter time. After 30 Mar: -1hr</div>
+        <div class="mrow"><span class="mrow-lbl">Next session</span><span class="mrow-val" id="es-next-sess">—</span></div>
+      </div>
+    </div>
+
+    <!-- ES SCANNER FEED -->
+    <div class="card fade">
+      <div class="card-lbl">ES · Live Scanner Feed</div>
+      <div id="feed-ES">
+        <div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">Waiting for session window...</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- GC PANEL -->
+<div class="inst-panel" id="panel-GC">
+  <div class="grid3">
+
+    <!-- GC BACKTEST STATS -->
+    <div class="card fade">
+      <div class="card-lbl">GC · Backtest Performance (v3)</div>
+      <table class="bt-table">
+        <thead>
+          <tr>
+            <th>Mode</th><th>Sharpe</th><th>WR</th><th>Return</th><th>DD</th><th>Trades/yr</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="bt-mode" style="color:var(--nq)">Scalp</span></td>
+            <td>34.81</td><td>62.9%</td><td>+74.0%</td><td>8.9%</td><td>184</td>
+          </tr>
+          <tr>
+            <td><span class="bt-mode" style="color:var(--es)">Swing</span></td>
+            <td>82.00</td><td>66.7%</td><td>+44.6%</td><td>2.3%</td><td>89</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div class="mrow"><span class="mrow-lbl">Scalp session</span><span class="mrow-val">10:30–11:00 ET</span></div>
+        <div class="mrow"><span class="mrow-lbl">Swing session</span><span class="mrow-val">15:00–16:00 ET</span></div>
+        <div class="mrow"><span class="mrow-lbl">Scalp days</span><span class="mrow-val">Tue · Wed · Thu</span></div>
+        <div class="mrow"><span class="mrow-lbl">Swing days</span><span class="mrow-val">All week</span></div>
+      </div>
+    </div>
+
+    <!-- GC SESSION STATUS -->
+    <div class="card fade">
+      <div class="card-lbl">GC · Session Status</div>
+      <div class="sess-row">
+        <div><div class="sess-name">Scalp Window</div><div class="sess-time">10:30–11:00 ET · 15:30–16:00 UK*</div></div>
+        <span class="pill" id="gc-scalp-status">—</span>
+      </div>
+      <div class="sess-row">
+        <div><div class="sess-name">Swing Window</div><div class="sess-time">15:00–16:00 ET · 20:00–21:00 UK*</div></div>
+        <span class="pill" id="gc-swing-status">—</span>
+      </div>
+      <div class="sess-row">
+        <div><div class="sess-name">Swing Days</div><div class="sess-time">All week including Mon & Fri</div></div>
+        <span class="pill pill-green">Always on</span>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--sub);margin-bottom:6px">* UK winter time. After 30 Mar: -1hr</div>
+        <div class="mrow"><span class="mrow-lbl">Next session</span><span class="mrow-val" id="gc-next-sess">—</span></div>
+      </div>
+    </div>
+
+    <!-- GC SCANNER FEED -->
+    <div class="card fade">
+      <div class="card-lbl">GC · Live Scanner Feed</div>
+      <div id="feed-GC">
+        <div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">Waiting for session window...</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="sec-lbl">Signals & Trades</div>
+
+<!-- ROW: signals + trade log -->
+<div class="grid2">
+
+  <div class="card fade">
+    <div class="card-lbl">Active Signals</div>
+    <div id="signals-list">
+      <div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">Loading signals...</div></div>
+    </div>
+  </div>
+
+  <div class="card fade">
+    <div class="card-lbl">Trade Log</div>
+    <div class="tlog-head"><span>Date</span><span>Mode</span><span>Setup</span><span>Result</span><span>P&L</span></div>
+    <div id="trade-log">
+      <div style="padding:24px 0;text-align:center;color:var(--sub);font-size:12px">No trades yet</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="sec-lbl">Macro & News</div>
+
+<!-- ROW: news + regime + telegram -->
+<div class="grid3">
+
+  <div class="card fade" style="grid-column:span 2">
+    <div class="card-lbl">News & Calendar</div>
+    <div id="news-list">
+      <div style="padding:20px 0;text-align:center;color:var(--sub);font-size:12px">Loading news...</div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+
+    <div class="card fade">
+      <div class="card-lbl">Macro Regime</div>
+      <div class="mrow"><span class="mrow-lbl">Trend</span><span class="mrow-val" id="reg-trend">—</span></div>
+      <div class="mrow"><span class="mrow-lbl">Volatility</span><span class="mrow-val" id="reg-vol">—</span></div>
+      <div class="mrow"><span class="mrow-lbl">Risk Appetite</span><span class="mrow-val" id="reg-risk">—</span></div>
+      <div class="mrow"><span class="mrow-lbl">Bias</span><span class="mrow-val" id="reg-bias">—</span></div>
+      <div class="prog-wrap">
+        <div class="prog-labels"><span>Stability</span><span id="stab-score">—</span></div>
+        <div class="prog-bg"><div class="prog-fill" id="stab-bar" style="width:0%;background:var(--accent)"></div></div>
+      </div>
+    </div>
+
+    <div class="card fade">
+      <div class="card-lbl">Telegram</div>
+      <div style="font-size:13px;color:var(--sub);margin-bottom:14px">Send a test message to confirm alerts are working.</div>
+      <button class="tg-btn" id="tg-btn" onclick="testTelegram()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        Send Test
+      </button>
+      <div id="tg-result"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+const BASE = '';
+
+// ── SESSION CONFIG (ET minutes) ──
+const SESSIONS = {
+  'nq-swing':  { start: 6*60,      end: 7*60,      dow: [1,2,3] },
+  'es-swing':  { start: 6*60,      end: 7*60,      dow: [1,2,3] },
+  'nq-scalp':  { start: 10*60,     end: 10*60+30,  dow: [1,2,3] },
+  'gc-scalp':  { start: 10*60+30,  end: 11*60,     dow: [1,2,3] },
+  'gc-swing':  { start: 15*60,     end: 16*60,     dow: [0,1,2,3,4] },
+};
+
+// ── CLOCK ──
+function tick() {
+  const n = new Date();
+  const p = v => String(v).padStart(2,'0');
+  document.getElementById('clock').textContent =
+    `${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())} GMT`;
+}
+tick(); setInterval(tick, 1000);
+
+// ── HELPERS ──
+function fmt(n, dec=0) {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-US', {minimumFractionDigits:dec, maximumFractionDigits:dec});
+}
+function fmtUSD(n) {
+  if (n == null || isNaN(n)) return '—';
+  const sign = n >= 0 ? '+' : '';
+  return sign + '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now()/1000) - ts);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  return `${Math.floor(diff/3600)}h ago`;
+}
+
+// Get current ET time info
+function getET() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US', {timeZone:'America/New_York'}));
+  return {
+    h: et.getHours(), m: et.getMinutes(),
+    mins: et.getHours()*60 + et.getMinutes(),
+    dow: et.getDay(), // 0=Sun
+    jsDay: et.getDay()
+  };
+}
+
+// Convert JS day (0=Sun) to python weekday (0=Mon)
+function jsToPyDow(jsDay) {
+  return jsDay === 0 ? 6 : jsDay - 1;
+}
+
+function getSessionStatus(sessKey) {
+  const s = SESSIONS[sessKey];
+  if (!s) return { active: false, label: '—', cls: 'pill-grey' };
+  const et = getET();
+  const pyDow = jsToPyDow(et.jsDay);
+  if (!s.dow.includes(pyDow)) return { active: false, label: 'Off day', cls: 'pill-grey' };
+  if (et.mins >= s.start && et.mins < s.end) return { active: true, label: 'Active', cls: 'pill-green' };
+  if (et.mins < s.start) {
+    const wait = s.start - et.mins;
+    const h = Math.floor(wait/60), m = wait%60;
+    const label = h > 0 ? `In ${h}h ${m}m` : `In ${m}m`;
+    return { active: false, label, cls: 'pill-amber' };
+  }
+  return { active: false, label: 'Closed', cls: 'pill-grey' };
+}
+
+function setPill(id, status) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = status.label;
+  el.className = 'pill ' + status.cls;
+}
+
+// ── TAB SWITCHING ──
+let activeTab = 'NQ';
+function switchTab(sym) {
+  activeTab = sym;
+  document.querySelectorAll('.inst-tab').forEach(t => {
+    t.classList.remove('active-nq','active-es','active-gc');
+  });
+  document.querySelectorAll('.inst-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab-' + sym.toLowerCase()).classList.add('active-' + sym.toLowerCase());
+  document.getElementById('panel-' + sym).classList.add('active');
+}
+
+// ── SESSION STATUS UPDATE ──
+function updateSessions() {
+  const et = getET();
+  const pyDow = jsToPyDow(et.jsDay);
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const goodDay = [1,2,3].includes(pyDow); // Mon-indexed
+
+  // Global session pills
+  ['nq-swing','es-swing','nq-scalp','gc-scalp','gc-swing'].forEach(k => {
+    setPill('sess-' + k, getSessionStatus(k));
+  });
+
+  // Instrument-specific
+  setPill('nq-swing-status', getSessionStatus('nq-swing'));
+  setPill('nq-scalp-status', getSessionStatus('nq-scalp'));
+  setPill('es-swing-status', getSessionStatus('es-swing'));
+  setPill('gc-scalp-status', getSessionStatus('gc-scalp'));
+  setPill('gc-swing-status', getSessionStatus('gc-swing'));
+
+  // Day pills
+  const nqGoodDay = [1,2,3].includes(pyDow);
+  const gcSwingGoodDay = true; // all week
+  const dayLabel = `${days[et.jsDay]} · ${nqGoodDay ? 'Trading day' : 'Blocked'}`;
+
+  document.getElementById('day-filter-sub').textContent = dayLabel;
+  setPill('sess-day', { label: nqGoodDay ? 'OK' : 'Blocked', cls: nqGoodDay ? 'pill-green' : 'pill-red' });
+  setPill('nq-day-status', { label: nqGoodDay ? 'OK' : 'Blocked', cls: nqGoodDay ? 'pill-green' : 'pill-red' });
+  setPill('es-day-status', { label: nqGoodDay ? 'OK' : 'Blocked', cls: nqGoodDay ? 'pill-green' : 'pill-red' });
+
+  // Next session countdowns
+  function nextSess(keys) {
+    for (const k of keys) {
+      const s = SESSIONS[k];
+      const pyD = jsToPyDow(et.jsDay);
+      if (s.dow.includes(pyD) && et.mins < s.start) {
+        const wait = s.start - et.mins;
+        const h = Math.floor(wait/60), m = wait%60;
+        return `${k.split('-')[1].charAt(0).toUpperCase()+k.split('-')[1].slice(1)} in ${h > 0 ? h+'h ' : ''}${m}m`;
+      }
+    }
+    return 'Tomorrow';
+  }
+
+  const nqNext = document.getElementById('nq-next-sess');
+  const esNext = document.getElementById('es-next-sess');
+  const gcNext = document.getElementById('gc-next-sess');
+  if (nqNext) nqNext.textContent = nextSess(['nq-swing','nq-scalp']);
+  if (esNext) esNext.textContent = nextSess(['es-swing']);
+  if (gcNext) gcNext.textContent = nextSess(['gc-scalp','gc-swing']);
+}
+
+// ── MACRO PRICES ──
+async function loadMacro() {
+  try {
+    const [macroR, pricesR] = await Promise.all([
+      fetch(BASE + '/api/macro'),
+      fetch(BASE + '/api/prices?symbols=NQ,ES'),
+    ]);
+    const d  = await macroR.json();
+    const px = await pricesR.json();
+
+    const map = {
+      'nq':   ['m-nq',  'mc-nq',  px.NQ?.price || d.nq_futures || d.nq],
+      'es':   ['m-es',  'mc-es',  px.ES?.price || d.es_futures || d.es],
+      'vix':  ['m-vix', 'mc-vix', d.vix],
+      'gold': ['m-gold','mc-gold', d.gold],
+      'dxy':  ['m-dxy', 'mc-dxy', d.dxy],
+    };
+
+    for (const [key, [valId, chgId, val]] of Object.entries(map)) {
+      const el = document.getElementById(valId);
+      const ce = document.getElementById(chgId);
+      if (el && val != null) {
+        el.textContent = key === 'vix' ? Number(val).toFixed(1) : fmt(val);
+        if ((key === 'nq' || key === 'es') && ce) {
+          const pxData = key === 'nq' ? px.NQ : px.ES;
+          if (pxData?.change_pct != null) {
+            const pct = parseFloat(pxData.change_pct);
+            ce.className = 'macro-chg ' + (pct >= 0 ? 'up' : 'down');
+            ce.textContent = (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct).toFixed(2) + '%';
+          }
+        }
+        if (key === 'vix') {
+          const vixNum = parseFloat(val);
+          el.style.color = vixNum > 25 ? 'var(--red)' : vixNum > 20 ? 'var(--amber)' : 'var(--green)';
+          if (ce) {
+            ce.textContent = vixNum > 25 ? 'Elevated · Trades blocked' : vixNum > 20 ? 'Caution · Threshold 25' : 'Normal · Trading OK';
+            ce.className = 'macro-chg ' + (vixNum > 25 ? 'down' : vixNum > 20 ? 'flat' : 'up');
+          }
+          document.getElementById('vix-filter-sub').textContent = `Max 25 · Current ${vixNum.toFixed(1)}`;
+          setPill('sess-vix', vixNum <= 25
+            ? { label: 'OK', cls: 'pill-green' }
+            : { label: 'Blocking', cls: 'pill-red' });
+          const banner = document.getElementById('banner');
+          if (vixNum > 25) {
+            document.getElementById('banner-msg').textContent = `Scanner paused — VIX elevated at ${vixNum.toFixed(1)}`;
+            document.getElementById('banner-sub').textContent = `All trades blocked above VIX 25.0`;
+            banner.classList.add('show');
+          } else {
+            banner.classList.remove('show');
+          }
+        }
+      }
+    }
+
+    // Regime
+    const reg = d.regime || {};
+    const setReg = (id, val, colorMap) => {
+      const el = document.getElementById(id);
+      if (!el || !val) return;
+      el.textContent = val;
+      if (colorMap) el.style.color = colorMap[val.toLowerCase()] || 'var(--text)';
+    };
+    setReg('reg-trend', reg.trend, {bullish:'var(--green)',bearish:'var(--red)',neutral:'var(--sub)'});
+    setReg('reg-vol',   reg.volatility || reg.vol_regime, {low:'var(--green)',elevated:'var(--amber)',high:'var(--red)',extreme:'var(--red)'});
+    setReg('reg-risk',  reg.risk_appetite, {'risk-on':'var(--green)','risk-off':'var(--red)',neutral:'var(--sub)'});
+    setReg('reg-bias',  reg.bias || reg.direction || '—', null);
+
+    const vixNow = parseFloat(d.vix || 20);
+    const stab = Math.max(0, Math.min(100, Math.round(100 - (vixNow - 10) * 2.5)));
+    document.getElementById('stab-score').textContent = stab + ' / 100';
+    const bar = document.getElementById('stab-bar');
+    bar.style.width = stab + '%';
+    bar.style.background = stab > 60 ? 'var(--green)' : stab > 35 ? 'var(--amber)' : 'var(--red)';
+
+  } catch(e) { console.warn('macro', e); }
+}
+
+// ── ACCOUNT ──
+async function loadAccount() {
+  try {
+    const r = await fetch(BASE + '/api/paper/account');
+    const d = await r.json();
+
+    const bal   = parseFloat(d.balance || d.current_balance || 10000);
+    const start = parseFloat(d.starting_balance || 10000);
+    const ret   = ((bal - start) / start * 100);
+    const retSign = ret >= 0 ? '+' : '';
+
+    document.getElementById('acct-bal').textContent = '$' + bal.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const retEl = document.getElementById('acct-ret');
+    retEl.textContent = `${retSign}${ret.toFixed(2)}% all time`;
+    retEl.style.color = ret >= 0 ? 'var(--green)' : 'var(--red)';
+
+    const positions = d.open_positions || [];
+    let openPnl = positions.reduce((s,p) => s + (parseFloat(p.pnl_usd||0)), 0);
+    const openEl = document.getElementById('acct-open');
+    openEl.textContent = fmtUSD(openPnl);
+    openEl.style.color = openPnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+    document.getElementById('acct-wr').textContent     = d.win_rate != null ? d.win_rate.toFixed(1) + '%' : '—';
+    document.getElementById('acct-dd').textContent     = d.current_drawdown != null ? d.current_drawdown.toFixed(1) + '%' : '—';
+    document.getElementById('acct-trades').textContent = d.total_trades != null ? d.total_trades : '—';
+
+    // Trade log
+    const trades = (d.recent_trades || d.closed_trades || []).slice(0, 6);
+    const logEl  = document.getElementById('trade-log');
+    if (!trades.length) {
+      logEl.innerHTML = '<div style="padding:24px 0;text-align:center;color:var(--sub);font-size:12px">No trades yet</div>';
+    } else {
+      logEl.innerHTML = trades.map(t => {
+        const pnl  = parseFloat(t.pnl_usd || 0);
+        const win  = pnl > 0;
+        const date = t.opened_at ? new Date(t.opened_at).toLocaleDateString('en-GB', {day:'numeric',month:'short'}) : '—';
+        return `<div class="tlog-row">
+          <span style="color:var(--sub)">${date}</span>
+          <span>${t.mode || t.setup_name?.split(' ')[0] || '—'}</span>
+          <span style="font-size:11px">${t.symbol || 'NQ'} ${t.direction || ''}</span>
+          <span class="pill ${win?'pill-green':'pill-red'}" style="font-size:9px">${win?'Win':'Loss'}</span>
+          <span class="${win?'pnl-p':'pnl-n'}">${fmtUSD(pnl)}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // Signals
+    const sigEl = document.getElementById('signals-list');
+    if (!positions.length) {
+      sigEl.innerHTML = `<div class="sig-empty"><div class="sig-empty-icon">◎</div><div class="sig-empty-txt">No active signals</div></div>`;
+    } else {
+      sigEl.innerHTML = positions.map(p => {
+        const pnl   = parseFloat(p.pnl_usd || 0);
+        const dir   = p.direction || 'long';
+        const arrow = dir === 'long' ? '↑' : '↓';
+        return `<div class="sig-item">
+          <div class="sig-icon ${dir}">${arrow}</div>
+          <div style="flex:1">
+            <div class="sig-title">${p.symbol} — ${p.mode || 'Signal'} ${dir.charAt(0).toUpperCase()+dir.slice(1)}</div>
+            <div class="sig-meta">Score ${p.setup_score||'—'} · Entry ${fmt(p.entry_price,0)} · Stop ${fmt(p.stop,0)} · Target ${fmt(p.target1,0)}</div>
+          </div>
+          <div class="sig-r" style="color:${pnl>=0?'var(--green)':'var(--red)'}">
+            ${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(0)}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+  } catch(e) { console.warn('account', e); }
+}
+
+// ── SCANNER FEED ──
+async function loadScannerFeed() {
+  try {
+    const r = await fetch(BASE + '/api/signals?limit=20');
+    if (!r.ok) return;
+    const d = await r.json();
+    const signals = d.signals || d.recent || d || [];
+    if (!Array.isArray(signals) || !signals.length) return;
+
+    // Group by symbol
+    const bySymbol = { NQ: [], ES: [], GC: [] };
+    signals.forEach(s => {
+      const sym = s.symbol || 'NQ';
+      if (bySymbol[sym]) bySymbol[sym].push(s);
+    });
+
+    // Update scanner stats
+    const today = new Date().toDateString();
+    const todaySignals = signals.filter(s => new Date(s.timestamp || s.ts * 1000).toDateString() === today);
+    const qualified    = todaySignals.filter(s => s.score >= 70);
+    const bestScore    = todaySignals.length ? Math.max(...todaySignals.map(s => s.score || 0)) : 0;
+
+    document.getElementById('scan-count').textContent   = todaySignals.length || '0';
+    document.getElementById('signal-count').textContent = qualified.length || '0';
+    document.getElementById('best-score').textContent   = bestScore > 0 ? bestScore : '—';
+
+    // Render per-instrument feeds
+    ['NQ','ES','GC'].forEach(sym => {
+      const el   = document.getElementById('feed-' + sym);
+      const sigs = bySymbol[sym].slice(0, 8);
+      if (!el || !sigs.length) return;
+
+      el.innerHTML = sigs.map(s => {
+        const score = s.score || 0;
+        const pass  = score >= 70;
+        const time  = s.timestamp ? new Date(s.timestamp).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) :
+                      s.ts ? new Date(s.ts*1000).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) : '—';
+        const mode  = (s.mode || 'signal').toLowerCase();
+        const dir   = s.direction || '';
+        const scoreClass = score >= 70 ? 'pass' : score >= 60 ? 'warn' : 'fail';
+        return `<div class="feed-item">
+          <div class="feed-time">${time}</div>
+          <div class="feed-mode ${mode}">${mode.charAt(0).toUpperCase()+mode.slice(1)}</div>
+          <div class="feed-desc">
+            ${dir ? dir.charAt(0).toUpperCase()+dir.slice(1) : 'Scan'} · ${s.setup || s.reason || 'Signal evaluated'}
+            <div class="feed-sub">${s.detail || ''}</div>
+          </div>
+          <div class="feed-score ${scoreClass}">${score > 0 ? score : '—'}</div>
+        </div>`;
+      }).join('');
+    });
+
+  } catch(e) { console.warn('feed', e); }
+}
+
+// ── NEWS ──
+async function loadNews() {
+  try {
+    const r = await fetch(BASE + '/api/news?symbol=NQ');
+    const d = await r.json();
+    const articles = (d.articles || []).slice(0, 5);
+    const el = document.getElementById('news-list');
+    if (!articles.length) {
+      el.innerHTML = '<div style="padding:16px 0;color:var(--sub);font-size:12px">No news available</div>';
+      return;
+    }
+    el.innerHTML = articles.map(a => {
+      const imp    = (a.impact || a.sentiment || '').toLowerCase();
+      const impCls = imp.includes('high') || imp.includes('negative') ? 'imp-h' : imp.includes('med') ? 'imp-m' : 'imp-l';
+      const impTxt = imp.includes('high') || imp.includes('negative') ? 'HIGH' : imp.includes('med') ? 'MED' : 'LOW';
+      const ago    = a.published_at ? timeAgo(new Date(a.published_at).getTime()/1000) : '';
+      return `<div class="news-item">
+        <div class="news-row1"><span class="imp ${impCls}">${impTxt}</span><span style="font-size:10px;color:var(--sub);font-family:'DM Mono',monospace">${ago}</span></div>
+        <div class="news-hl">${a.headline || a.title || ''}</div>
+        <div class="news-meta">${a.source || ''}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { console.warn('news', e); }
+}
+
+// ── TELEGRAM TEST ──
+async function testTelegram() {
+  const btn = document.getElementById('tg-btn');
+  const res = document.getElementById('tg-result');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  res.textContent = '';
+  try {
+    const r = await fetch(BASE + '/api/telegram/test', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      res.textContent = '✅ Message sent — check your Telegram';
+      res.style.color = 'var(--green)';
+    } else {
+      res.textContent = '❌ ' + (d.message || d.error || 'Failed');
+      res.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    res.textContent = '❌ Connection error';
+    res.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Test';
+}
+
+// ── REFRESH ALL ──
+async function refreshAll() {
+  updateSessions();
+  await Promise.all([loadMacro(), loadAccount(), loadNews(), loadScannerFeed()]);
+}
+
+// Update sessions every 30s, full refresh every 60s
+updateSessions();
+setInterval(updateSessions, 30000);
+refreshAll();
+setInterval(refreshAll, 60000);
+</script>
+</body>
+</html>
