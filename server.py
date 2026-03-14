@@ -51,15 +51,19 @@ if TELEGRAM_TOKEN and not cfg.get('telegram_token'):
     save_config(cfg)
 
 INSTRUMENTS = {
-    'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'type': 'future', 'name': 'Nasdaq 100 Futures'},
-    'ES':  {'yahoo': 'ES=F',     'polygon_paid': 'ES:CME',   'type': 'future', 'name': 'S&P 500 E-Mini'},
-    'GC':  {'yahoo': 'GC=F',     'polygon_paid': 'GC:COMEX', 'type': 'future', 'name': 'Gold Futures'},
-    'CL':  {'yahoo': 'CL=F',     'polygon_paid': 'CL:NYMEX', 'type': 'future', 'name': 'Crude Oil Futures'},
-    'ZN':  {'yahoo': 'ZN=F',     'polygon_paid': 'ZN:CBOT',  'type': 'future', 'name': '10Y T-Note Futures'},
-    'VIX': {'yahoo': '^VIX',     'polygon_paid': None,       'type': 'index',  'name': 'CBOE VIX'},
-    'DXY': {'yahoo': 'DX-Y.NYB', 'polygon_paid': None,       'type': 'forex',  'name': 'Dollar Index'},
-    'BTC': {'yahoo': 'BTC-USD',  'polygon_paid': None,       'type': 'crypto', 'name': 'Bitcoin USD'},
+    'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'databento': 'NQ.c.0', 'type': 'future', 'name': 'Nasdaq 100 Futures'},
+    'ES':  {'yahoo': 'ES=F',     'polygon_paid': 'ES:CME',   'databento': 'ES.c.0', 'type': 'future', 'name': 'S&P 500 E-Mini'},
+    'GC':  {'yahoo': 'GC=F',     'polygon_paid': 'GC:COMEX', 'databento': 'GC.c.0', 'type': 'future', 'name': 'Gold Futures'},
+    'CL':  {'yahoo': 'CL=F',     'polygon_paid': 'CL:NYMEX', 'databento': None,     'type': 'future', 'name': 'Crude Oil Futures'},
+    'ZN':  {'yahoo': 'ZN=F',     'polygon_paid': 'ZN:CBOT',  'databento': None,     'type': 'future', 'name': '10Y T-Note Futures'},
+    'VIX': {'yahoo': '^VIX',     'polygon_paid': None,       'databento': None,     'type': 'index',  'name': 'CBOE VIX'},
+    'DXY': {'yahoo': 'DX-Y.NYB', 'polygon_paid': None,       'databento': None,     'type': 'forex',  'name': 'Dollar Index'},
+    'BTC': {'yahoo': 'BTC-USD',  'polygon_paid': None,       'databento': None,     'type': 'crypto', 'name': 'Bitcoin USD'},
 }
+
+# Databento dataset for CME futures
+DATABENTO_DATASET  = 'GLBX.MDP3'
+DATABENTO_API_KEY  = os.environ.get('DATABENTO_API_KEY', '')
 
 REFERENCE_PRICES = {
     'NQ': 21500, 'ES': 5780,  'GC': 3050,  'CL': 71.5,
@@ -115,6 +119,153 @@ def yf_get_quote(yahoo_ticker):
     except Exception as e:
         logger.debug('yf quote failed ' + yahoo_ticker + ': ' + str(e))
     return None
+
+
+def databento_fetch(symbol, tf_label, years=3):
+    """
+    Fetch OHLCV bars from Databento for NQ, ES, GC.
+    Uses CME Globex MDP3.0 dataset with continuous front-month contracts.
+    Falls back to yfinance if Databento key not set or request fails.
+    """
+    import requests
+    from datetime import datetime, timedelta, timezone as _tz
+
+    api_key = DATABENTO_API_KEY or os.environ.get('DATABENTO_API_KEY', '')
+    if not api_key:
+        logger.debug('Databento key not set — falling back to yfinance')
+        return None
+
+    db_symbol = INSTRUMENTS.get(symbol, {}).get('databento')
+    if not db_symbol:
+        return None
+
+    # Map our timeframe labels to Databento schemas
+    schema_map = {
+        '1min':  'ohlcv-1m',
+        '5min':  'ohlcv-1m',
+        '15min': 'ohlcv-1m',
+        '1hour': 'ohlcv-1h',
+        '4hour': 'ohlcv-1h',
+        '1day':  'ohlcv-1d',
+        '1week': 'ohlcv-1d',
+    }
+
+    # Aggregation multipliers (how many base bars to combine)
+    agg_map = {
+        '1min':  1,
+        '5min':  5,
+        '15min': 15,
+        '1hour': 1,
+        '4hour': 4,
+        '1day':  1,
+        '1week': 7,
+    }
+
+    schema = schema_map.get(tf_label, 'ohlcv-1d')
+    agg    = agg_map.get(tf_label, 1)
+
+    now       = datetime.now(_tz.utc)
+    start     = now - timedelta(days=365 * years)
+    start_str = start.strftime('%Y-%m-%dT%H:%M:%SZ')
+    end_str   = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    try:
+        logger.info(f'Databento fetch: {symbol} ({db_symbol}) {tf_label} schema={schema}')
+
+        resp = requests.get(
+            'https://hist.databento.com/v0/timeseries.get_range',
+            params={
+                'dataset':    DATABENTO_DATASET,
+                'symbols':    db_symbol,
+                'schema':     schema,
+                'start':      start_str,
+                'end':        end_str,
+                'stype_in':   'continuous',
+                'encoding':   'json',
+            },
+            auth=(api_key, ''),
+            timeout=60,
+        )
+
+        if resp.status_code != 200:
+            logger.warning(f'Databento error {resp.status_code}: {resp.text[:200]}')
+            return None
+
+        data = resp.json()
+        raw  = data if isinstance(data, list) else data.get('data', data.get('result', []))
+
+        if not raw:
+            logger.warning(f'Databento empty response for {symbol} {tf_label}')
+            return None
+
+        # Parse raw bars
+        parsed = []
+        for r in raw:
+            try:
+                ts = r.get('ts_event') or r.get('hd', {}).get('ts_event', 0)
+                # Databento timestamps are nanoseconds
+                if ts > 1e15:
+                    ts = int(ts) // 1_000_000_000
+                else:
+                    ts = int(ts)
+
+                parsed.append({
+                    't': ts,
+                    'o': float(r.get('open',  r.get('o', 0))) / 1e9 if float(r.get('open', r.get('o', 0))) > 1e6 else float(r.get('open', r.get('o', 0))),
+                    'h': float(r.get('high',  r.get('h', 0))) / 1e9 if float(r.get('high', r.get('h', 0))) > 1e6 else float(r.get('high', r.get('h', 0))),
+                    'l': float(r.get('low',   r.get('l', 0))) / 1e9 if float(r.get('low',  r.get('l', 0))) > 1e6 else float(r.get('low',  r.get('l', 0))),
+                    'c': float(r.get('close', r.get('c', 0))) / 1e9 if float(r.get('close', r.get('c', 0))) > 1e6 else float(r.get('close', r.get('c', 0))),
+                    'v': int(r.get('volume', r.get('v', 0))),
+                })
+            except Exception as pe:
+                logger.debug(f'Databento parse error: {pe}')
+                continue
+
+        if not parsed:
+            logger.warning(f'Databento: no parseable bars for {symbol} {tf_label}')
+            return None
+
+        # Aggregate if needed (e.g. 5x 1min bars -> 1x 5min bar)
+        if agg > 1:
+            aggregated = []
+            for i in range(0, len(parsed), agg):
+                chunk = parsed[i:i+agg]
+                if not chunk:
+                    continue
+                aggregated.append({
+                    't': chunk[0]['t'],
+                    'o': chunk[0]['o'],
+                    'h': max(b['h'] for b in chunk),
+                    'l': min(b['l'] for b in chunk),
+                    'c': chunk[-1]['c'],
+                    'v': sum(b['v'] for b in chunk),
+                })
+            parsed = aggregated
+
+        logger.info(f'Databento OK: {symbol} {tf_label} {len(parsed)} bars')
+        return parsed
+
+    except Exception as e:
+        logger.warning(f'Databento fetch failed {symbol} {tf_label}: {e}')
+        return None
+
+
+def fetch_bars(symbol, tf_label, years=3):
+    """
+    Unified bar fetcher — tries Databento first for NQ/ES/GC,
+    falls back to yfinance for everything else or on failure.
+    """
+    db_symbol = INSTRUMENTS.get(symbol, {}).get('databento')
+    if db_symbol and DATABENTO_API_KEY:
+        bars = databento_fetch(symbol, tf_label, years)
+        if bars:
+            return bars
+        logger.info(f'Databento failed for {symbol} {tf_label} — falling back to yfinance')
+
+    yahoo = INSTRUMENTS.get(symbol, {}).get('yahoo')
+    if yahoo:
+        return yf_fetch(yahoo, tf_label)
+    return []
 
 
 def init_db():
@@ -193,22 +344,22 @@ def get_db_stats():
 
 
 def backfill_history(symbol, years=5):
-    info  = INSTRUMENTS.get(symbol, {})
-    yahoo = info.get('yahoo')
-    if not yahoo:
-        logger.warning('No Yahoo ticker for ' + symbol)
+    info = INSTRUMENTS.get(symbol, {})
+    if not info:
+        logger.warning('Unknown symbol: ' + symbol)
         return
-    logger.info('Backfill started: ' + symbol + ' (' + yahoo + ')')
+    source = 'Databento' if (info.get('databento') and DATABENTO_API_KEY) else 'yfinance'
+    logger.info(f'Backfill started: {symbol} (source={source})')
     for tf in ['1week', '1day', '4hour', '1hour', '15min', '5min']:
         try:
             logger.info('  Fetching ' + symbol + ' ' + tf + '...')
-            bars = yf_fetch(yahoo, tf)
+            bars = fetch_bars(symbol, tf, years)
             if bars:
                 stored = store_ohlcv(symbol, tf, bars)
                 logger.info('  OK ' + symbol + ' ' + tf + ': ' + str(stored) + ' new bars (' + str(len(bars)) + ' total)')
             else:
                 logger.warning('  FAIL ' + symbol + ' ' + tf + ': no data')
-            time.sleep(2)
+            time.sleep(1)
         except Exception as e:
             logger.error('  Error ' + symbol + ' ' + tf + ': ' + str(e))
     logger.info('Backfill complete: ' + symbol)
