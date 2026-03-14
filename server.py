@@ -165,9 +165,11 @@ def databento_fetch(symbol, tf_label, years=3):
     agg    = agg_map.get(tf_label, 1)
 
     now       = datetime.now(_tz.utc)
-    start     = now - timedelta(days=365 * years)
+    # Databento historical API only serves data up to midnight UTC
+    end       = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start     = end - timedelta(days=365 * years)
     start_str = start.strftime('%Y-%m-%dT%H:%M:%SZ')
-    end_str   = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    end_str   = end.strftime('%Y-%m-%dT%H:%M:%SZ')
 
     try:
         logger.info(f'Databento fetch: {symbol} ({db_symbol}) {tf_label} schema={schema}')
@@ -191,34 +193,53 @@ def databento_fetch(symbol, tf_label, years=3):
             logger.warning(f'Databento error {resp.status_code}: {resp.text[:200]}')
             return None
 
-        data = resp.json()
-        raw  = data if isinstance(data, list) else data.get('data', data.get('result', []))
+        # Databento returns newline-delimited JSON (one object per line)
+        raw = []
+        for line in resp.text.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                import json as _json
+                obj = _json.loads(line)
+                if isinstance(obj, list):
+                    raw.extend(obj)
+                elif isinstance(obj, dict):
+                    raw.append(obj)
+            except Exception:
+                continue
 
         if not raw:
             logger.warning(f'Databento empty response for {symbol} {tf_label}')
             return None
 
         # Parse raw bars
+        # Databento format: {"hd":{"ts_event":"1234567890000000000",...},"open":"24435250000000",...}
+        # Prices are fixed-point integers, divide by 1e9 to get actual price
+        # Timestamps are nanoseconds since epoch
         parsed = []
         for r in raw:
             try:
-                ts = r.get('ts_event') or r.get('hd', {}).get('ts_event', 0)
-                # Databento timestamps are nanoseconds
-                if ts > 1e15:
-                    ts = int(ts) // 1_000_000_000
-                else:
-                    ts = int(ts)
+                # Get timestamp from nested hd object
+                hd = r.get('hd', {})
+                ts_raw = hd.get('ts_event', 0)
+                ts = int(ts_raw) // 1_000_000_000  # nanoseconds -> seconds
+
+                # Prices are strings of fixed-point integers (divide by 1e9)
+                def parse_price(val):
+                    if val is None: return 0.0
+                    return round(float(val) / 1e9, 4)
 
                 parsed.append({
                     't': ts,
-                    'o': float(r.get('open',  r.get('o', 0))) / 1e9 if float(r.get('open', r.get('o', 0))) > 1e6 else float(r.get('open', r.get('o', 0))),
-                    'h': float(r.get('high',  r.get('h', 0))) / 1e9 if float(r.get('high', r.get('h', 0))) > 1e6 else float(r.get('high', r.get('h', 0))),
-                    'l': float(r.get('low',   r.get('l', 0))) / 1e9 if float(r.get('low',  r.get('l', 0))) > 1e6 else float(r.get('low',  r.get('l', 0))),
-                    'c': float(r.get('close', r.get('c', 0))) / 1e9 if float(r.get('close', r.get('c', 0))) > 1e6 else float(r.get('close', r.get('c', 0))),
-                    'v': int(r.get('volume', r.get('v', 0))),
+                    'o': parse_price(r.get('open')),
+                    'h': parse_price(r.get('high')),
+                    'l': parse_price(r.get('low')),
+                    'c': parse_price(r.get('close')),
+                    'v': int(r.get('volume', 0)),
                 })
             except Exception as pe:
-                logger.debug(f'Databento parse error: {pe}')
+                logger.debug(f'Databento parse error: {pe} row={r}')
                 continue
 
         if not parsed:
