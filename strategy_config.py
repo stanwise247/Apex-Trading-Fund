@@ -70,13 +70,17 @@ NQ_SWING_CONFIG = {
     'rr_ratio':      4.0,
     'risk_pct':      2.0,
     'session':       'nq_swing',
-    'session_start': (6, 0),
-    'session_end':   (7, 0),
+    'session_start': (9, 0),
+    'session_end':   (9, 30),
     'vix_max':       20,
     'dow':           [1, 2, 3],
-    'stop_atr':      1.2,
-    'htf_strict':    False,
+    'stop_atr':      2.0,
+    'htf_strict':    True,
     'max_hold_bars': 100,
+    'sharpe':        36.22,
+    'win_rate':      57.1,
+    'max_dd':        11.6,
+    'trades_yr':     136,
 }
 
 # =============================================================
@@ -87,16 +91,20 @@ NQ_SWING_CONFIG = {
 
 ES_SWING_CONFIG = {
     'min_score':     70,
-    'rr_ratio':      4.0,
+    'rr_ratio':      3.0,
     'risk_pct':      2.0,
     'session':       'es_swing',
-    'session_start': (6, 0),
-    'session_end':   (7, 0),
+    'session_start': (9, 0),
+    'session_end':   (9, 30),
     'vix_max':       20,
     'dow':           [1, 2, 3],
     'stop_atr':      2.5,
-    'htf_strict':    True,
+    'htf_strict':    False,
     'max_hold_bars': 100,
+    'sharpe':        15.47,
+    'win_rate':      49.1,
+    'max_dd':        18.5,
+    'trades_yr':     205,
 }
 
 # =============================================================
@@ -120,17 +128,21 @@ GC_SCALP_CONFIG = {
 }
 
 GC_SWING_CONFIG = {
-    'min_score':     65,
+    'min_score':     70,
     'rr_ratio':      4.0,
     'risk_pct':      2.0,
     'session':       'gc_swing',
-    'session_start': (15, 0),
-    'session_end':   (16, 0),
+    'session_start': (10, 30),
+    'session_end':   (11, 0),
     'vix_max':       20,
-    'dow':           [0, 1, 2, 3, 4],
+    'dow':           [1, 2, 3],
     'stop_atr':      2.5,
     'htf_strict':    True,
     'max_hold_bars': 100,
+    'sharpe':        34.23,
+    'win_rate':      61.5,
+    'max_dd':        8.1,
+    'trades_yr':     23,
 }
 
 # =============================================================
@@ -269,10 +281,10 @@ def get_strategy_summary():
 
 SESSION_WINDOWS = {
     'nq_scalp': {'start': (10, 0),  'end': (10, 30), 'dow': [1, 2, 3]},
-    'nq_swing': {'start': (6,  0),  'end': (7,  0),  'dow': [1, 2, 3]},
-    'es_swing': {'start': (6,  0),  'end': (7,  0),  'dow': [1, 2, 3]},
+    'nq_swing': {'start': (9,  0),  'end': (9,  30), 'dow': [1, 2, 3]},
+    'es_swing': {'start': (9,  0),  'end': (9,  30), 'dow': [1, 2, 3]},
     'gc_scalp': {'start': (10, 30), 'end': (11, 0),  'dow': [1, 2, 3]},
-    'gc_swing': {'start': (15, 0),  'end': (16, 0),  'dow': [0, 1, 2, 3, 4]},
+    'gc_swing': {'start': (10, 30), 'end': (11, 0),  'dow': [1, 2, 3]},
 }
 
 def is_in_session(session_key: str, dt_ny=None) -> bool:
