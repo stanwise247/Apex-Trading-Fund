@@ -80,12 +80,13 @@ def load_tf(symbol: str, tf: str, limit: int = 10000) -> Optional[pd.DataFrame]:
         conn = sqlite3.connect(DB_PATH)
         df = pd.read_sql_query(
             'SELECT ts,open,high,low,close,volume FROM ohlcv '
-            'WHERE symbol=? AND timeframe=? ORDER BY ts ASC LIMIT ?',
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
             conn, params=(symbol, tf, limit)
         )
         conn.close()
         if len(df) < 50:
             return None
+        df = df.sort_values('ts').reset_index(drop=True)  # re-sort ASC after DESC fetch
         df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True).dt.tz_convert(NY_TZ)
         for c in ['open','high','low','close','volume']:
             df[c] = df[c].astype(float)
