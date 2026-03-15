@@ -1060,124 +1060,21 @@ def background_scheduler():
                 logger.warning('Macro log failed: ' + str(e))
             last_macro_log = now
 
-        # ── Real-time deep edge scanner (every minute) ──────────────
+        # ── APEX Engine v2 — Setup B Scanner ──────────────────────
         try:
-            from strategy_config import is_tradeable_now, get_instrument_modes, check_vix, STRATEGY
-            from datetime import datetime as _dt, timezone as _tz
-            from zoneinfo import ZoneInfo as _ZI
-            dt_ny = _dt.now(_tz.utc).astimezone(_ZI('America/New_York'))
-
-            # Check news blackout once for all instruments
-            news_ok = True
-            try:
-                from news_calendar import should_trade
-                news_ok, news_reason = should_trade(dt_ny)
-                if not news_ok:
-                    logger.info(f'Scanner paused - {news_reason}')
-            except Exception:
-                pass
-
-            if news_ok:
-                from strategy_router import run_strategy_router, check_daily_limit, record_trade
-                for sym in ['NQ', 'ES', 'GC']:
-                    modes = get_instrument_modes(sym)
-                    for mode in modes:
-                        tradeable, reason = is_tradeable_now(sym, mode, dt_ny)
-                        if not tradeable:
-                            logger.debug(f'[{sym}/{mode}] Skip - {reason}')
-                            continue
-                        # Per-instrument session open alert
-                        alert_key = f'{dt_ny.date()}:{sym}:{mode}'
-                        if alert_key not in last_session_alerted:
-                            try:
-                                from strategy_router import get_latest_vix as _gvix
-                                vix_now = _gvix()
-                            except Exception:
-                                vix_now = None
-                            send_session_open_alert(f'{sym} {mode.title()}', 90, vix_now, dt_ny)
-                            last_session_alerted[alert_key] = True
-                        try:
-                            if not check_daily_limit(sym):
-                                logger.info(f'[{sym}] Daily trade limit reached')
-                                continue
-                            result = run_strategy_router(
-                                symbol        = sym,
-                                min_score     = STRATEGY['min_score'],
-                                alert         = STRATEGY['send_alerts'],
-                                paper_trade   = STRATEGY['auto_paper_trade'],
-                                allowed_modes = [mode],
-                                skip_session_check = True,
-                            )
-                            # Log every scan result to scan_log table
-                            try:
-                                import sqlite3 as _sq, time as _t
-                                _conn = _sq.connect(DB_PATH)
-                                _c    = _conn.cursor()
-                                if result:
-                                    _c.execute(
-                                        '''INSERT INTO scan_log
-                                            (ts, symbol, pattern_name, score, direction,
-                                             entry, stop, target1, target2, outcome, notes)
-                                            VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-                                        (int(_t.time()), sym,
-                                         f"{mode} {result.get('direction','')}",
-                                         result.get('score', 0),
-                                         result.get('direction', ''),
-                                         result.get('entry', 0),
-                                         result.get('stop', 0),
-                                         result.get('target1', 0),
-                                         result.get('target2', 0),
-                                         'signal',
-                                         str(result.get('details', '')))
-                                    )
-                                else:
-                                    _c.execute(
-                                        '''INSERT INTO scan_log
-                                            (ts, symbol, pattern_name, score, outcome, notes)
-                                            VALUES (?,?,?,?,?,?)''',
-                                        (int(_t.time()), sym, mode, 0, 'no_signal',
-                                         f'Scanned {mode} - no qualifying setup')
-                                    )
-                                _conn.commit()
-                                _conn.close()
-                            except Exception as _le:
-                                logger.debug(f'scan_log write error: {_le}')
-
-                            if result:
-                                record_trade(sym)
-                                logger.info(
-                                    f'🎯 {sym} {result["mode"].upper()} '
-                                    f'{result["direction"]} score={result["score"]}'
-                                )
-                            else:
-                                logger.info(f'[{sym}/{mode}] Scanned - no signal')
-                        except Exception as e:
-                            logger.debug(f'Scan {sym}/{mode}: {e}')
-            # Update open paper positions with latest prices
-            try:
-                from paper_trader import get_account_state, update_position_price
-                state = get_account_state()
-                for pos in state.get('open_positions', []):
-                    sym   = pos['symbol']
-                    price = get_latest_price(sym)
-                    if price:
-                        trigger = update_position_price(pos['id'], price)
-                        if trigger in ('partial', 'win', 'stop', 'target2'):
-                            logger.info(f'Position {pos["id"]} triggered: {trigger} @ {price}')
-                            # Send Telegram update
-                            try:
-                                from telegram_alerts import send_trade_update
-                                send_trade_update(
-                                    'partial' if trigger == 'partial' else 'close',
-                                    {'position': pos, 'exit_price': price,
-                                     'pnl_pts': pos.get('pnl_pts', 0),
-                                     'pnl_usd': pos.get('pnl_usd', 0),
-                                     'reason': trigger}
-                                )
-                            except Exception:
-                                pass
-            except Exception as e:
-                logger.debug(f'Position update error: {e}')
+            from live_scanner import run_scan, send_telegram, format_alert, SignalTracker
+            if not hasattr(background_scheduler, '_apex_tracker'):
+                background_scheduler._apex_tracker = SignalTracker()
+            tracker = background_scheduler._apex_tracker
+            signals = run_scan()
+            for result in signals:
+                if tracker.is_new(result):
+                    send_telegram(format_alert(result))
+                    logger.info(f'APEX signal: {result.symbol} {result.direction} {result.setup}')
+            if not signals:
+                logger.debug('APEX scan: no signals')
+        except Exception as e:
+            logger.debug(f'APEX scanner error: {e}')
 
         except Exception as e:
             logger.debug(f'Scanner loop error: {e}')
