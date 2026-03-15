@@ -1,0 +1,5 @@
+apex_market.db
+*.db
+config.json
+__pycache__/
+*.pyc
