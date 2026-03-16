@@ -1,0 +1,306 @@
+"""
+APEX Live Data Feed — data_feed.py
+=====================================
+Uses Databento Python client for reliable data fetching.
+Two modes:
+  1. refresh_all() — fetch recent bars every 5 minutes (historical API)
+  2. start_live_feed() — stream real-time bars as they close (live API)
+
+Instruments: NQ, ES, GC
+"""
+
+import sqlite3
+import logging
+import json
+import os
+import pandas as pd
+import numpy as np
+from datetime import datetime, timezone, timedelta
+import databento as db
+
+logger  = logging.getLogger('APEX.DataFeed')
+DB_PATH = 'apex_market.db'
+
+INSTRUMENTS = {
+    'NQ': 'NQ.c.0',
+    'ES': 'ES.c.0',
+    'GC': 'GC.c.0',
+}
+
+
+def get_api_key() -> str:
+    key = os.environ.get('DATABENTO_API_KEY', '')
+    if not key:
+        try:
+            with open('config.json') as f:
+                cfg = json.load(f)
+            key = cfg.get('DATABENTO_API_KEY', cfg.get('databento_api_key', ''))
+        except Exception:
+            pass
+    return key
+
+
+def store_bars(symbol: str, timeframe: str, bars: list) -> int:
+    """Store bars in SQLite. Returns number of new bars inserted."""
+    if not bars:
+        return 0
+    conn = sqlite3.connect(DB_PATH)
+    c    = conn.cursor()
+    inserted = 0
+    for bar in bars:
+        ts, o, h, l, close, vol = bar
+        try:
+            c.execute(
+                'INSERT OR REPLACE INTO ohlcv '
+                '(symbol, timeframe, ts, open, high, low, close, volume) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (symbol, timeframe, int(ts),
+                 round(float(o), 2), round(float(h), 2),
+                 round(float(l), 2), round(float(close), 2),
+                 float(vol))
+            )
+            if c.rowcount > 0:
+                inserted += 1
+        except Exception as e:
+            logger.debug(f'Insert error {symbol} {timeframe}: {e}')
+    conn.commit()
+    conn.close()
+    return inserted
+
+
+def fetch_recent_bars(symbol: str, timeframe: str,
+                      lookback_hours: int = 48) -> list:
+    """
+    Fetch recent bars using Databento Python client.
+    Automatically handles schema and price conversion.
+    """
+    key = get_api_key()
+    if not key:
+        logger.error('No Databento API key')
+        return []
+
+    db_symbol = INSTRUMENTS.get(symbol)
+    if not db_symbol:
+        return []
+
+    # Map timeframe to schema and aggregation
+    schema_map = {
+        '5min':  ('ohlcv-1m', 5),
+        '15min': ('ohlcv-1m', 15),
+        '1hour': ('ohlcv-1h', 1),
+        '4hour': ('ohlcv-1h', 4),
+        '1day':  ('ohlcv-1d', 1),
+    }
+    schema, agg = schema_map.get(timeframe, ('ohlcv-1m', 5))
+
+    # Get schema-specific available end from Databento
+    try:
+        client_meta = db.Historical(key)
+        r = client_meta.metadata.get_dataset_range(dataset='GLBX.MDP3')
+        schema_end_str = r.get('schema', {}).get(schema, {}).get('end', r.get('end', ''))
+        avail_end = pd.Timestamp(schema_end_str.rstrip('Z')).tz_localize('UTC')
+        end = (avail_end - timedelta(minutes=2)).to_pydatetime()
+    except Exception:
+        end = datetime.now(timezone.utc) - timedelta(minutes=30)
+    start = end - timedelta(hours=lookback_hours)
+
+    try:
+        client = db.Historical(key)
+        data   = client.timeseries.get_range(
+            dataset   = 'GLBX.MDP3',
+            symbols   = [db_symbol],
+            schema    = schema,
+            start     = start,
+            end       = end,
+            stype_in  = 'continuous',
+        )
+
+        df = data.to_df()
+        if df.empty:
+            return []
+
+        # Databento Python client already converts prices — no division needed
+        # Index is ts_event as DatetimeIndex
+        df.index = pd.to_datetime(df.index, utc=True)
+
+        # Aggregate if needed (e.g. 1min -> 5min)
+        if agg > 1:
+            df = df.resample(f"{agg}min").agg({
+                "open":   "first",
+                "high":   "max",
+                "low":    "min",
+                "close":  "last",
+                "volume": "sum",
+            }).dropna()
+
+        # Convert to list of tuples
+        result = []
+        for ts, row in df.iterrows():
+            ts_unix = int(ts.timestamp())
+            result.append((
+                ts_unix,
+                round(float(row["open"]),  2),
+                round(float(row["high"]),  2),
+                round(float(row["low"]),   2),
+                round(float(row["close"]), 2),
+                float(row.get("volume", 0)),
+            ))
+
+        return result
+
+    except Exception as e:
+        logger.error(f'Fetch error {symbol} {timeframe}: {e}')
+        return []
+
+
+def build_htf_from_5min(symbol: str) -> dict:
+    """Build 1hour and 4hour bars by aggregating 5min bars already in DB."""
+    conn = sqlite3.connect(DB_PATH)
+    df   = pd.read_sql_query(
+        'SELECT ts, open, high, low, close, volume FROM ohlcv '
+        'WHERE symbol=? AND timeframe=? ORDER BY ts ASC',
+        conn, params=(symbol, '5min')
+    )
+    conn.close()
+
+    if df.empty:
+        return {}
+
+    df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+    df.set_index('dt', inplace=True)
+
+    results = {}
+    for tf, rule in [('1hour', '1h'), ('4hour', '4h')]:
+        try:
+            agg = df.resample(rule).agg({
+                'open':   'first',
+                'high':   'max',
+                'low':    'min',
+                'close':  'last',
+                'volume': 'sum',
+            }).dropna()
+            agg['ts'] = agg.index.astype('int64') // 1_000_000_000
+
+            bars = [
+                (int(row['ts']), round(float(row['open']),2),
+                 round(float(row['high']),2), round(float(row['low']),2),
+                 round(float(row['close']),2), float(row['volume']))
+                for _, row in agg.iterrows()
+            ]
+            inserted = store_bars(symbol, tf, bars)
+            results[tf] = inserted
+            if inserted > 0:
+                logger.info(f'DataFeed: {symbol} {tf} built +{inserted} from 5min')
+        except Exception as e:
+            logger.error(f'HTF build error {symbol} {tf}: {e}')
+            results[tf] = 0
+
+    return results
+
+
+def refresh_symbol(symbol: str, timeframes: list = None,
+                   lookback_hours: int = 48) -> dict:
+    """Refresh one symbol across timeframes."""
+    if timeframes is None:
+        timeframes = ['5min', '15min']
+    results = {}
+    for tf in timeframes:
+        bars     = fetch_recent_bars(symbol, tf, lookback_hours)
+        inserted = store_bars(symbol, tf, bars)
+        results[tf] = inserted
+        if inserted > 0:
+            logger.info(f'DataFeed: {symbol} {tf} +{inserted} new bars')
+        else:
+            logger.debug(f'DataFeed: {symbol} {tf} up to date')
+    return results
+
+
+def refresh_all(include_htf: bool = False,
+                include_daily: bool = False) -> dict:
+    """
+    Refresh all instruments.
+    Call every 5 minutes from scheduler.
+    include_htf=True every 30 min — rebuilds 1hour/4hour from 5min.
+    """
+    tfs = ['5min', '15min']
+    if include_daily:
+        tfs.append('1day')
+
+    results = {}
+    for symbol in INSTRUMENTS:
+        results[symbol] = refresh_symbol(symbol, tfs)
+        if include_htf:
+            htf = build_htf_from_5min(symbol)
+            results[symbol].update(htf)
+
+    return results
+
+
+def get_latest_bar(symbol: str, timeframe: str = '5min') -> dict:
+    """Return the most recent bar for a symbol."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        df   = pd.read_sql_query(
+            'SELECT ts, open, high, low, close, volume FROM ohlcv '
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 1',
+            conn, params=(symbol, timeframe)
+        )
+        conn.close()
+        if df.empty:
+            return {}
+        row = df.iloc[0]
+        return {
+            'symbol':    symbol,
+            'timeframe': timeframe,
+            'time':      str(pd.to_datetime(row['ts'], unit='s', utc=True)),
+            'open':      round(float(row['open']),  2),
+            'high':      round(float(row['high']),  2),
+            'low':       round(float(row['low']),   2),
+            'close':     round(float(row['close']), 2),
+            'volume':    int(row['volume']),
+        }
+    except Exception as e:
+        logger.error(f'get_latest_bar error: {e}')
+        return {}
+
+
+if __name__ == '__main__':
+    import os
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s [%(levelname)s] %(message)s')
+    os.environ['DATABENTO_API_KEY'] = 'db-ac68nRrSbbULVrwXF7rbDETdqB439'
+
+    print('Testing APEX data feed...\n')
+
+    for sym in ('NQ', 'ES', 'GC'):
+        print(f'{sym} 5min (last 2 hours):')
+        bars = fetch_recent_bars(sym, '5min', lookback_hours=2)
+        if bars:
+            last = pd.to_datetime(bars[-1][0], unit='s', utc=True)
+            print(f'  Bars:       {len(bars)}')
+            print(f'  Last bar:   {last}')
+            print(f'  Last close: {bars[-1][4]:.2f}')
+        else:
+            print(f'  No bars returned')
+        print()
+
+    print('Full refresh (5min + 15min + HTF)...')
+    results = refresh_all(include_htf=True)
+    for sym, tfs in results.items():
+        for tf, count in tfs.items():
+            if count > 0:
+                print(f'  {sym} {tf}: +{count} new bars')
+
+    print('\nLatest bars in DB:')
+    conn = sqlite3.connect(DB_PATH)
+    for sym in ('NQ', 'ES', 'GC'):
+        for tf in ('5min', '15min', '1hour', '4hour'):
+            df = pd.read_sql_query(
+                'SELECT MAX(ts) FROM ohlcv WHERE symbol=? AND timeframe=?',
+                conn, params=(sym, tf)
+            )
+            ts = df.iloc[0,0]
+            if ts:
+                dt = pd.to_datetime(ts, unit='s', utc=True)
+                print(f'  {sym} {tf}: {dt}')
+    conn.close()

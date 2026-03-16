@@ -1041,6 +1041,24 @@ def background_scheduler():
                 except Exception as e:
                     logger.warning('Daily update failed ' + sym + ': ' + str(e))
             last_daily = now
+
+        # ── APEX Data Feed — refresh every 5 minutes ─────────────
+        if not hasattr(background_scheduler, '_last_feed'):
+            background_scheduler._last_feed = 0
+            background_scheduler._last_htf  = 0
+        if now - background_scheduler._last_feed > 300:
+            try:
+                from data_feed import refresh_all
+                include_htf = (now - background_scheduler._last_htf) > 1800
+                results     = refresh_all(include_htf=include_htf)
+                if include_htf:
+                    background_scheduler._last_htf = now
+                total = sum(v for sym in results.values() for v in sym.values())
+                if total > 0:
+                    logger.info(f'DataFeed: +{total} new bars')
+            except Exception as e:
+                logger.warning(f'DataFeed error: {e}')
+            background_scheduler._last_feed = now
         if now - last_macro_log > 14400:
             try:
                 m    = fetch_macro_live()
