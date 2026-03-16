@@ -229,6 +229,108 @@ def gate3_poi(symbol: str, direction: str) -> tuple[GateResult, str, object]:
         'none', None
     )
 
+# ─────────────────────────────────────────────────────────────
+#  GATE 3 — POI SETUP A (Sweep + OB)
+# ─────────────────────────────────────────────────────────────
+
+def gate3_poi_setup_a(symbol: str, direction: str) -> tuple:
+    """
+    Setup A: Liquidity sweep detected within last 24 bars
+    + active OB within 1 ATR of current price.
+    Returns (GateResult, setup_type, poi_object)
+    """
+    df = load_bars(symbol, '1hour', limit=500)
+    sh, sl    = find_swings(df, lookback=5)
+    events, _ = detect_structure(df, sh, sl)
+    obs       = find_order_blocks(df, sh, sl, events)
+    sweeps    = find_sweeps(df, sh, sl)
+    atr_series= calc_atr(df)
+
+    price   = float(df['close'].iloc[-1])
+    atr_val = float(atr_series.iloc[-1])
+
+    # Recent sweeps — last 24 bars
+    recent_sweeps = [s for s in sweeps if s.index >= len(df) - 24]
+
+    for sweep in reversed(recent_sweeps):
+        if direction == 'long'  and sweep.kind != 'bull': continue
+        if direction == 'short' and sweep.kind != 'bear': continue
+
+        # Find active OB in same direction within 1 ATR
+        target_kind = 'bull' if direction == 'long' else 'bear'
+        nearby_obs = [o for o in obs
+                      if not o.broken
+                      and o.kind == target_kind
+                      and abs((o.high + o.low) / 2 - price) < atr_val]
+
+        if nearby_obs:
+            ob = min(nearby_obs, key=lambda o: abs((o.high + o.low) / 2 - price))
+            return (
+                GateResult(True, 3, 'POI',
+                           f'Setup A: sweep@{sweep.swept_level:.2f} '
+                           f'atr={sweep.atr_size:.1f}x + OB [{ob.low:.2f}-{ob.high:.2f}]'),
+                'A_sweep_ob', ob
+            )
+
+    return (
+        GateResult(False, 3, 'POI',
+                   f'No sweep+OB confluence | price={price:.2f} atr={atr_val:.2f}'),
+        'none', None
+    )
+
+
+
+# ─────────────────────────────────────────────────────────────
+#  GATE 3 — POI SETUP A (Sweep + OB)
+# ─────────────────────────────────────────────────────────────
+
+def gate3_poi_setup_a(symbol: str, direction: str) -> tuple:
+    """
+    Setup A: Liquidity sweep detected within last 24 bars
+    + active OB within 1 ATR of current price.
+    Returns (GateResult, setup_type, poi_object)
+    """
+    df = load_bars(symbol, '1hour', limit=500)
+    sh, sl    = find_swings(df, lookback=5)
+    events, _ = detect_structure(df, sh, sl)
+    obs       = find_order_blocks(df, sh, sl, events)
+    sweeps    = find_sweeps(df, sh, sl)
+    atr_series= calc_atr(df)
+
+    price   = float(df['close'].iloc[-1])
+    atr_val = float(atr_series.iloc[-1])
+
+    # Recent sweeps — last 24 bars
+    recent_sweeps = [s for s in sweeps if s.index >= len(df) - 24]
+
+    for sweep in reversed(recent_sweeps):
+        if direction == 'long'  and sweep.kind != 'bull': continue
+        if direction == 'short' and sweep.kind != 'bear': continue
+
+        # Find active OB in same direction within 1 ATR
+        target_kind = 'bull' if direction == 'long' else 'bear'
+        nearby_obs = [o for o in obs
+                      if not o.broken
+                      and o.kind == target_kind
+                      and abs((o.high + o.low) / 2 - price) < atr_val]
+
+        if nearby_obs:
+            ob = min(nearby_obs, key=lambda o: abs((o.high + o.low) / 2 - price))
+            return (
+                GateResult(True, 3, 'POI',
+                           f'Setup A: sweep@{sweep.swept_level:.2f} '
+                           f'atr={sweep.atr_size:.1f}x + OB [{ob.low:.2f}-{ob.high:.2f}]'),
+                'A_sweep_ob', ob
+            )
+
+    return (
+        GateResult(False, 3, 'POI',
+                   f'No sweep+OB confluence | price={price:.2f} atr={atr_val:.2f}'),
+        'none', None
+    )
+
+
+
 
 # ─────────────────────────────────────────────────────────────
 #  GATE 4 — SESSION WINDOW (UTC)
@@ -451,15 +553,147 @@ def check_setup(symbol: str, direction: str, mode: str = 'swing',
     )
 
 
+
+def check_setup_a(symbol: str, direction: str, mode: str = 'swing',
+                  dt: datetime = None) -> SetupResult:
+    """Run all 6 gates for Setup A — Sweep + OB."""
+    gates      = []
+    poi        = None
+    setup_type = 'none'
+
+    g1 = gate1_htf_bias(symbol, direction)
+    gates.append(g1)
+    if not g1.passed:
+        return SetupResult(symbol, direction, 'none', False, gates,
+                           None, None, None, None, '', '', None)
+
+    g2 = gate2_structure(symbol, direction)
+    gates.append(g2)
+    if not g2.passed:
+        return SetupResult(symbol, direction, 'none', False, gates,
+                           None, None, None, None, '', '', None)
+
+    g3, setup_type, poi = gate3_poi_setup_a(symbol, direction)
+    gates.append(g3)
+    if not g3.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates,
+                           None, None, None, None, '', '', None)
+
+    g4, quality = gate4_session(symbol, dt)
+    gates.append(g4)
+    if not g4.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates,
+                           None, None, None, None, '', quality, None)
+
+    g5 = gate5_entry_trigger(symbol, direction, poi)
+    gates.append(g5)
+    if not g5.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates,
+                           None, None, None, None, g4.detail, quality, None)
+
+    g6 = gate6_confirmation(symbol, direction)
+    gates.append(g6)
+    if not g6.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates,
+                           None, None, None, None, g4.detail, quality, None)
+
+    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode)
+    ts = load_bars(symbol, '5min', limit=2).index[-1]
+
+    return SetupResult(
+        symbol    = symbol,
+        direction = direction,
+        setup     = setup_type,
+        valid     = True,
+        gates     = gates,
+        entry     = entry,
+        stop      = stop,
+        target    = target,
+        rr        = rr,
+        session   = g4.detail,
+        quality   = quality,
+        timestamp = ts,
+    )
+
+
+def gate3_poi_setup_c(symbol, direction):
+    df = load_bars(symbol, '1hour', limit=500)
+    sh, sl    = find_swings(df, lookback=5)
+    events, _ = detect_structure(df, sh, sl)
+    obs       = find_order_blocks(df, sh, sl, events)
+    atr_series= calc_atr(df)
+    price   = float(df['close'].iloc[-1])
+    atr_val = float(atr_series.iloc[-1])
+    bos_events = [e for e in events if 'BOS' in e.event_type and e.index >= len(df) - 48]
+    for evt in reversed(bos_events):
+        if direction == 'long'  and 'BULL' not in evt.event_type: continue
+        if direction == 'short' and 'BEAR' not in evt.event_type: continue
+        target_kind = 'bull' if direction == 'long' else 'bear'
+        nearby_obs = [o for o in obs if not o.broken and o.kind == target_kind
+                      and abs((o.high + o.low) / 2 - price) < atr_val * 1.5]
+        if nearby_obs:
+            ob = min(nearby_obs, key=lambda o: abs((o.high + o.low) / 2 - price))
+            return (GateResult(True, 3, 'POI',
+                    f'Setup C: BOS@{evt.level:.2f} + OB [{ob.low:.2f}-{ob.high:.2f}]'),
+                    'C_bos_ob', ob)
+    return (GateResult(False, 3, 'POI',
+            f'No BOS+OB pullback | price={price:.2f} atr={atr_val:.2f}'),
+            'none', None)
+
+
+def check_setup_c(symbol, direction, mode='swing', dt=None):
+    gates = []
+    g1 = gate1_htf_bias(symbol, direction)
+    gates.append(g1)
+    if not g1.passed:
+        return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
+    g2 = gate2_structure(symbol, direction)
+    gates.append(g2)
+    if not g2.passed:
+        return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
+    if 'CHOCH' in g2.detail:
+        gates.append(GateResult(False, 2, 'Structure', 'Setup C requires BOS not CHoCH'))
+        return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
+    g3, setup_type, poi = gate3_poi_setup_c(symbol, direction)
+    gates.append(g3)
+    if not g3.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates, None, None, None, None, '', '', None)
+    g4, quality = gate4_session(symbol, dt)
+    gates.append(g4)
+    if not g4.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates, None, None, None, None, '', quality, None)
+    g5 = gate5_entry_trigger(symbol, direction, poi)
+    gates.append(g5)
+    if not g5.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates, None, None, None, None, g4.detail, quality, None)
+    g6 = gate6_confirmation(symbol, direction)
+    gates.append(g6)
+    if not g6.passed:
+        return SetupResult(symbol, direction, setup_type, False, gates, None, None, None, None, g4.detail, quality, None)
+    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode)
+    ts = load_bars(symbol, '5min', limit=2).index[-1]
+    return SetupResult(symbol=symbol, direction=direction, setup=setup_type, valid=True,
+                       gates=gates, entry=entry, stop=stop, target=target, rr=rr,
+                       session=g4.detail, quality=quality, timestamp=ts)
+
 def scan_all(dt: datetime = None) -> list[SetupResult]:
-    """Scan all instruments and directions. Returns valid setups only."""
-    results = []
+    """Scan all instruments and directions for all setups."""
+    results   = []
+    triggered = set()
+
     for symbol in ('NQ', 'ES', 'GC'):
         for direction in ('long', 'short'):
-            for mode in ('scalp', 'swing'):
+            key = (symbol, direction)
+            for mode in ('swing',):
                 r = check_setup(symbol, direction, mode, dt)
-                if r.valid:
-                    results.append(r)
+                if r.valid and key not in triggered:
+                    results.append(r); triggered.add(key); continue
+                r = check_setup_a(symbol, direction, mode, dt)
+                if r.valid and key not in triggered:
+                    results.append(r); triggered.add(key); continue
+                r = check_setup_c(symbol, direction, mode, dt)
+                if r.valid and key not in triggered:
+                    results.append(r); triggered.add(key)
     return results
 
 

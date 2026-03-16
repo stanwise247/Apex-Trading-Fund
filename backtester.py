@@ -313,6 +313,63 @@ def check_poi_setup_b(df_1h_slice, direction: str, price: float, atr_val: float)
     return False, None
 
 
+
+def check_poi_setup_a(df_1h_slice, direction: str, price: float, atr_val: float):
+    """
+    Gate 3 Setup A: Sweep + OB within 1 ATR of current price.
+    Returns (bool, poi_dict or None)
+    """
+    if len(df_1h_slice) < 20:
+        return False, None
+
+    sh, sl    = find_swings(df_1h_slice, lookback=5)
+    events, _ = detect_structure(df_1h_slice['close'].values, sh, sl)
+    obs       = find_order_blocks(df_1h_slice, events)
+    sweeps    = find_sweeps(df_1h_slice, sh, sl)
+
+    recent_sweeps = [s for s in sweeps if s['idx'] >= len(df_1h_slice) - 24]
+
+    for sweep in reversed(recent_sweeps):
+        if direction == 'long'  and sweep['kind'] != 'bull': continue
+        if direction == 'short' and sweep['kind'] != 'bear': continue
+
+        target_kind = 'bull' if direction == 'long' else 'bear'
+        nearby = [o for o in obs
+                  if not o['broken']
+                  and o['kind'] == target_kind
+                  and abs((o['high'] + o['low']) / 2 - price) < atr_val]
+
+        if nearby:
+            poi = min(nearby, key=lambda o: abs((o['high'] + o['low']) / 2 - price))
+            return True, poi
+
+    return False, None
+
+
+
+def check_poi_setup_c(df_1h_slice, direction, price, atr_val):
+    """Gate 3 Setup C: BOS + OB pullback within 1.5 ATR."""
+    if len(df_1h_slice) < 20:
+        return False, None
+    sh, sl    = find_swings(df_1h_slice, lookback=5)
+    events, _ = detect_structure(df_1h_slice['close'].values, sh, sl)
+    obs       = find_order_blocks(df_1h_slice, events)
+    bos_events = [(i,t,l) for i,t,l in events
+                  if 'BOS' in t and i >= len(df_1h_slice) - 48]
+    for evt in reversed(bos_events):
+        if direction == 'long'  and 'BULL' not in evt[1]: continue
+        if direction == 'short' and 'BEAR' not in evt[1]: continue
+        target_kind = 'bull' if direction == 'long' else 'bear'
+        nearby = [o for o in obs
+                  if not o['broken']
+                  and o['kind'] == target_kind
+                  and abs((o['high'] + o['low']) / 2 - price) < atr_val * 1.5]
+        if nearby:
+            poi = min(nearby, key=lambda o: abs((o['high'] + o['low']) / 2 - price))
+            return True, poi
+    return False, None
+
+
 def check_session(symbol: str, dt) -> tuple[bool, str]:
     """Gate 4: is current time in a valid session window?"""
     hour = dt.hour
@@ -418,6 +475,7 @@ class Trade:
 # ─────────────────────────────────────────────────────────────
 
 def run_backtest(symbol: str, mode: str = 'swing',
+                 setup: str = 'B',
                  start_date: str = '2024-06-01',
                  end_date:   str = '2026-03-13') -> list[Trade]:
     """
@@ -561,8 +619,17 @@ def run_backtest(symbol: str, mode: str = 'swing',
             if not struct_ok:
                 continue
 
-            # Gate 3 — Setup B: CHoCH + Breaker
-            poi_ok, poi = check_poi_setup_b(df_1h_slice, direction, price, atr_1h)
+            # Gate 3 — Setup A, B or C
+            if setup == 'A':
+                poi_ok, poi = check_poi_setup_a(df_1h_slice, direction, price, atr_1h)
+            elif setup == 'C':
+                # Setup C requires BOS not CHoCH
+                last_event = events_1h[-1][1] if events_1h else ''
+                if 'CHOCH' in last_event:
+                    continue
+                poi_ok, poi = check_poi_setup_c(df_1h_slice, direction, price, atr_1h)
+            else:
+                poi_ok, poi = check_poi_setup_b(df_1h_slice, direction, price, atr_1h)
             if not poi_ok or poi is None:
                 continue
 
@@ -604,7 +671,7 @@ def run_backtest(symbol: str, mode: str = 'swing',
             trade = Trade(
                 symbol      = symbol,
                 direction   = direction,
-                setup       = 'B_choch_breaker',
+                setup       = 'A_sweep_ob' if setup == 'A' else ('C_bos_ob' if setup == 'C' else 'B_choch_breaker'),
                 mode        = mode,
                 entry_time  = entry_time,
                 entry_price = entry_price,
@@ -729,6 +796,8 @@ if __name__ == '__main__':
                         help='NQ | ES | GC | all')
     parser.add_argument('--mode',   default='swing',
                         help='swing | scalp')
+    parser.add_argument('--setup',  default='B',
+                        help='A | B')
     parser.add_argument('--start',  default='2024-06-01')
     parser.add_argument('--end',    default='2026-03-13')
     args = parser.parse_args()
@@ -742,13 +811,13 @@ if __name__ == '__main__':
         print(f"  {args.start} to {args.end}")
         print(f"{'='*60}")
 
-        trades  = run_backtest(sym, args.mode, args.start, args.end)
+        trades  = run_backtest(sym, args.mode, args.setup, args.start, args.end)
         results = analyse_results(trades, sym, args.mode)
         all_results[sym] = results
 
         # Save trade log
         if results.get('trade_log'):
-            fname = f'backtest_B_{sym}_{args.mode}.json'
+            fname = f'backtest_{args.setup}_{sym}_{args.mode}.json'
             with open(fname, 'w') as f:
                 json.dump(results, f, indent=2, default=str)
             print(f"\n  Saved to {fname}")
