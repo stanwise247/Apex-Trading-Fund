@@ -1091,6 +1091,12 @@ def background_scheduler():
         except Exception as e:
             logger.debug(f'Trade monitor error: {e}')
 
+        # ── APEX Session Alerts ──────────────────────────────────
+        try:
+            check_session_alerts()
+        except Exception as e:
+            logger.debug(f'Session alert error: {e}')
+
         # ── APEX Engine v2 — Setup B Scanner ──────────────────────
         try:
             from live_scanner import run_scan, send_telegram, format_alert, SignalTracker
@@ -1691,6 +1697,69 @@ def apex_telegram_test():
         return jsonify({'ok': result})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
+
+
+# ─────────────────────────────────────────────────────────────
+#  APEX SESSION ALERTS
+# ─────────────────────────────────────────────────────────────
+
+APEX_SESSIONS = [
+    {'name': 'London',     'syms': 'NQ/ES', 'start': 7,  'end': 11},
+    {'name': 'NY Primary', 'syms': 'NQ/ES', 'start': 13, 'end': 19},
+    {'name': 'GC Primary', 'syms': 'GC',    'start': 12, 'end': 17},
+]
+_session_state = {}
+
+def check_session_alerts():
+    try:
+        from live_scanner import send_telegram
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        NY  = ZoneInfo('America/New_York')
+        now = datetime.now(timezone.utc)
+        if now.weekday() >= 5:
+            return
+        hour = now.hour
+        date_str = str(now.date())
+        for sess in APEX_SESSIONS:
+            key_open  = sess['name'] + '_open_'  + date_str
+            key_close = sess['name'] + '_close_' + date_str
+            if hour == sess['start'] and not _session_state.get(key_open):
+                _session_state[key_open] = True
+                now_ny = now.astimezone(NY).strftime('%H:%M')
+                msg = (
+                    f'🔔 <b>{sess["name"]} Session Open</b>
+'
+                    f'━━━━━━━━━━
+'
+                    f'<b>Instruments:</b> {sess["syms"]}
+'
+                    f'<b>Window:</b> {sess["start"]:02d}:00–{sess["end"]:02d}:00 UTC
+'
+                    f'<b>Scanner:</b> Active
+'
+                    f'<i>{now_ny} ET</i>'
+                )
+                send_telegram(msg)
+                logger.info(f'Session open alert: {sess["name"]}')
+            if hour == sess['end'] and not _session_state.get(key_close):
+                _session_state[key_close] = True
+                now_ny = now.astimezone(NY).strftime('%H:%M')
+                msg = (
+                    f'🔕 <b>{sess["name"]} Session Closed</b>
+'
+                    f'━━━━━━━━━━
+'
+                    f'<b>Instruments:</b> {sess["syms"]}
+'
+                    f'<b>Scanner:</b> Paused until next session
+'
+                    f'<i>{now_ny} ET</i>'
+                )
+                send_telegram(msg)
+                logger.info(f'Session close alert: {sess["name"]}')
+    except Exception as e:
+        logger.debug(f'Session alert error: {e}')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
