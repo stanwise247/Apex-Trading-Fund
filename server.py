@@ -313,6 +313,13 @@ def init_db():
     conn.commit()
     conn.close()
     logger.info('Database initialised: ' + DB_PATH)
+    # Ensure unique constraint exists on ohlcv table
+    try:
+        c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique ON ohlcv (symbol, timeframe, ts)')
+        conn.commit()
+        logger.info('ohlcv unique index ensured')
+    except Exception as e:
+        logger.debug(f'Index check: {e}')
 
 
 def store_ohlcv(symbol, timeframe, bars):
