@@ -1590,5 +1590,107 @@ def _startup():
 
 _startup()
 
+
+# ─────────────────────────────────────────────────────────────
+#  APEX DASHBOARD API ENDPOINTS
+# ─────────────────────────────────────────────────────────────
+
+@app.route('/api/apex/scan', methods=['GET'])
+def apex_scan():
+    """Run full gate check and return results."""
+    from setup_engine import check_setup, check_setup_a, check_setup_c
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    NY = ZoneInfo('America/New_York')
+    now = datetime.now(timezone.utc)
+    results = []
+    for sym in ('NQ', 'ES', 'GC'):
+        for direction in ('long', 'short'):
+            for check_fn, setup_name in [
+                (lambda s,d: check_setup(s,d,'swing',now), 'B'),
+                (lambda s,d: check_setup_a(s,d,'swing',now), 'A'),
+                (lambda s,d: check_setup_c(s,d,'swing',now), 'C'),
+            ]:
+                try:
+                    r = check_fn(sym, direction)
+                    gates = [{'gate': g.gate, 'name': g.name, 'passed': g.passed, 'detail': g.detail} for g in r.gates]
+                    results.append({
+                        'symbol':    sym,
+                        'direction': direction,
+                        'setup':     setup_name,
+                        'valid':     r.valid,
+                        'gates':     gates,
+                        'entry':     r.entry,
+                        'stop':      r.stop,
+                        'target':    r.target,
+                        'rr':        r.rr,
+                        'quality':   r.quality,
+                        'failed_at': next((g['name'] for g in gates if not g['passed']), None),
+                    })
+                except Exception as e:
+                    pass
+    return jsonify({'ok': True, 'results': results, 'time': now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')})
+
+
+@app.route('/api/apex/trades', methods=['GET'])
+def apex_trades():
+    """Return open trades and stats."""
+    try:
+        from trade_tracker import get_open_trades, get_stats
+        return jsonify({
+            'ok':         True,
+            'open_trades': get_open_trades(),
+            'stats':      get_stats(),
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/market', methods=['GET'])
+def apex_market():
+    """Return current market structure per instrument."""
+    from market_structure import load_bars, find_swings, detect_structure, compute_bias
+    from zoneinfo import ZoneInfo
+    NY = ZoneInfo('America/New_York')
+    results = {}
+    for sym in ('NQ', 'ES', 'GC'):
+        try:
+            df = load_bars(sym, '1hour', limit=200)
+            sh, sl = find_swings(df, lookback=5)
+            events, _ = detect_structure(df, sh, sl)
+            bias, strength = compute_bias(events)
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+            chg  = round(float(last['close']) - float(prev['close']), 2)
+            pct  = round(chg / float(prev['close']) * 100, 2)
+            last_bar_time = df.index[-1].astimezone(NY).strftime('%H:%M ET')
+            results[sym] = {
+                'bias':      bias,
+                'strength':  strength,
+                'close':     round(float(last['close']), 2),
+                'change':    chg,
+                'pct':       pct,
+                'last_bar':  last_bar_time,
+                'last_event': str(events[-1]) if events else None,
+            }
+        except Exception as e:
+            results[sym] = {'bias': 'unknown', 'error': str(e)}
+    return jsonify({'ok': True, 'market': results})
+
+
+@app.route('/api/apex/telegram_test', methods=['POST'])
+def apex_telegram_test():
+    """Send a test Telegram message."""
+    try:
+        from live_scanner import send_telegram
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        NY = ZoneInfo('America/New_York')
+        now = datetime.now(timezone.utc).astimezone(NY).strftime('%Y-%m-%d %H:%M')
+        result = send_telegram(f'🧪 <b>APEX Test</b>\nScanner is live and connected\n<i>{now} ET</i>')
+        return jsonify({'ok': result})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)

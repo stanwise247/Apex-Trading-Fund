@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APEX Markets — Stanley Wise</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:#0a0a0a}
+.header{background:white;border-bottom:1px solid #efefef;padding:14px 32px;position:sticky;top:0;z-index:100}
+.header-inner{max-width:1280px;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
+.logo-apex{font-weight:700;font-size:18px;letter-spacing:-0.5px}
+.logo-markets{font-weight:300;font-size:18px;color:#aaa}
+.logo-sub{font-size:11px;color:#bbb;margin-top:1px}
+.live-badge{display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:99px;padding:3px 10px;margin-left:12px}
+.live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
+.live-text{font-size:11px;font-weight:600;color:#16a34a}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.header-right{display:flex;align-items:center;gap:16px}
+.prices{display:flex;gap:20px;align-items:center}
+.price-item{text-align:right}
+.price-sym{font-family:'DM Mono',monospace;font-size:12px;font-weight:500}
+.price-chg{font-size:11px}
+.neg{color:#ef4444}.pos{color:#22c55e}
+.btn{padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:none;font-family:'DM Sans',sans-serif;transition:all .15s}
+.btn-primary{background:#0a0a0a;color:white}
+.btn-primary:hover{background:#333}
+.btn-outline{background:white;color:#0a0a0a;border:1px solid #e5e5e5}
+.btn-outline:hover{background:#f5f5f5}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.main{max-width:1280px;margin:0 auto;padding:24px 32px}
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
+.stat-card{background:white;border:1px solid #efefef;border-radius:12px;padding:14px 16px}
+.stat-label{font-size:11px;color:#bbb;margin-bottom:5px}
+.stat-value{font-size:15px;font-weight:600}
+.stat-sub{font-size:11px;color:#ccc;margin-top:3px}
+.grid-layout{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px}
+.col-main{grid-column:span 2;display:flex;flex-direction:column;gap:20px}
+.col-side{display:flex;flex-direction:column;gap:20px}
+.card{background:white;border:1px solid #efefef;border-radius:14px;overflow:hidden}
+.card-body{padding:16px}
+.section-label{font-size:11px;font-weight:600;color:#bbb;letter-spacing:.08em;margin-bottom:14px;text-transform:uppercase}
+.tabs{display:flex;border-bottom:1px solid #f5f5f5}
+.tab{padding:12px 20px;font-size:13px;font-weight:400;color:#bbb;border-bottom:2px solid transparent;cursor:pointer;background:none;border-top:none;border-left:none;border-right:none;font-family:'DM Sans',sans-serif;transition:all .15s}
+.tab.active{color:#0a0a0a;font-weight:600;border-bottom-color:#0a0a0a}
+.tab-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:99px;font-size:10px;font-weight:700;margin-left:6px;padding:0 4px}
+.tab-count.green{background:#22c55e;color:white}
+.tab-count.amber{background:#f59e0b;color:white}
+.tab-content{padding:16px;display:none}
+.tab-content.active{display:block}
+.signal-card{border:1px solid #f0f0f0;border-radius:10px;padding:14px;margin-bottom:10px}
+.signal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.signal-sym{font-weight:700;font-size:15px;margin-right:8px}
+.signal-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.signal-time{font-size:11px;color:#bbb}
+.signal-levels{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.level-box{background:#fafafa;border-radius:8px;padding:8px 10px}
+.level-label{font-size:10px;color:#ccc;margin-bottom:3px}
+.level-value{font-family:'DM Mono',monospace;font-size:13px;font-weight:500}
+.gate-bars{display:flex;gap:3px}
+.gate-bar{height:5px;width:14px;border-radius:99px;background:#f0f0f0}
+.gate-bar.filled{background:#22c55e}
+.badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.badge-red{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
+.badge-green{background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0}
+.badge-blue{background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe}
+.badge-amber{background:#fffbeb;color:#d97706;border:1px solid #fde68a}
+.badge-gray{background:#f9fafb;color:#6b7280;border:1px solid #e5e7eb}
+.trade-card{border:1px solid #f0f0f0;border-radius:10px;padding:14px;margin-bottom:10px}
+.progress-bar-wrap{height:4px;background:#f0f0f0;border-radius:99px;margin-top:10px}
+.progress-bar-fill{height:100%;background:#22c55e;border-radius:99px;transition:width .5s}
+.progress-label{font-size:10px;color:#ccc;text-align:right;margin-top:4px}
+.log-row{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:8px;background:#fafafa;margin-bottom:6px;font-size:12px}
+.log-time{font-family:'DM Mono',monospace;font-size:10px;color:#ccc;min-width:32px;padding-top:1px}
+.log-sym{font-weight:700;min-width:24px}
+.log-reason{color:#999;flex:1}
+.log-fail{color:#ef4444;font-weight:600}
+.instruments-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.inst-card{border:1px solid #f5f5f5;border-radius:10px;padding:12px}
+.inst-sym{font-weight:700;font-size:14px}
+.inst-price{font-family:'DM Mono',monospace;font-size:16px;font-weight:500;margin:4px 0}
+.inst-chg{font-size:11px}
+.bias-bar-wrap{height:3px;background:#f5f5f5;border-radius:99px;margin-top:8px}
+.bias-bar-fill{height:100%;border-radius:99px;transition:width .5s}
+.inst-meta{font-size:10px;color:#ccc;margin-top:6px}
+.session-pill{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid #f0f0f0;margin-bottom:8px;transition:all .3s}
+.session-pill.active{border-color:#bbf7d0;background:#f0fdf4}
+.session-dot{width:6px;height:6px;border-radius:50%;background:#d1d5db;flex-shrink:0}
+.session-dot.active{background:#22c55e;animation:pulse 2s infinite}
+.session-name{font-size:12px;font-weight:600}
+.session-sym{font-size:11px;color:#aaa;font-weight:400}
+.session-time{font-size:11px;color:#bbb}
+.setup-row{margin-bottom:14px}
+.setup-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.setup-name{font-size:12px;font-weight:700}
+.setup-label{font-size:11px;color:#aaa;margin-left:6px}
+.setup-wr{font-family:'DM Mono',monospace;font-size:11px;color:#22c55e}
+.setup-bar-wrap{height:3px;background:#f5f5f5;border-radius:99px}
+.setup-bar-fill{height:100%;background:#0a0a0a;border-radius:99px}
+.setup-footer{display:flex;justify-content:space-between;margin-top:4px}
+.setup-footer span{font-size:10px;color:#ccc}
+.status-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f8f8f8}
+.status-row:last-child{border-bottom:none}
+.status-label{font-size:12px;color:#666}
+.status-val{display:flex;align-items:center;gap:5px;font-size:11px;color:#aaa}
+.status-dot{width:5px;height:5px;border-radius:50%;background:#22c55e}
+.status-dot.amber{background:#f59e0b}
+.empty{text-align:center;padding:32px;color:#ccc;font-size:13px}
+.scan-result-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:#fafafa;margin-bottom:5px;font-size:12px}
+.scan-sym{font-weight:700;min-width:28px}
+.scan-gates{display:flex;gap:2px;margin-left:4px}
+.scan-gate{width:12px;height:12px;border-radius:3px;font-size:8px;display:flex;align-items:center;justify-content:center;font-weight:700}
+.scan-gate.pass{background:#dcfce7;color:#16a34a}
+.scan-gate.fail{background:#fee2e2;color:#dc2626}
+.scan-gate.skip{background:#f3f4f6;color:#9ca3af}
+.scan-detail{color:#aaa;font-size:11px;flex:1}
+.toast{position:fixed;bottom:24px;right:24px;background:#0a0a0a;color:white;padding:12px 20px;border-radius:10px;font-size:13px;z-index:999;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+.loading{display:inline-block;width:12px;height:12px;border:2px solid #e5e5e5;border-top-color:#0a0a0a;border-radius:50%;animation:spin .6s linear infinite;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-inner">
+    <div>
+      <div style="display:flex;align-items:baseline;gap:6px">
+        <span class="logo-apex">APEX</span>
+        <span class="logo-markets">Markets</span>
+        <div class="live-badge"><div class="live-dot"></div><span class="live-text">Live</span></div>
+      </div>
+      <div class="logo-sub">Stanley Wise &middot; Automated Trading System</div>
+    </div>
+    <div class="header-right">
+      <div class="prices" id="prices">
+        <div class="price-item"><div class="price-sym">NQ <span id="nq-price">--</span></div><div class="price-chg" id="nq-chg">--</div></div>
+        <div class="price-item"><div class="price-sym">ES <span id="es-price">--</span></div><div class="price-chg" id="es-chg">--</div></div>
+        <div class="price-item"><div class="price-sym">GC <span id="gc-price">--</span></div><div class="price-chg" id="gc-chg">--</div></div>
+      </div>
+      <div style="font-family:'DM Mono',monospace;font-size:12px;color:#888;text-align:right">
+        <div id="clock">--:--:--</div>
+        <div style="font-size:10px;color:#ccc">UTC</div>
+      </div>
+      <button class="btn btn-outline" onclick="runScan()" id="scan-btn">&#128269; Scan Now</button>
+      <button class="btn btn-outline" onclick="testTelegram()" id="tg-btn">&#128172; Test Telegram</button>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-label">Today P&L</div><div class="stat-value" id="today-r">--</div><div class="stat-sub">In R</div></div>
+    <div class="stat-card"><div class="stat-label">Total P&L</div><div class="stat-value" id="total-r">--</div><div class="stat-sub">In R</div></div>
+    <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="win-rate">--</div><div class="stat-sub" id="trade-count">-- trades</div></div>
+    <div class="stat-card"><div class="stat-label">Open Trades</div><div class="stat-value" id="open-count">--</div><div class="stat-sub">Active now</div></div>
+    <div class="stat-card"><div class="stat-label">Expectancy</div><div class="stat-value" id="expectancy">--</div><div class="stat-sub">Per trade</div></div>
+  </div>
+
+  <div class="grid-layout">
+    <div class="col-main">
+      <!-- Main tabs -->
+      <div class="card">
+        <div class="tabs">
+          <button class="tab active" onclick="showTab('signals',this)">Live Signals <span class="tab-count green" id="signals-count">0</span></button>
+          <button class="tab" onclick="showTab('open',this)">Open Trades <span class="tab-count amber" id="open-tab-count">0</span></button>
+          <button class="tab" onclick="showTab('scan',this)">Gate Scanner</button>
+          <button class="tab" onclick="showTab('log',this)">Gate Log</button>
+        </div>
+
+        <div class="tab-content active" id="tab-signals">
+          <div id="signals-list"><div class="empty">No signals right now — scanner active</div></div>
+        </div>
+
+        <div class="tab-content" id="tab-open">
+          <div id="open-trades-list"><div class="empty">No open trades</div></div>
+        </div>
+
+        <div class="tab-content" id="tab-scan">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-size:13px;color:#666">Full gate check across all instruments and setups</div>
+            <button class="btn btn-primary" onclick="runScan()" id="scan-btn2">Run Scan</button>
+          </div>
+          <div id="scan-results"><div class="empty">Click Run Scan to check current market conditions</div></div>
+        </div>
+
+        <div class="tab-content" id="tab-log">
+          <div id="gate-log-list"><div class="empty">Gate log will appear here as scans run</div></div>
+        </div>
+      </div>
+
+      <!-- Market structure -->
+      <div class="card card-body">
+        <div class="section-label">Market Structure</div>
+        <div class="instruments-grid" id="instruments-grid">
+          <div class="inst-card"><div class="inst-sym">NQ</div><div class="inst-price">Loading...</div></div>
+          <div class="inst-card"><div class="inst-sym">ES</div><div class="inst-price">Loading...</div></div>
+          <div class="inst-card"><div class="inst-sym">GC</div><div class="inst-price">Loading...</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-side">
+      <!-- Sessions -->
+      <div class="card card-body">
+        <div class="section-label">Sessions</div>
+        <div id="sessions-list">
+          <div class="session-pill"><div class="session-dot"></div><div><div><span class="session-name">Loading...</span></div></div></div>
+        </div>
+      </div>
+
+      <!-- Setup performance -->
+      <div class="card card-body">
+        <div class="section-label">Setup Performance (Backtest)</div>
+        <div class="setup-row">
+          <div class="setup-header"><div><span class="setup-name">Setup A</span><span class="setup-label">Sweep + OB</span></div><span class="setup-wr">82.6% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:82.6%"></div></div>
+          <div class="setup-footer"><span>Sharpe 13.1</span><span>23 trades</span></div>
+        </div>
+        <div class="setup-row">
+          <div class="setup-header"><div><span class="setup-name">Setup B</span><span class="setup-label">CHoCH + Breaker</span></div><span class="setup-wr">60.0% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:60%"></div></div>
+          <div class="setup-footer"><span>Sharpe 7.1</span><span>130 trades</span></div>
+        </div>
+        <div class="setup-row">
+          <div class="setup-header"><div><span class="setup-name">Setup C</span><span class="setup-label">BOS + OB Pullback</span></div><span class="setup-wr">62.5% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:62.5%"></div></div>
+          <div class="setup-footer"><span>Sharpe 6.9</span><span>56 trades</span></div>
+        </div>
+      </div>
+
+      <!-- Scanner status -->
+      <div class="card card-body">
+        <div class="section-label">System Status</div>
+        <div class="status-row"><span class="status-label">Data Feed</span><div class="status-val"><div class="status-dot"></div>Databento CME</div></div>
+        <div class="status-row"><span class="status-label">Last Refresh</span><div class="status-val" id="last-refresh"><div class="status-dot"></div>--</div></div>
+        <div class="status-row"><span class="status-label">Scanner</span><div class="status-val"><div class="status-dot"></div>Every 5 min</div></div>
+        <div class="status-row"><span class="status-label">Telegram</span><div class="status-val"><div class="status-dot"></div>Connected</div></div>
+        <div class="status-row"><span class="status-label">Railway</span><div class="status-val"><div class="status-dot"></div>Deployed</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = window.location.origin;
+let gateLog = [];
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+function showToast(msg, duration=3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+function fmtR(r) {
+  if (r === null || r === undefined || isNaN(r)) return '--';
+  const v = parseFloat(r);
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + 'R';
+}
+
+function fmtPrice(p) {
+  if (!p) return '--';
+  return parseFloat(p).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+// Clock
+function updateClock() {
+  const n = new Date();
+  const h = String(n.getUTCHours()).padStart(2,'0');
+  const m = String(n.getUTCMinutes()).padStart(2,'0');
+  const s = String(n.getUTCSeconds()).padStart(2,'0');
+  document.getElementById('clock').textContent = h+':'+m+':'+s;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Sessions
+function updateSessions() {
+  const now = new Date();
+  const h = now.getUTCHours();
+  const sessions = [
+    {name:'London', sym:'NQ/ES', start:7, end:11},
+    {name:'NY Primary', sym:'NQ/ES', start:13, end:19},
+    {name:'GC Primary', sym:'GC', start:12, end:17},
+  ];
+  const el = document.getElementById('sessions-list');
+  el.innerHTML = sessions.map(s => {
+    const active = h >= s.start && h < s.end;
+    return `<div class="session-pill ${active?'active':''}">
+      <div class="session-dot ${active?'active':''}"></div>
+      <div>
+        <div><span class="session-name">${s.name}</span> <span class="session-sym">&middot; ${s.sym}</span></div>
+        <div class="session-time">${String(s.start).padStart(2,'0')}:00&ndash;${String(s.end).padStart(2,'0')}:00 UTC</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+setInterval(updateSessions, 30000);
+updateSessions();
+
+// Market data
+async function loadMarket() {
+  try {
+    const res = await fetch(API + '/api/apex/market');
+    const data = await res.json();
+    if (!data.ok) return;
+    const m = data.market;
+
+    // Update prices in header
+    ['NQ','ES','GC'].forEach(sym => {
+      const d = m[sym];
+      if (!d || d.error) return;
+      const priceEl = document.getElementById(sym.toLowerCase()+'-price');
+      const chgEl   = document.getElementById(sym.toLowerCase()+'-chg');
+      if (priceEl) {
+        priceEl.textContent = fmtPrice(d.close);
+        priceEl.className   = d.change < 0 ? 'neg' : 'pos';
+      }
+      if (chgEl) {
+        chgEl.textContent  = (d.change >= 0 ? '+' : '') + d.change + ' (' + (d.pct >= 0 ? '+' : '') + d.pct + '%)';
+        chgEl.className    = 'price-chg ' + (d.change < 0 ? 'neg' : 'pos');
+      }
+    });
+
+    // Update instruments grid
+    const grid = document.getElementById('instruments-grid');
+    grid.innerHTML = ['NQ','ES','GC'].map(sym => {
+      const d = m[sym];
+      if (!d || d.error) return `<div class="inst-card"><div class="inst-sym">${sym}</div><div style="font-size:11px;color:#ccc">No data</div></div>`;
+      const bias = d.bias.toUpperCase();
+      const badgeColor = bias==='BEARISH'?'badge-red':bias==='BULLISH'?'badge-green':'badge-gray';
+      const barColor   = bias==='BEARISH'?'#ef4444':bias==='BULLISH'?'#22c55e':'#d1d5db';
+      return `<div class="inst-card">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span class="inst-sym">${sym}</span>
+          <span class="badge ${badgeColor}">${bias}</span>
+        </div>
+        <div class="inst-price ${d.change<0?'neg':'pos'}">${fmtPrice(d.close)}</div>
+        <div class="inst-chg ${d.change<0?'neg':'pos'}">${d.change>=0?'+':''}${d.change} (${d.pct>=0?'+':''}${d.pct}%)</div>
+        <div class="bias-bar-wrap"><div class="bias-bar-fill" style="width:${d.strength*100}%;background:${barColor}"></div></div>
+        <div class="inst-meta">Strength ${d.strength} &middot; Last bar ${d.last_bar}</div>
+      </div>`;
+    }).join('');
+
+    document.getElementById('last-refresh').innerHTML = '<div class="status-dot"></div>' + new Date().toUTCString().slice(17,22) + ' UTC';
+  } catch(e) {
+    console.error('Market load error:', e);
+  }
+}
+
+// Trades
+async function loadTrades() {
+  try {
+    const res = await fetch(API + '/api/apex/trades');
+    const data = await res.json();
+    if (!data.ok) return;
+
+    const stats = data.stats;
+    document.getElementById('today-r').textContent  = fmtR(stats.today_r);
+    document.getElementById('today-r').className    = 'stat-value ' + (stats.today_r >= 0 ? 'pos' : 'neg');
+    document.getElementById('total-r').textContent  = fmtR(stats.total_r);
+    document.getElementById('total-r').className    = 'stat-value ' + (stats.total_r >= 0 ? 'pos' : 'neg');
+    document.getElementById('win-rate').textContent = stats.win_rate + '%';
+    document.getElementById('trade-count').textContent = stats.total_trades + ' trades';
+    document.getElementById('open-count').textContent  = stats.open_trades;
+    document.getElementById('expectancy').textContent  = fmtR(stats.expectancy);
+    document.getElementById('open-tab-count').textContent = stats.open_trades;
+
+    const openList = document.getElementById('open-trades-list');
+    if (!data.open_trades || data.open_trades.length === 0) {
+      openList.innerHTML = '<div class="empty">No open trades</div>';
+    } else {
+      openList.innerHTML = data.open_trades.map(t => {
+        const pnl  = t.current_pnl_r || 0;
+        const prog = Math.min(100, Math.abs((t.current_price - t.entry_price) / (t.target - t.entry_price)) * 100);
+        const dir  = t.direction.toUpperCase();
+        return `<div class="trade-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div class="signal-meta">
+              <span class="signal-sym">${t.symbol}</span>
+              <span class="badge ${dir==='SHORT'?'badge-red':'badge-green'}">${dir}</span>
+              <span class="badge badge-blue">${t.setup}</span>
+              <span style="font-size:11px;color:#aaa">${t.session}</span>
+            </div>
+            <span class="${pnl>=0?'pos':'neg'}" style="font-weight:700;font-size:14px">${fmtR(pnl)}</span>
+          </div>
+          <div class="signal-levels">
+            <div class="level-box"><div class="level-label">Entry</div><div class="level-value">${fmtPrice(t.entry_price)}</div></div>
+            <div class="level-box"><div class="level-label">Stop</div><div class="level-value">${fmtPrice(t.stop)}</div></div>
+            <div class="level-box"><div class="level-label">Target</div><div class="level-value">${fmtPrice(t.target)}</div></div>
+            <div class="level-box"><div class="level-label">Current</div><div class="level-value ${pnl>=0?'pos':'neg'}">${fmtPrice(t.current_price)}</div></div>
+          </div>
+          <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${prog}%"></div></div>
+          <div class="progress-label">${Math.round(prog)}% to target</div>
+        </div>`;
+      }).join('');
+    }
+  } catch(e) {
+    console.error('Trades load error:', e);
+  }
+}
+
+// Scan
+async function runScan() {
+  const btn  = document.getElementById('scan-btn');
+  const btn2 = document.getElementById('scan-btn2');
+  btn.disabled = btn2.disabled = true;
+  btn.innerHTML  = '<span class="loading"></span>Scanning...';
+  btn2.innerHTML = '<span class="loading"></span>Scanning...';
+
+  // Switch to scan tab
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-scan').classList.add('active');
+  document.querySelectorAll('.tab')[2].classList.add('active');
+
+  try {
+    const res  = await fetch(API + '/api/apex/scan');
+    const data = await res.json();
+
+    if (!data.ok) throw new Error('Scan failed');
+
+    const results  = data.results;
+    const signals  = results.filter(r => r.valid);
+    const failures = results.filter(r => !r.valid);
+
+    // Update signals tab
+    document.getElementById('signals-count').textContent = signals.length;
+    const sigList = document.getElementById('signals-list');
+    if (signals.length === 0) {
+      sigList.innerHTML = '<div class="empty">No signals right now — scanner active</div>';
+    } else {
+      sigList.innerHTML = signals.map(s => {
+        const dir = s.direction.toUpperCase();
+        return `<div class="signal-card">
+          <div class="signal-header">
+            <div class="signal-meta">
+              <span class="signal-sym">${s.symbol}</span>
+              <span class="badge ${dir==='SHORT'?'badge-red':'badge-green'}">${dir}</span>
+              <span class="badge badge-blue">Setup ${s.setup}</span>
+              <span class="badge ${s.quality==='primary'?'badge-green':'badge-amber'}">${(s.quality||'').toUpperCase()}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="gate-bars">${s.gates.map(g=>`<div class="gate-bar ${g.passed?'filled':''}"></div>`).join('')}</div>
+            </div>
+          </div>
+          <div class="signal-levels">
+            <div class="level-box"><div class="level-label">Entry</div><div class="level-value">${s.entry ? fmtPrice(s.entry) : '--'}</div></div>
+            <div class="level-box"><div class="level-label">Stop</div><div class="level-value">${s.stop ? fmtPrice(s.stop) : '--'}</div></div>
+            <div class="level-box"><div class="level-label">Target</div><div class="level-value">${s.target ? fmtPrice(s.target) : '--'}</div></div>
+            <div class="level-box"><div class="level-label">R:R</div><div class="level-value">${s.rr ? s.rr+'x' : '--'}</div></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Update scan results tab
+    const scanEl = document.getElementById('scan-results');
+    scanEl.innerHTML = `<div style="font-size:11px;color:#aaa;margin-bottom:10px">${data.time}</div>` +
+      results.map(r => {
+        const dir    = r.direction.toUpperCase();
+        const passed = r.gates.filter(g=>g.passed).length;
+        const total  = r.gates.length;
+        const failed = r.gates.find(g=>!g.passed);
+        return `<div class="scan-result-row">
+          <span class="scan-sym">${r.symbol}</span>
+          <span class="badge ${dir==='SHORT'?'badge-red':'badge-green'}" style="font-size:10px">${dir}</span>
+          <span class="badge badge-blue" style="font-size:10px">S${r.setup}</span>
+          <div class="scan-gates">
+            ${r.gates.map(g=>`<div class="scan-gate ${g.passed?'pass':'fail'}" title="${g.name}: ${g.detail}">${g.gate}</div>`).join('')}
+            ${Array.from({length:6-r.gates.length}).map(()=>'<div class="scan-gate skip">-</div>').join('')}
+          </div>
+          <span class="scan-detail">${r.valid ? '✅ Signal!' : (failed ? '✗ '+failed.name+' — '+failed.detail : '')}</span>
+        </div>`;
+      }).join('');
+
+    // Update gate log
+    const now = new Date().toUTCString().slice(17,22);
+    failures.forEach(r => {
+      const failed = r.gates.find(g=>!g.passed);
+      if (failed) {
+        gateLog.unshift({time:now, sym:r.symbol, dir:r.direction.toUpperCase(), gate:failed.name, reason:failed.detail});
+      }
+    });
+    gateLog = gateLog.slice(0, 50);
+    const logEl = document.getElementById('gate-log-list');
+    logEl.innerHTML = gateLog.length === 0
+      ? '<div class="empty">Run a scan to see gate failures</div>'
+      : gateLog.map(g=>`<div class="log-row">
+          <span class="log-time">${g.time}</span>
+          <span class="log-sym">${g.sym}</span>
+          <span class="badge ${g.dir==='SHORT'?'badge-red':'badge-green'}" style="font-size:10px">${g.dir}</span>
+          <span class="log-reason"><span class="log-fail">&#x2717; ${g.gate}</span> &mdash; ${g.reason}</span>
+        </div>`).join('');
+
+    showToast('Scan complete — ' + signals.length + ' signal' + (signals.length===1?'':'s') + ' found');
+  } catch(e) {
+    showToast('Scan failed: ' + e.message);
+  } finally {
+    btn.disabled = btn2.disabled = false;
+    btn.innerHTML  = '&#128269; Scan Now';
+    btn2.innerHTML = 'Run Scan';
+  }
+}
+
+// Test Telegram
+async function testTelegram() {
+  const btn = document.getElementById('tg-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>Sending...';
+  try {
+    const res  = await fetch(API + '/api/apex/telegram_test', {method:'POST'});
+    const data = await res.json();
+    showToast(data.ok ? '✅ Telegram message sent!' : '❌ Telegram failed: ' + (data.error||'unknown'));
+  } catch(e) {
+    showToast('❌ Request failed');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#128172; Test Telegram';
+  }
+}
+
+// Auto refresh
+async function refresh() {
+  await Promise.all([loadMarket(), loadTrades()]);
+}
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
