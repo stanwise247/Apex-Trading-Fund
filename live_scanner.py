@@ -209,6 +209,23 @@ def main():
                     msg = format_alert(result)
                     send_telegram(msg)
                     logger.info(f'Alert sent: {result.symbol} {result.direction}')
+                    # Log trade to tracker
+                    try:
+                        from trade_tracker import log_trade
+                        log_trade({
+                            'symbol':    result.symbol,
+                            'direction': result.direction,
+                            'setup':     result.setup,
+                            'mode':      'swing',
+                            'entry':     result.entry,
+                            'stop':      result.stop,
+                            'target':    result.target,
+                            'rr':        result.rr,
+                            'session':   result.session,
+                            'quality':   result.quality,
+                        })
+                    except Exception as e:
+                        logger.error(f'Trade log error: {e}')
                 else:
                     logger.debug(f'Duplicate suppressed: {result.symbol} {result.direction}')
 

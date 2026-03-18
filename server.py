@@ -1085,6 +1085,13 @@ def background_scheduler():
                 logger.warning('Macro log failed: ' + str(e))
             last_macro_log = now
 
+        # ── APEX Trade Monitor ───────────────────────────────────
+        try:
+            from trade_tracker import monitor_trades
+            monitor_trades()
+        except Exception as e:
+            logger.debug(f'Trade monitor error: {e}')
+
         # ── APEX Engine v2 — Setup B Scanner ──────────────────────
         try:
             from live_scanner import run_scan, send_telegram, format_alert, SignalTracker
