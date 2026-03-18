@@ -1727,27 +1727,26 @@ def check_session_alerts():
             key_close = sess['name'] + '_close_' + date_str
             if hour == sess['start'] and not _session_state.get(key_open):
                 _session_state[key_open] = True
-                lines = ['<b>Window:</b> {:02d}:00-{:02d}:00 UTC'.format(sess['start'], sess['end'])]
-                msg = '🔔 <b>{} Session Open</b>
-{}
-<b>Instruments:</b> {}
-{}
-<b>Scanner:</b> Active
-<i>{} ET</i>'.format(
-                    sess['name'], '━'*10, sess['syms'], '
-'.join(lines), now_ny)
+                msg = ('\U0001f514 <b>{} Session Open</b>\n'
+                       '\u2501'*10 + '\n'
+                       '<b>Instruments:</b> {}\n'
+                       '<b>Window:</b> {:02d}:00-{:02d}:00 UTC\n'
+                       '<b>Scanner:</b> Active\n'
+                       '<i>{} ET</i>').format(
+                    sess['name'], sess['syms'], sess['start'], sess['end'], now_ny)
                 send_telegram(msg)
                 logger.info('Session open alert: ' + sess['name'])
             if hour == sess['end'] and not _session_state.get(key_close):
                 _session_state[key_close] = True
-                msg = '🔕 <b>{} Session Closed</b>
-{}
-<b>Instruments:</b> {}
-<b>Scanner:</b> Paused
-<i>{} ET</i>'.format(
-                    sess['name'], '━'*10, sess['syms'], now_ny)
+                msg = ('\U0001f515 <b>{} Session Closed</b>\n'
+                       '\u2501'*10 + '\n'
+                       '<b>Instruments:</b> {}\n'
+                       '<b>Scanner:</b> Paused\n'
+                       '<i>{} ET</i>').format(
+                    sess['name'], sess['syms'], now_ny)
                 send_telegram(msg)
                 logger.info('Session close alert: ' + sess['name'])
+
     except Exception as e:
         logger.debug('Session alert error: ' + str(e))
 
