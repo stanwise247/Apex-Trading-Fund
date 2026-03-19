@@ -1652,7 +1652,38 @@ def apex_scan():
                     })
                 except Exception as e:
                     pass
-    return jsonify({'ok': True, 'results': results, 'time': now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')})
+
+    # FVG signals — NQ only
+    fvg_signals = []
+    try:
+        from fvg_engine import scan_fvg
+        sigs = scan_fvg('NQ', now)
+        for s in sigs:
+            fvg_signals.append({
+                'symbol':    s['symbol'],
+                'direction': s['direction'],
+                'setup':     'D',
+                'valid':     True,
+                'gates':     [{'gate': i+1, 'name': f'Gate {i+1}', 'passed': True, 'detail': ''} for i in range(4)],
+                'entry':     s['entry'],
+                'stop':      s['stop'],
+                'target':    s['target'],
+                'rr':        s['rr'],
+                'quality':   'primary',
+                'fvg_top':   s.get('fvg_top'),
+                'fvg_bottom':s.get('fvg_bottom'),
+                'bias':      s.get('bias'),
+                'failed_at': None,
+            })
+    except Exception as e:
+        pass
+
+    return jsonify({
+        'ok':          True,
+        'results':     results,
+        'fvg_signals': fvg_signals,
+        'time':        now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')
+    })
 
 
 @app.route('/api/apex/trades', methods=['GET'])
