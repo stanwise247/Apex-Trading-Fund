@@ -1715,46 +1715,40 @@ def check_session_alerts():
         from live_scanner import send_telegram
         from datetime import datetime, timezone
         from zoneinfo import ZoneInfo
-        NY  = ZoneInfo('America/New_York')
+        NY = ZoneInfo('America/New_York')
         now = datetime.now(timezone.utc)
         if now.weekday() >= 5:
             return
         hour     = now.hour
         date_str = str(now.date())
         now_ny   = now.astimezone(NY).strftime('%H:%M')
+        sep = chr(9473) * 10
         for sess in APEX_SESSIONS:
             key_open  = sess['name'] + '_open_'  + date_str
             key_close = sess['name'] + '_close_' + date_str
             if hour == sess['start'] and not _session_state.get(key_open):
                 _session_state[key_open] = True
-                msg = (
-                    '🔔 <b>{name} Session Open</b>
-'
-                    + '━'*10 + '
-'
-                    + '<b>Instruments:</b> {syms}
-'
-                    + '<b>Window:</b> {start:02d}:00-{end:02d}:00 UTC
-'
-                    + '<b>Scanner:</b> Active
-'
-                    + '<i>{now} ET</i>'
-                ).format(
-                    name=sess['name'], syms=sess['syms'],
-                    start=sess['start'], end=sess['end'], now=now_ny)
-                send_telegram(msg)
+                parts = [
+                    chr(128276) + ' <b>' + sess['name'] + ' Session Open</b>',
+                    sep,
+                    '<b>Instruments:</b> ' + sess['syms'],
+                    '<b>Window:</b> {:02d}:00-{:02d}:00 UTC'.format(sess['start'], sess['end']),
+                    '<b>Scanner:</b> Active',
+                    '<i>' + now_ny + ' ET</i>',
+                ]
+                send_telegram(chr(10).join(parts))
                 logger.info('Session open alert: ' + sess['name'])
             if hour == sess['end'] and not _session_state.get(key_close):
                 _session_state[key_close] = True
-                msg = ('\U0001f515 <b>{} Session Closed</b>\n'
-                       '\u2501'*10 + '\n'
-                       '<b>Instruments:</b> {}\n'
-                       '<b>Scanner:</b> Paused\n'
-                       '<i>{} ET</i>').format(
-                    sess['name'], sess['syms'], now_ny)
-                send_telegram(msg)
+                parts = [
+                    chr(128277) + ' <b>' + sess['name'] + ' Session Closed</b>',
+                    sep,
+                    '<b>Instruments:</b> ' + sess['syms'],
+                    '<b>Scanner:</b> Paused until next session',
+                    '<i>' + now_ny + ' ET</i>',
+                ]
+                send_telegram(chr(10).join(parts))
                 logger.info('Session close alert: ' + sess['name'])
-
     except Exception as e:
         logger.warning('Session alert error: ' + str(e))
 
