@@ -1727,13 +1727,21 @@ def check_session_alerts():
             key_close = sess['name'] + '_close_' + date_str
             if hour == sess['start'] and not _session_state.get(key_open):
                 _session_state[key_open] = True
-                msg = ('\U0001f514 <b>{} Session Open</b>\n'
-                       '\u2501'*10 + '\n'
-                       '<b>Instruments:</b> {}\n'
-                       '<b>Window:</b> {:02d}:00-{:02d}:00 UTC\n'
-                       '<b>Scanner:</b> Active\n'
-                       '<i>{} ET</i>').format(
-                    sess['name'], sess['syms'], sess['start'], sess['end'], now_ny)
+                msg = (
+                    '🔔 <b>{name} Session Open</b>
+'
+                    + '━'*10 + '
+'
+                    + '<b>Instruments:</b> {syms}
+'
+                    + '<b>Window:</b> {start:02d}:00-{end:02d}:00 UTC
+'
+                    + '<b>Scanner:</b> Active
+'
+                    + '<i>{now} ET</i>'
+                ).format(
+                    name=sess['name'], syms=sess['syms'],
+                    start=sess['start'], end=sess['end'], now=now_ny)
                 send_telegram(msg)
                 logger.info('Session open alert: ' + sess['name'])
             if hour == sess['end'] and not _session_state.get(key_close):
