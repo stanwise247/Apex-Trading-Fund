@@ -1097,6 +1097,23 @@ def background_scheduler():
         except Exception as e:
             logger.warning(f'Session alert error: {e}')
 
+        # ── APEX FVG Scanner — runs every minute ─────────────────
+        try:
+            from fvg_engine import scan_fvg, format_fvg_alert
+            from live_scanner import send_telegram
+            from trade_tracker import log_trade
+            from datetime import datetime, timezone
+            now_utc = datetime.now(timezone.utc)
+            if 13 <= now_utc.hour < 19:
+                fvg_signals = scan_fvg('NQ', now_utc)
+                for sig in fvg_signals:
+                    msg = format_fvg_alert(sig)
+                    send_telegram(msg)
+                    log_trade(sig)
+                    logger.info(f'FVG signal: NQ {sig["direction"].upper()} entry={sig["entry"]}')
+        except Exception as e:
+            logger.warning(f'FVG scanner error: {e}')
+
         # ── APEX Engine v2 — Setup B Scanner ──────────────────────
         try:
             from live_scanner import run_scan, send_telegram, format_alert, SignalTracker

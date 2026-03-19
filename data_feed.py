@@ -222,7 +222,7 @@ def refresh_all(include_htf: bool = False,
     Call every 5 minutes from scheduler.
     include_htf=True every 30 min — rebuilds 1hour/4hour from 5min.
     """
-    tfs = ['5min', '15min']
+    tfs = ['1min', '5min', '15min']
     if include_daily:
         tfs.append('1day')
 
