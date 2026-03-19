@@ -305,7 +305,7 @@ def format_fvg_alert(signal):
 
 if __name__ == '__main__':
     import os
-    os.environ['DATABENTO_API_KEY'] = 'db-MNmnEHkhYqBwKQEw7qTbJSeCKh9sE'
+    # API key loaded from environment variable — never hardcode keys
     print('Testing FVG scanner...')
     for sym in ('NQ', 'ES', 'GC'):
         signals = scan_fvg(sym)
