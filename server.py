@@ -1095,7 +1095,7 @@ def background_scheduler():
         try:
             check_session_alerts()
         except Exception as e:
-            logger.debug(f'Session alert error: {e}')
+            logger.warning(f'Session alert error: {e}')
 
         # ── APEX Engine v2 — Setup B Scanner ──────────────────────
         try:
@@ -1748,7 +1748,7 @@ def check_session_alerts():
                 logger.info('Session close alert: ' + sess['name'])
 
     except Exception as e:
-        logger.debug('Session alert error: ' + str(e))
+        logger.warning('Session alert error: ' + str(e))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
