@@ -1107,6 +1107,62 @@ def background_scheduler():
         except Exception as e:
             logger.warning(f'Session alert error: {e}')
 
+        # ── APEX Daily P&L Summary — fires at 19:00 UTC ──────────
+        try:
+            from datetime import datetime, timezone
+            _now = datetime.now(timezone.utc)
+            if _now.hour == 19 and _now.minute < 5:
+                if not hasattr(background_scheduler, '_daily_summary_date') or                    background_scheduler._daily_summary_date != str(_now.date()):
+                    background_scheduler._daily_summary_date = str(_now.date())
+                    from trade_tracker import get_stats, init_trades_table
+                    from live_scanner import send_telegram
+                    from zoneinfo import ZoneInfo
+                    NY = ZoneInfo('America/New_York')
+                    init_trades_table()
+                    import sqlite3
+                    conn = sqlite3.connect('apex_market.db')
+                    today = str(_now.date())
+                    trades = conn.execute(
+                        'SELECT symbol, direction, setup, pnl_r, exit_reason FROM apex_trades '
+                        'WHERE status=? AND entry_time LIKE ?',
+                        ('closed', today + '%')
+                    ).fetchall()
+                    conn.close()
+                    stats = get_stats()
+                    if trades:
+                        wins   = [t for t in trades if t[3] and t[3] > 0]
+                        losses = [t for t in trades if t[3] and t[3] <= 0]
+                        total_r = round(sum(t[3] for t in trades if t[3]), 2)
+                        sign = '+' if total_r >= 0 else ''
+                        sep = chr(9473) * 20
+                        now_ny = _now.astimezone(NY).strftime('%Y-%m-%d')
+                        trade_lines = chr(10).join([
+                            f'{"+" if t[3]>0 else ""}{t[3]:.2f}R {t[0]} {t[1].upper()} [{t[2]}]'
+                            for t in trades if t[3] is not None
+                        ])
+                        msg = (
+                            chr(128202) + ' <b>APEX Daily Summary</b>' + chr(10) +
+                            sep + chr(10) +
+                            f'<b>Date:</b> {now_ny}' + chr(10) +
+                            f'<b>Trades:</b> {len(trades)} ({len(wins)}W / {len(losses)}L)' + chr(10) +
+                            f'<b>Day P&L:</b> {sign}{total_r}R' + chr(10) +
+                            f'<b>Total P&L:</b> {stats.get("total_r", 0):+.2f}R' + chr(10) +
+                            sep + chr(10) +
+                            trade_lines
+                        )
+                    else:
+                        msg = (
+                            chr(128202) + ' <b>APEX Daily Summary</b>' + chr(10) +
+                            chr(9473)*20 + chr(10) +
+                            f'<b>Date:</b> {str(_now.astimezone(NY).date())}' + chr(10) +
+                            '<b>Trades:</b> 0 — no signals today' + chr(10) +
+                            f'<b>Total P&L:</b> {stats.get("total_r", 0):+.2f}R'
+                        )
+                    send_telegram(msg)
+                    logger.info('Daily P&L summary sent')
+        except Exception as e:
+            logger.warning(f'Daily summary error: {e}')
+
         # ── APEX FVG Scanner — runs every minute ─────────────────
         try:
             from fvg_engine import scan_fvg, format_fvg_alert
