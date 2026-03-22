@@ -42,12 +42,14 @@ SESSION_WINDOWS = {
            {'start':  7, 'end': 11, 'quality': 'secondary'}],
     'GC': [{'start': 12, 'end': 17, 'quality': 'primary'},
            {'start':  0, 'end':  2, 'quality': 'secondary'}],
+    'CL': [{'start': 14, 'end': 20, 'quality': 'primary'},
+           {'start':  7, 'end': 11, 'quality': 'secondary'}],
 }
 
 RR_MAP = {'swing': 4.0, 'scalp': 2.5}
 
 SESSION_END_UTC = {
-    'NQ': 19, 'ES': 19, 'GC': 17
+    'NQ': 19, 'ES': 19, 'GC': 17, 'CL': 20
 }
 
 # ─────────────────────────────────────────────────────────────
