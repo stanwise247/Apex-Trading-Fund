@@ -1050,8 +1050,18 @@ def background_scheduler():
 
         # ── APEX Data Feed — refresh every 5 minutes ─────────────
         if not hasattr(background_scheduler, '_last_feed'):
-            background_scheduler._last_feed = 0
-            background_scheduler._last_htf  = 0
+            background_scheduler._last_feed    = 0
+            background_scheduler._last_htf     = 0
+            background_scheduler._last_nq_1min = 0
+        # NQ 1min refresh — every 60 seconds for FVG scanner
+        if now - background_scheduler._last_nq_1min > 60:
+            try:
+                from data_feed import refresh_symbol
+                refresh_symbol('NQ', ['1min'], lookback_hours=1)
+            except Exception as e:
+                logger.debug(f'NQ 1min refresh error: {e}')
+            background_scheduler._last_nq_1min = now
+        # Full refresh — every 5 minutes
         if now - background_scheduler._last_feed > 300:
             try:
                 from data_feed import refresh_all
