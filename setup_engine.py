@@ -281,58 +281,6 @@ def gate3_poi_setup_a(symbol: str, direction: str) -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────
-#  GATE 3 — POI SETUP A (Sweep + OB)
-# ─────────────────────────────────────────────────────────────
-
-def gate3_poi_setup_a(symbol: str, direction: str) -> tuple:
-    """
-    Setup A: Liquidity sweep detected within last 24 bars
-    + active OB within 1 ATR of current price.
-    Returns (GateResult, setup_type, poi_object)
-    """
-    df = load_bars(symbol, '1hour', limit=500)
-    sh, sl    = find_swings(df, lookback=5)
-    events, _ = detect_structure(df, sh, sl)
-    obs       = find_order_blocks(df, sh, sl, events)
-    sweeps    = find_sweeps(df, sh, sl)
-    atr_series= calc_atr(df)
-
-    price   = float(df['close'].iloc[-1])
-    atr_val = float(atr_series.iloc[-1])
-
-    # Recent sweeps — last 24 bars
-    recent_sweeps = [s for s in sweeps if s.index >= len(df) - 24]
-
-    for sweep in reversed(recent_sweeps):
-        if direction == 'long'  and sweep.kind != 'bull': continue
-        if direction == 'short' and sweep.kind != 'bear': continue
-
-        # Find active OB in same direction within 1 ATR
-        target_kind = 'bull' if direction == 'long' else 'bear'
-        nearby_obs = [o for o in obs
-                      if not o.broken
-                      and o.kind == target_kind
-                      and abs((o.high + o.low) / 2 - price) < atr_val]
-
-        if nearby_obs:
-            ob = min(nearby_obs, key=lambda o: abs((o.high + o.low) / 2 - price))
-            return (
-                GateResult(True, 3, 'POI',
-                           f'Setup A: sweep@{sweep.swept_level:.2f} '
-                           f'atr={sweep.atr_size:.1f}x + OB [{ob.low:.2f}-{ob.high:.2f}]'),
-                'A_sweep_ob', ob
-            )
-
-    return (
-        GateResult(False, 3, 'POI',
-                   f'No sweep+OB confluence | price={price:.2f} atr={atr_val:.2f}'),
-        'none', None
-    )
-
-
-
-
-# ─────────────────────────────────────────────────────────────
 #  GATE 4 — SESSION WINDOW (UTC)
 # ─────────────────────────────────────────────────────────────
 
@@ -449,10 +397,11 @@ def gate6_confirmation(symbol: str, direction: str) -> GateResult:
 #  ENTRY / STOP / TARGET CALCULATOR
 # ─────────────────────────────────────────────────────────────
 
-def calc_trade_levels(symbol: str, direction: str, poi, mode: str = 'swing') -> tuple:
+def calc_trade_levels(symbol: str, direction: str, poi, mode: str = 'swing',
+                      current_price: float = None) -> tuple:
     """
     Returns (entry, stop, target, rr)
-    Entry: midpoint of POI
+    Entry: current_price (actual fill) if provided, else POI edge
     Stop:  beyond POI by 0.5 ATR
     Target: RR based on mode (scalp=2.5, swing=4.0)
     """
@@ -464,15 +413,13 @@ def calc_trade_levels(symbol: str, direction: str, poi, mode: str = 'swing') -> 
     if poi is None:
         return None, None, None, None
 
-    poi_mid = (poi.high + poi.low) / 2
-
     if direction == 'long':
-        entry  = round(poi.high, 2)
+        entry  = round(current_price if current_price is not None else poi.high, 2)
         stop   = round(poi.low - atr_val * 0.5, 2)
         risk   = entry - stop
         target = round(entry + risk * rr, 2)
     else:
-        entry  = round(poi.low, 2)
+        entry  = round(current_price if current_price is not None else poi.low, 2)
         stop   = round(poi.high + atr_val * 0.5, 2)
         risk   = stop - entry
         target = round(entry - risk * rr, 2)
@@ -534,8 +481,10 @@ def check_setup(symbol: str, direction: str, mode: str = 'swing',
                            None, None, None, None, g4.detail, quality, None)
 
     # All gates passed — calculate levels
-    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode)
-    ts = load_bars(symbol, '5min', limit=2).index[-1]
+    df_5m = load_bars(symbol, '5min', limit=2)
+    ts    = df_5m.index[-1]
+    current_price = float(df_5m['close'].iloc[-1])
+    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode, current_price)
 
     return SetupResult(
         symbol    = symbol,
@@ -597,8 +546,10 @@ def check_setup_a(symbol: str, direction: str, mode: str = 'swing',
         return SetupResult(symbol, direction, setup_type, False, gates,
                            None, None, None, None, g4.detail, quality, None)
 
-    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode)
-    ts = load_bars(symbol, '5min', limit=2).index[-1]
+    df_5m = load_bars(symbol, '5min', limit=2)
+    ts    = df_5m.index[-1]
+    current_price = float(df_5m['close'].iloc[-1])
+    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode, current_price)
 
     return SetupResult(
         symbol    = symbol,
@@ -670,8 +621,10 @@ def check_setup_c(symbol, direction, mode='swing', dt=None):
     gates.append(g6)
     if not g6.passed:
         return SetupResult(symbol, direction, setup_type, False, gates, None, None, None, None, g4.detail, quality, None)
-    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode)
-    ts = load_bars(symbol, '5min', limit=2).index[-1]
+    df_5m = load_bars(symbol, '5min', limit=2)
+    ts    = df_5m.index[-1]
+    current_price = float(df_5m['close'].iloc[-1])
+    entry, stop, target, rr = calc_trade_levels(symbol, direction, poi, mode, current_price)
     return SetupResult(symbol=symbol, direction=direction, setup=setup_type, valid=True,
                        gates=gates, entry=entry, stop=stop, target=target, rr=rr,
                        session=g4.detail, quality=quality, timestamp=ts)

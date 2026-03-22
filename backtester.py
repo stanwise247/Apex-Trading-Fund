@@ -48,6 +48,13 @@ SESSION_WINDOWS = {
 
 RR_MAP = {'swing': 4.0, 'scalp': 2.5}
 
+# Must match live_scanner.py:DAY_FILTERS exactly so backtest trades the same days
+DAY_FILTERS = {
+    'NQ': [0, 2, 3, 4],   # Mon Wed Thu Fri — no Tue
+    'ES': [0, 1, 3],       # Mon Tue Thu     — no Wed Fri
+    'GC': [0, 1, 2, 3],   # Mon-Thu          — no Fri
+}
+
 SESSION_END_UTC = {
     'NQ': 19, 'ES': 19, 'GC': 17, 'CL': 20
 }
@@ -578,6 +585,11 @@ def run_backtest(symbol: str, mode: str = 'swing',
         # ── Signal check ─────────────────────────────────────
         # Cooldown — skip 3 bars after closing a trade
         if i - last_trade_bar < 24:
+            continue
+
+        # Day filter — match live_scanner.py so backtest uses identical trading days
+        allowed_days = DAY_FILTERS.get(symbol, [0, 1, 2, 3, 4])
+        if bar_time.weekday() not in allowed_days:
             continue
 
         # Reset used POIs at start of each new day

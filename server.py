@@ -1213,9 +1213,6 @@ def background_scheduler():
         except Exception as e:
             logger.debug(f'APEX scanner error: {e}')
 
-        except Exception as e:
-            logger.debug(f'Scanner loop error: {e}')
-
         time.sleep(60)
 
 
@@ -1584,7 +1581,7 @@ def paper_reset():
         set_account_value('starting_balance', balance)
         set_account_value('peak_balance', balance)
         set_account_value('total_trades', 0)
-        conn = sqlite3.connect(config['db_path'], timeout=30)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("UPDATE paper_positions SET status='closed' WHERE status='open'")
         conn.commit()
         conn.close()

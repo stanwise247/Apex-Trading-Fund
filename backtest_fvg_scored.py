@@ -111,7 +111,8 @@ def run_scored_fvg_backtest(symbol, min_score=50, start='2024-09-01',
 
     df_1m['date'] = df_1m.index.date
     dates = sorted(df_1m['date'].unique())
-    trade_log = []
+    trade_log   = []
+    traded_fvgs = set()
 
     for date in dates:
         dow = pd.Timestamp(date).dayofweek
@@ -137,8 +138,6 @@ def run_scored_fvg_backtest(symbol, min_score=50, start='2024-09-01',
 
         vol_baseline = float(df_15m['volume'].tail(20).mean())
         trades_today = 0
-        traded_fvgs  = set()
-
         for idx, bar in sess_bars.iterrows():
             if trades_today >= MAX_TRADES:
                 break

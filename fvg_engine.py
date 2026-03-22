@@ -175,8 +175,8 @@ def get_session_trade_count(symbol, session_start_hour):
         if now.hour < session_start_hour:
             return 0
         result   = conn.execute(
-            'SELECT COUNT(*) FROM apex_trades WHERE symbol=? AND setup LIKE ? AND entry_time>=? AND status=?',
-            (symbol, 'FVG%', session_start.isoformat(), 'open')
+            'SELECT COUNT(*) FROM apex_trades WHERE symbol=? AND setup LIKE ? AND entry_time>=?',
+            (symbol, 'FVG%', session_start.isoformat())
         ).fetchone()[0]
         conn.close()
         return result
@@ -197,7 +197,12 @@ def score_fvg(fvg, df_15m, current_bar_time, vol_baseline):
 
     # 2. FRESHNESS (0-25 pts)
     try:
-        age_bars = len(df_15m[df_15m.index.tz_convert('UTC') > fvg['formed_at']])
+        if fvg['formed_at'] in df_15m.index:
+            formed_pos  = df_15m.index.get_loc(fvg['formed_at'])
+            current_pos = df_15m.index.searchsorted(current_bar_time, side='right') - 1
+            age_bars    = max(0, current_pos - formed_pos)
+        else:
+            age_bars = 99
         if age_bars <= 4:    score += 25
         elif age_bars <= 8:  score += 18
         elif age_bars <= 16: score += 10
@@ -347,11 +352,11 @@ def scan_fvg(symbol, dt=None):
         if fvg_score < min_score:
             continue
 
-        _mark_fvg_alerted(symbol, fvg['formed_at'])
-
         # Volume filter
         if vol_baseline > 0 and last_vol < params['vol_multiplier'] * vol_baseline:
             continue
+
+        _mark_fvg_alerted(symbol, fvg['formed_at'])
 
         # Calculate levels
         atr_val = float(atr_1m.iloc[-1]) if not pd.isna(atr_1m.iloc[-1]) else fvg['atr'] / 15
