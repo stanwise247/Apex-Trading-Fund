@@ -19,12 +19,13 @@ FVG_PARAMS = {
     'target_rr':          2.0,
     'max_trades_session': 3,
     'vol_multiplier':     1.0,
+    'min_score':          60,   # validated: Score 60 = Sharpe 6.46 OOS
     'session_windows': {
         'NQ': [{'start': 13, 'end': 19}],
         # ES disabled — last 3 months negative, monitoring
         # GC disabled — failed walk-forward validation
     },
-    'fvg_lookback_bars':  96,   # look back 96 x 15min = 24 hours
+    'fvg_lookback_bars':  96,
 }
 
 
@@ -155,6 +156,54 @@ def get_session_trade_count(symbol, session_start_hour):
         return 0
 
 
+def score_fvg(fvg, df_15m, current_bar_time, vol_baseline):
+    """Score FVG quality 0-100. Min 60 required to trade."""
+    score = 0
+
+    # 1. SIZE (0-30 pts)
+    size_ratio = fvg['size'] / fvg['atr'] if fvg['atr'] > 0 else 0
+    if size_ratio >= 1.0:   score += 30
+    elif size_ratio >= 0.7: score += 20
+    elif size_ratio >= 0.4: score += 10
+    else:                   score += 5
+
+    # 2. FRESHNESS (0-25 pts)
+    try:
+        age_bars = len(df_15m[df_15m.index.tz_convert('UTC') > fvg['formed_at']])
+        if age_bars <= 4:    score += 25
+        elif age_bars <= 8:  score += 18
+        elif age_bars <= 16: score += 10
+        elif age_bars <= 32: score += 5
+    except Exception:
+        score += 10
+
+    # 3. CLEAN (0-25 pts) — not heavily penetrated
+    try:
+        since = df_15m[df_15m.index >= fvg['formed_at']]
+        if fvg['type'] == 'bullish':
+            pen = (fvg['top'] - float(since['low'].min())) / fvg['size'] if fvg['size'] > 0 else 1
+        else:
+            pen = (float(since['high'].max()) - fvg['bottom']) / fvg['size'] if fvg['size'] > 0 else 1
+        if pen <= 0.25:   score += 25
+        elif pen <= 0.50: score += 15
+        elif pen <= 0.75: score += 5
+    except Exception:
+        score += 10
+
+    # 4. VOLUME (0-20 pts)
+    try:
+        if fvg['formed_at'] in df_15m.index and vol_baseline > 0:
+            vol_ratio = float(df_15m.loc[fvg['formed_at'], 'volume']) / vol_baseline
+            if vol_ratio >= 2.0:   score += 20
+            elif vol_ratio >= 1.5: score += 15
+            elif vol_ratio >= 1.0: score += 8
+            else:                  score += 3
+    except Exception:
+        score += 8
+
+    return score
+
+
 def scan_fvg(symbol, dt=None):
     """
     Scan for FVG signals on a symbol.
@@ -260,6 +309,14 @@ def scan_fvg(symbol, dt=None):
         # Duplicate prevention
         if _is_fvg_already_alerted(symbol, fvg['formed_at']):
             continue
+
+        # Quality score filter
+        vol_baseline_15m = float(df_15m['volume'].tail(20).mean())
+        fvg_score = score_fvg(fvg, df_15m, df_1m.index[-1], vol_baseline_15m)
+        min_score = params.get('min_score', 60)
+        if fvg_score < min_score:
+            continue
+
         _mark_fvg_alerted(symbol, fvg['formed_at'])
 
         # Volume filter
