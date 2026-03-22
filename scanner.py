@@ -210,13 +210,13 @@ def detect_open_fvgs(df, lookback=50, min_gap_pct=0.15):
     fvgs    = []
 
     for i in range(1, len(recent) - 1):
-        # Bullish FVG
-        if lows[i-1] > highs[i+1]:
-            top    = lows[i-1]
-            bottom = highs[i+1]
+        # Bullish FVG — gap up: bar i+1 low is above bar i-1 high
+        if lows[i+1] > highs[i-1]:
+            top     = lows[i+1]
+            bottom  = highs[i-1]
             gap_pct = (top - bottom) / closes[i] * 100
             if gap_pct >= min_gap_pct:
-                # Check if still unfilled (current price hasn't gone through it)
+                # Filled when price drops back to the bottom of the gap
                 min_since = min(lows[i+1:])
                 filled = min_since <= bottom
                 if not filled:
@@ -231,12 +231,13 @@ def detect_open_fvgs(df, lookback=50, min_gap_pct=0.15):
                         'bars_old':  len(recent) - i,
                         'actionable': current > bottom * 0.998 and current < top * 1.002
                     })
-        # Bearish FVG
-        if highs[i-1] < lows[i+1]:
-            bottom = highs[i-1]
-            top    = lows[i+1]
+        # Bearish FVG — gap down: bar i+1 high is below bar i-1 low
+        if highs[i+1] < lows[i-1]:
+            top     = lows[i-1]
+            bottom  = highs[i+1]
             gap_pct = (top - bottom) / closes[i] * 100
             if gap_pct >= min_gap_pct:
+                # Filled when price rallies back to the top of the gap
                 max_since = max(highs[i+1:])
                 filled = max_since >= top
                 if not filled:

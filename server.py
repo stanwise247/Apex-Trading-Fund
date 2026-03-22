@@ -1183,6 +1183,7 @@ def background_scheduler():
         # ── APEX Engine v2 — Setup B Scanner ──────────────────────
         try:
             from live_scanner import run_scan, send_telegram, format_alert, SignalTracker
+            from trade_tracker import log_trade
             if not hasattr(background_scheduler, '_apex_tracker'):
                 background_scheduler._apex_tracker = SignalTracker()
             tracker = background_scheduler._apex_tracker
@@ -1190,6 +1191,18 @@ def background_scheduler():
             for result in signals:
                 if tracker.is_new(result):
                     send_telegram(format_alert(result))
+                    log_trade({
+                        'symbol':    result.symbol,
+                        'direction': result.direction,
+                        'setup':     result.setup,
+                        'mode':      'swing',
+                        'entry':     result.entry,
+                        'stop':      result.stop,
+                        'target':    result.target,
+                        'rr':        result.rr,
+                        'session':   getattr(result, 'session', ''),
+                        'quality':   result.quality,
+                    })
                     logger.info(f'APEX signal: {result.symbol} {result.direction} {result.setup}')
             if not signals:
                 logger.debug('APEX scan: no signals')

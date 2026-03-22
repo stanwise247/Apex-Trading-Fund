@@ -53,20 +53,47 @@ def calc_atr(df, period=14):
     return tr.rolling(period).mean()
 
 
-# Track FVG zones already alerted this session
-_fvg_alerted = {}
+# Track FVG zones already alerted — persisted in DB so alerts survive process restarts
+
+def _init_fvg_alerted_table():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS fvg_alerted_zones (
+            symbol     TEXT NOT NULL,
+            formed_at  TEXT NOT NULL,
+            alerted_at TEXT NOT NULL,
+            PRIMARY KEY (symbol, formed_at)
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 def _is_fvg_already_alerted(symbol, fvg_formed_at):
-    key = symbol + '_' + str(fvg_formed_at.date())
-    if key not in _fvg_alerted:
-        _fvg_alerted[key] = set()
-    return str(fvg_formed_at) in _fvg_alerted[key]
+    try:
+        _init_fvg_alerted_table()
+        conn = sqlite3.connect(DB_PATH)
+        row  = conn.execute(
+            'SELECT 1 FROM fvg_alerted_zones WHERE symbol=? AND formed_at=?',
+            (symbol, str(fvg_formed_at))
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except Exception as e:
+        logger.warning(f'_is_fvg_already_alerted DB error: {e}')
+        return False
 
 def _mark_fvg_alerted(symbol, fvg_formed_at):
-    key = symbol + '_' + str(fvg_formed_at.date())
-    if key not in _fvg_alerted:
-        _fvg_alerted[key] = set()
-    _fvg_alerted[key].add(str(fvg_formed_at))
+    try:
+        _init_fvg_alerted_table()
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            'INSERT OR IGNORE INTO fvg_alerted_zones (symbol, formed_at, alerted_at) VALUES (?, ?, ?)',
+            (symbol, str(fvg_formed_at), datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f'_mark_fvg_alerted DB error: {e}')
 
 
 def detect_fvgs(df, atr, min_atr_mult=0.3, lookback=96):
@@ -145,10 +172,9 @@ def get_session_trade_count(symbol, session_start_hour):
         )
         if now.hour < session_start_hour:
             return 0
-        start_ts = int(session_start.timestamp())
         result   = conn.execute(
-            'SELECT COUNT(*) FROM apex_trades WHERE symbol=? AND setup LIKE ? AND entry_time>=?',
-            (symbol, 'FVG%', session_start.isoformat())
+            'SELECT COUNT(*) FROM apex_trades WHERE symbol=? AND setup LIKE ? AND entry_time>=? AND status=?',
+            (symbol, 'FVG%', session_start.isoformat(), 'open')
         ).fetchone()[0]
         conn.close()
         return result
@@ -228,9 +254,11 @@ def scan_fvg(symbol, dt=None):
         return signals
 
     # Check session trade count
-    sess_start = next((s['start'] for s in sessions if s['start'] <= hour < s['end']), None)
-    if sess_start is None:
+    sess_match = next((s for s in sessions if s['start'] <= hour < s['end']), None)
+    if sess_match is None:
         return signals
+    sess_start = sess_match['start']
+    sess_end   = sess_match['end']
 
     trade_count = get_session_trade_count(symbol, sess_start)
     if trade_count >= params['max_trades_session']:
@@ -355,7 +383,7 @@ def scan_fvg(symbol, dt=None):
             'fvg_mid':   round(fvg['mid'], 2),
             'bias':      bias,
             'quality':   'primary',
-            'session':   f'Session {sess_start:02d}:00-{sessions[0]["end"]:02d}:00 UTC',
+            'session':   f'Session {sess_start:02d}:00-{sess_end:02d}:00 UTC',
             'timestamp': df_1m.index[-1],
         })
 

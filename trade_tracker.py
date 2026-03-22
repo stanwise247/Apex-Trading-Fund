@@ -179,7 +179,8 @@ def send_exit_alert(trade: dict):
     """Send Telegram exit alert."""
     try:
         from live_scanner import send_telegram
-    except Exception:
+    except Exception as e:
+        logger.error(f'send_exit_alert: cannot import send_telegram: {e}')
         return
 
     pnl    = trade.get('pnl_r', 0)
@@ -229,9 +230,6 @@ def send_exit_alert(trade: dict):
 # ─────────────────────────────────────────────────────────────
 #  MONITOR OPEN TRADES
 # ─────────────────────────────────────────────────────────────
-
-# Track trades we've already sent exit alerts for this process run
-_alerted_exits = set()
 
 def monitor_trades():
     """
@@ -306,11 +304,8 @@ def monitor_trades():
                 exit_price  = price
 
         if exit_reason:
-            if t['id'] in _alerted_exits:
-                continue
             closed = close_trade(t['id'], exit_price, exit_reason)
             if closed:
-                _alerted_exits.add(t['id'])
                 send_exit_alert(closed)
                 logger.info(
                     f'Trade #{t["id"]} {sym} {direction} closed: '
