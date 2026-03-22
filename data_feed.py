@@ -46,7 +46,10 @@ def store_bars(symbol: str, timeframe: str, bars: list) -> int:
         return 0
     conn = sqlite3.connect(DB_PATH, timeout=30)
     c    = conn.cursor()
-    inserted = 0
+    count_before = c.execute(
+        'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
+        (symbol, timeframe)
+    ).fetchone()[0]
     for bar in bars:
         ts, o, h, l, close, vol = bar
         try:
@@ -61,13 +64,15 @@ def store_bars(symbol: str, timeframe: str, bars: list) -> int:
                  round(float(l), 2), round(float(close), 2),
                  float(vol))
             )
-            if c.rowcount > 0:
-                inserted += 1
         except Exception as e:
             logger.debug(f'Insert error {symbol} {timeframe}: {e}')
     conn.commit()
+    count_after = c.execute(
+        'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
+        (symbol, timeframe)
+    ).fetchone()[0]
     conn.close()
-    return inserted
+    return count_after - count_before
 
 
 def fetch_recent_bars(symbol: str, timeframe: str,
@@ -87,6 +92,7 @@ def fetch_recent_bars(symbol: str, timeframe: str,
 
     # Map timeframe to schema and aggregation
     schema_map = {
+        '1min':  ('ohlcv-1m', 1),
         '5min':  ('ohlcv-1m', 5),
         '15min': ('ohlcv-1m', 15),
         '1hour': ('ohlcv-1h', 1),
@@ -224,7 +230,7 @@ def refresh_all(include_htf: bool = False,
     Call every 5 minutes from scheduler.
     include_htf=True every 30 min — rebuilds 1hour/4hour from 5min.
     """
-    tfs = ['1min', '5min', '15min']
+    tfs = ['5min', '15min']
     if include_daily:
         tfs.append('1day')
 

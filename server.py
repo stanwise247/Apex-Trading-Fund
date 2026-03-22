@@ -314,12 +314,6 @@ def init_db():
         pattern_name TEXT, score REAL, direction TEXT, entry REAL, stop REAL,
         target1 REAL, target2 REAL, outcome TEXT DEFAULT 'pending',
         outcome_rr REAL, regime TEXT, notes TEXT)''')
-    # Ensure unique constraint exists on ohlcv table
-    try:
-        c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique ON ohlcv (symbol, timeframe, ts)')
-        logger.info('ohlcv unique index ensured')
-    except Exception as e:
-        logger.debug(f'Index check: {e}')
     conn.commit()
     conn.close()
     logger.info('Database initialised: ' + DB_PATH)
