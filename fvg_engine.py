@@ -320,6 +320,12 @@ def format_fvg_alert(signal):
     emoji = chr(128200) if dir_ == 'LONG' else chr(128201)
     bias  = signal['bias'].upper()
 
+    entry  = signal["entry"]
+    stop   = signal["stop"]
+    target = signal["target"]
+    stop_pts   = abs(round(entry - stop, 2))
+    target_pts = abs(round(entry - target, 2))
+
     parts = [
         f'{emoji} <b>APEX FVG — {sym}</b>',
         sep,
@@ -327,9 +333,9 @@ def format_fvg_alert(signal):
         f'<b>Setup:</b>     FVG Fill ({signal["fvg_top"]:.2f}-{signal["fvg_bottom"]:.2f})',
         f'<b>Bias:</b>      {bias} (4hour)',
         sep,
-        f'<b>Entry:</b>     {signal["entry"]:.2f}',
-        f'<b>Stop:</b>      {signal["stop"]:.2f}',
-        f'<b>Target:</b>    {signal["target"]:.2f}',
+        f'<b>Entry:</b>     {entry:.2f}',
+        f'<b>Stop:</b>      {stop:.2f} ({stop_pts} pts)',
+        f'<b>Target:</b>    {target:.2f} ({target_pts} pts)',
         f'<b>R:R:</b>       {signal["rr"]}x',
         f'<b>Hold:</b>      ~17 min avg',
         sep,
