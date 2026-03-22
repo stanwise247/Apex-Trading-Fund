@@ -52,6 +52,22 @@ def calc_atr(df, period=14):
     return tr.rolling(period).mean()
 
 
+# Track FVG zones already alerted this session
+_fvg_alerted = {}
+
+def _is_fvg_already_alerted(symbol, fvg_formed_at):
+    key = symbol + '_' + str(fvg_formed_at.date())
+    if key not in _fvg_alerted:
+        _fvg_alerted[key] = set()
+    return str(fvg_formed_at) in _fvg_alerted[key]
+
+def _mark_fvg_alerted(symbol, fvg_formed_at):
+    key = symbol + '_' + str(fvg_formed_at.date())
+    if key not in _fvg_alerted:
+        _fvg_alerted[key] = set()
+    _fvg_alerted[key].add(str(fvg_formed_at))
+
+
 def detect_fvgs(df, atr, min_atr_mult=0.3, lookback=96):
     """Detect recent FVGs on a dataframe."""
     fvgs = []
@@ -150,6 +166,11 @@ def scan_fvg(symbol, dt=None):
     signals = []
     params  = FVG_PARAMS
 
+    # Check weekend
+    if dt.weekday() >= 5:
+        logger.debug(f'FVG scan skipped — weekend')
+        return signals
+
     # Check session
     hour = dt.hour
     sessions = params['session_windows'].get(symbol, [])
@@ -186,6 +207,15 @@ def scan_fvg(symbol, dt=None):
     atr_1m = calc_atr(df_1m, 14)
 
     if df_1m.empty:
+        return signals
+
+    # Staleness check — last bar must be within 15 minutes of now
+    last_bar_time = df_1m.index[-1]
+    if last_bar_time.tzinfo is None:
+        last_bar_time = last_bar_time.tz_localize('UTC')
+    age_minutes = (dt.replace(tzinfo=timezone.utc) - last_bar_time).total_seconds() / 60
+    if age_minutes > 15:
+        logger.warning(f'FVG scan skipped — data {round(age_minutes)}min stale (last bar {last_bar_time.strftime("%H:%M")} UTC)')
         return signals
 
     # Current bar
@@ -226,6 +256,11 @@ def scan_fvg(symbol, dt=None):
 
         if direction is None:
             continue
+
+        # Duplicate prevention
+        if _is_fvg_already_alerted(symbol, fvg['formed_at']):
+            continue
+        _mark_fvg_alerted(symbol, fvg['formed_at'])
 
         # Volume filter
         if vol_baseline > 0 and last_vol < params['vol_multiplier'] * vol_baseline:
