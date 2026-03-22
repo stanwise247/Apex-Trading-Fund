@@ -107,14 +107,14 @@ def log_trade(signal: dict) -> int:
 #  GET CURRENT PRICE
 # ─────────────────────────────────────────────────────────────
 
-def get_current_price(symbol: str) -> float:
+def get_current_price(symbol: str, timeframe: str = '5min') -> float:
     """Get the most recent close price from the database."""
     try:
         conn = sqlite3.connect(DB_PATH)
         df_row = conn.execute(
             'SELECT close FROM ohlcv WHERE symbol=? AND timeframe=? '
             'ORDER BY ts DESC LIMIT 1',
-            (symbol, '5min')
+            (symbol, timeframe)
         ).fetchone()
         conn.close()
         return float(df_row[0]) if df_row else None
@@ -261,7 +261,8 @@ def monitor_trades():
         target    = float(t['target'])
         mode      = t.get('mode', 'swing')
 
-        price = get_current_price(sym)
+        is_fvg = t.get('setup', '').startswith('FVG')
+        price = get_current_price(sym, timeframe='1min' if is_fvg else '5min')
         if price is None:
             continue
 
@@ -297,7 +298,8 @@ def monitor_trades():
             entry_time = datetime.fromisoformat(t['entry_time'])
             if entry_time.tzinfo is None:
                 entry_time = entry_time.replace(tzinfo=timezone.utc)
-            bars_held = int((now - entry_time).total_seconds() / 300)  # 5min bars
+            bar_seconds = 60 if is_fvg else 300
+            bars_held = int((now - entry_time).total_seconds() / bar_seconds)
             max_b = MAX_BARS.get(mode, 100)
             if bars_held >= max_b:
                 exit_reason = 'max_bars'
