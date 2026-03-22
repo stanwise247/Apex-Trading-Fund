@@ -44,12 +44,14 @@ def store_bars(symbol: str, timeframe: str, bars: list) -> int:
     """Store bars in SQLite. Returns number of new bars inserted."""
     if not bars:
         return 0
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c    = conn.cursor()
     inserted = 0
     for bar in bars:
         ts, o, h, l, close, vol = bar
         try:
+            # INSERT OR REPLACE intentionally overwrites stale bars with fresh Databento data.
+            # server.py:store_ohlcv uses INSERT OR IGNORE — two deliberate strategies.
             c.execute(
                 'INSERT OR REPLACE INTO ohlcv '
                 '(symbol, timeframe, ts, open, high, low, close, volume) '
@@ -155,7 +157,7 @@ def fetch_recent_bars(symbol: str, timeframe: str,
 
 def build_htf_from_5min(symbol: str) -> dict:
     """Build 1hour and 4hour bars by aggregating 5min bars already in DB."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     df   = pd.read_sql_query(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts ASC',
@@ -239,7 +241,7 @@ def refresh_all(include_htf: bool = False,
 def get_latest_bar(symbol: str, timeframe: str = '5min') -> dict:
     """Return the most recent bar for a symbol."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         df   = pd.read_sql_query(
             'SELECT ts, open, high, low, close, volume FROM ohlcv '
             'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 1',
@@ -292,7 +294,7 @@ if __name__ == '__main__':
                 print(f'  {sym} {tf}: +{count} new bars')
 
     print('\nLatest bars in DB:')
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     for sym in ('NQ', 'ES', 'GC'):
         for tf in ('5min', '15min', '1hour', '4hour'):
             df = pd.read_sql_query(

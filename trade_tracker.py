@@ -34,7 +34,7 @@ MAX_BARS = {
 
 def init_trades_table():
     """Create trades table if it doesn't exist."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS apex_trades (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +74,7 @@ def log_trade(signal: dict) -> int:
                       stop, target, rr, session, quality
     """
     init_trades_table()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c    = conn.cursor()
     now  = datetime.now(timezone.utc).isoformat()
 
@@ -110,7 +110,7 @@ def log_trade(signal: dict) -> int:
 def get_current_price(symbol: str, timeframe: str = '5min') -> float:
     """Get the most recent close price from the database."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         df_row = conn.execute(
             'SELECT close FROM ohlcv WHERE symbol=? AND timeframe=? '
             'ORDER BY ts DESC LIMIT 1',

@@ -20,6 +20,9 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger('APEX')
 
+# Prevents concurrent backfill threads from contending on write locks
+_backfill_lock = threading.Lock()
+
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
@@ -290,7 +293,8 @@ def fetch_bars(symbol, tf_label, years=3):
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute('PRAGMA journal_mode=WAL')   # allow concurrent reads during writes
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS ohlcv (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,7 +328,7 @@ def init_db():
 def store_ohlcv(symbol, timeframe, bars):
     if not bars:
         return 0
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c = conn.cursor()
     stored = 0
     for bar in bars:
@@ -345,7 +349,7 @@ def store_ohlcv(symbol, timeframe, bars):
 
 
 def get_ohlcv(symbol, timeframe, limit=500):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c = conn.cursor()
     c.execute(
         'SELECT ts,open,high,low,close,volume FROM ohlcv WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
@@ -357,7 +361,7 @@ def get_ohlcv(symbol, timeframe, limit=500):
 
 
 def get_db_stats():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c = conn.cursor()
     c.execute('SELECT symbol,timeframe,COUNT(*),MIN(ts),MAX(ts) FROM ohlcv GROUP BY symbol,timeframe')
     rows = c.fetchall()
@@ -375,21 +379,27 @@ def backfill_history(symbol, years=5):
     if not info:
         logger.warning('Unknown symbol: ' + symbol)
         return
-    source = 'Databento' if (info.get('databento') and DATABENTO_API_KEY) else 'yfinance'
-    logger.info(f'Backfill started: {symbol} (source={source})')
-    for tf in ['1week', '1day', '4hour', '1hour', '15min', '5min']:
-        try:
-            logger.info('  Fetching ' + symbol + ' ' + tf + '...')
-            bars = fetch_bars(symbol, tf, years)
-            if bars:
-                stored = store_ohlcv(symbol, tf, bars)
-                logger.info('  OK ' + symbol + ' ' + tf + ': ' + str(stored) + ' new bars (' + str(len(bars)) + ' total)')
-            else:
-                logger.warning('  FAIL ' + symbol + ' ' + tf + ': no data')
-            time.sleep(1)
-        except Exception as e:
-            logger.error('  Error ' + symbol + ' ' + tf + ': ' + str(e))
-    logger.info('Backfill complete: ' + symbol)
+    if not _backfill_lock.acquire(blocking=False):
+        logger.warning(f'Backfill skipped for {symbol} — another backfill already running')
+        return
+    try:
+        source = 'Databento' if (info.get('databento') and DATABENTO_API_KEY) else 'yfinance'
+        logger.info(f'Backfill started: {symbol} (source={source})')
+        for tf in ['1week', '1day', '4hour', '1hour', '15min', '5min']:
+            try:
+                logger.info('  Fetching ' + symbol + ' ' + tf + '...')
+                bars = fetch_bars(symbol, tf, years)
+                if bars:
+                    stored = store_ohlcv(symbol, tf, bars)
+                    logger.info('  OK ' + symbol + ' ' + tf + ': ' + str(stored) + ' new bars (' + str(len(bars)) + ' total)')
+                else:
+                    logger.warning('  FAIL ' + symbol + ' ' + tf + ': no data')
+                time.sleep(1)
+            except Exception as e:
+                logger.error('  Error ' + symbol + ' ' + tf + ': ' + str(e))
+        logger.info('Backfill complete: ' + symbol)
+    finally:
+        _backfill_lock.release()
 
 
 def daily_update(symbol):
@@ -974,7 +984,7 @@ def db_backfill():
 
 @app.route('/api/patterns')
 def patterns():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     c    = conn.cursor()
     c.execute('SELECT * FROM patterns WHERE active=1 ORDER BY edge_score DESC')
     cols = [d[0] for d in c.description]
@@ -987,7 +997,7 @@ def patterns():
 @app.route('/api/signals')
 def scan_log():
     limit = int(request.args.get('limit', 50))
-    conn  = sqlite3.connect(DB_PATH)
+    conn  = sqlite3.connect(DB_PATH, timeout=30)
     c     = conn.cursor()
     c.execute('SELECT * FROM scan_log ORDER BY ts DESC LIMIT ?', (limit,))
     cols = [d[0] for d in c.description]
@@ -1078,7 +1088,7 @@ def background_scheduler():
         if now - last_macro_log > 14400:
             try:
                 m    = fetch_macro_live()
-                conn = sqlite3.connect(DB_PATH)
+                conn = sqlite3.connect(DB_PATH, timeout=30)
                 c    = conn.cursor()
                 c.execute(
                     'INSERT INTO macro_log (ts,date,vix,tnx,irx,dxy,gold,oil,regime,notes) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -1120,7 +1130,7 @@ def background_scheduler():
                     NY = ZoneInfo('America/New_York')
                     init_trades_table()
                     import sqlite3
-                    conn = sqlite3.connect('apex_market.db')
+                    conn = sqlite3.connect(DB_PATH, timeout=30)
                     today = str(_now.date())
                     trades = conn.execute(
                         'SELECT symbol, direction, setup, pnl_r, exit_reason FROM apex_trades '
@@ -1580,7 +1590,7 @@ def paper_reset():
         set_account_value('starting_balance', balance)
         set_account_value('peak_balance', balance)
         set_account_value('total_trades', 0)
-        conn = sqlite3.connect(config['db_path'])
+        conn = sqlite3.connect(config['db_path'], timeout=30)
         conn.execute("UPDATE paper_positions SET status='closed' WHERE status='open'")
         conn.commit()
         conn.close()
@@ -1673,7 +1683,7 @@ def _startup():
         _t.sleep(10)
         try:
             import sqlite3 as _sq
-            conn = _sq.connect(DB_PATH)
+            conn = _sq.connect(DB_PATH, timeout=30)
             count = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol='ES'").fetchone()[0]
             conn.close()
             if count < 100:

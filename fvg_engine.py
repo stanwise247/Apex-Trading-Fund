@@ -30,7 +30,7 @@ FVG_PARAMS = {
 
 
 def load_bars(symbol, timeframe, limit=500):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     df   = pd.read_sql_query(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
@@ -56,7 +56,7 @@ def calc_atr(df, period=14):
 # Track FVG zones already alerted — persisted in DB so alerts survive process restarts
 
 def _init_fvg_alerted_table():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS fvg_alerted_zones (
             symbol     TEXT NOT NULL,
@@ -71,7 +71,7 @@ def _init_fvg_alerted_table():
 def _is_fvg_already_alerted(symbol, fvg_formed_at):
     try:
         _init_fvg_alerted_table()
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         row  = conn.execute(
             'SELECT 1 FROM fvg_alerted_zones WHERE symbol=? AND formed_at=?',
             (symbol, str(fvg_formed_at))
@@ -79,13 +79,15 @@ def _is_fvg_already_alerted(symbol, fvg_formed_at):
         conn.close()
         return row is not None
     except Exception as e:
-        logger.warning(f'_is_fvg_already_alerted DB error: {e}')
-        return False
+        # Fail safe: if we can't confirm the zone hasn't been alerted, assume it has
+        # to prevent duplicate entry alerts under DB contention
+        logger.warning(f'_is_fvg_already_alerted DB error (skipping alert): {e}')
+        return True
 
 def _mark_fvg_alerted(symbol, fvg_formed_at):
     try:
         _init_fvg_alerted_table()
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute(
             'INSERT OR IGNORE INTO fvg_alerted_zones (symbol, formed_at, alerted_at) VALUES (?, ?, ?)',
             (symbol, str(fvg_formed_at), datetime.now(timezone.utc).isoformat())
@@ -165,7 +167,7 @@ def get_htf_bias(symbol):
 def get_session_trade_count(symbol, session_start_hour):
     """Count FVG trades already taken in current session."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         now  = datetime.now(timezone.utc)
         session_start = now.replace(
             hour=session_start_hour, minute=0, second=0, microsecond=0
