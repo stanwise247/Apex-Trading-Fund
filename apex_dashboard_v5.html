@@ -6,7 +6,7 @@
 <title>APEX Markets — Stanley Wise</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:#0a0a0a}
@@ -285,6 +285,9 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
         <div class="status-row"><span class="status-label">Scanner</span><div class="status-val"><div class="status-dot"></div>Every 5 min</div></div>
         <div class="status-row"><span class="status-label">Telegram</span><div class="status-val"><div class="status-dot"></div>Connected</div></div>
         <div class="status-row"><span class="status-label">Railway</span><div class="status-val"><div class="status-dot"></div>Deployed</div></div>
+        <div style="margin-top:12px">
+          <button class="btn btn-outline" style="width:100%;font-size:11px" onclick="seedTrades()" id="seed-btn">&#127807; Seed Test Trades</button>
+        </div>
       </div>
     </div>
   </div>
@@ -622,10 +625,9 @@ async function loadEquityChart() {
 
 // ── Candlestick Charts ────────────────────────────────────────
 function getLwChartOptions(containerId) {
-  const el = document.getElementById(containerId);
   return {
-    width:  el ? el.clientWidth  : 300,
-    height: el ? el.clientHeight : 240,
+    autoSize: true,
+    height: 240,
     layout: {
       background:  { color: '#ffffff' },
       textColor:   '#888888',
@@ -671,12 +673,7 @@ async function loadCandleChart(symbol, openTrades) {
         wickUpColor:    '#22c55e',
         wickDownColor:  '#ef4444',
       });
-      _lwCharts[symbol] = { chart, series };
-
-      // Resize observer
-      new ResizeObserver(() => {
-        chart.applyOptions({ width: container.clientWidth });
-      }).observe(container);
+      _lwCharts[symbol] = { chart, series, priceLines: [] };
     }
 
     const { chart, series } = _lwCharts[symbol];
@@ -691,9 +688,7 @@ async function loadCandleChart(symbol, openTrades) {
     })));
 
     // Remove old price lines, re-add from open trades
-    series.dataByIndex; // force render
-    // Clear existing price lines by recreating series options — lightweight-charts
-    // doesn't have a bulk removePriceLine, so track them per symbol
+    // Clear existing price lines tracked per symbol
     if (!_lwCharts[symbol].priceLines) _lwCharts[symbol].priceLines = [];
     _lwCharts[symbol].priceLines.forEach(pl => {
       try { series.removePriceLine(pl); } catch(e) {}
@@ -881,6 +876,28 @@ async function testTelegram() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '&#128172; Test Telegram';
+  }
+}
+
+// ── Seed test trades ─────────────────────────────────────────
+async function seedTrades() {
+  const btn = document.getElementById('seed-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>Seeding...';
+  try {
+    const res  = await fetch(API + '/api/apex/trades/seed', {method:'POST'});
+    const data = await res.json();
+    if (data.ok) {
+      showToast('✅ ' + data.message);
+      await refresh();
+    } else {
+      showToast('❌ Seed failed: ' + (data.error||'unknown'));
+    }
+  } catch(e) {
+    showToast('❌ Request failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#127807; Seed Test Trades';
   }
 }
 

@@ -1668,6 +1668,12 @@ def _startup():
     logger.info('=' * 55)
     init_db()
     try:
+        from trade_tracker import init_trades_table as _itt
+        _itt()
+        logger.info('  apex_trades table ready')
+    except Exception as e:
+        logger.warning('  apex_trades init failed: ' + str(e))
+    try:
         from paper_trader import init_paper_db, get_account_value, set_account_value
         init_paper_db()
         bal = get_account_value('balance')
@@ -1854,6 +1860,8 @@ def apex_candles(symbol):
 def apex_equity():
     """Return compounding equity curve: $10k start, 1% risk per trade."""
     try:
+        from trade_tracker import init_trades_table
+        init_trades_table()
         conn = sqlite3.connect(DB_PATH, timeout=30)
         trades = conn.execute(
             'SELECT entry_time, exit_time, pnl_r FROM apex_trades '
@@ -1885,6 +1893,61 @@ def apex_equity():
             'current_balance': round(balance, 2),
             'max_drawdown': max_dd,
         })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/trades/seed', methods=['POST'])
+def apex_trades_seed():
+    """Insert sample closed trades so the equity curve and history render."""
+    from trade_tracker import init_trades_table
+    init_trades_table()
+    SEED = [
+        # symbol, dir, setup, mode, entry, stop, target, rr, session, quality,
+        # entry_time, exit_time, exit_price, pnl_r, exit_reason
+        ('NQ','long', 'A_sweep_ob',     'swing', 20320.0, 20245.0, 20620.0, 4.0,
+         'NY Primary','primary',  '2026-03-10T14:15:00+00:00','2026-03-10T15:45:00+00:00', 20620.0,  4.0, 'target'),
+        ('ES','short','B_choch_breaker','swing',  5630.0,  5660.0,  5510.0, 4.0,
+         'NY Primary','primary',  '2026-03-11T14:00:00+00:00','2026-03-11T16:30:00+00:00',  5510.0,  4.0, 'target'),
+        ('NQ','short','C_bos_ob',       'swing', 20580.0, 20655.0, 20280.0, 4.0,
+         'London',    'secondary','2026-03-12T08:30:00+00:00','2026-03-12T09:15:00+00:00', 20655.0, -1.0, 'stop'),
+        ('GC','long', 'A_sweep_ob',     'swing',  3020.0,  3005.0,  3080.0, 4.0,
+         'GC Primary','primary',  '2026-03-13T13:00:00+00:00','2026-03-13T14:30:00+00:00',  3080.0,  4.0, 'target'),
+        ('NQ','long', 'FVG_bull',       'scalp', 20700.0, 20650.0, 20800.0, 2.0,
+         'NY Primary','primary',  '2026-03-14T14:05:00+00:00','2026-03-14T14:35:00+00:00', 20800.0,  2.0, 'target'),
+        ('ES','long', 'A_sweep_ob',     'swing',  5710.0,  5670.0,  5870.0, 4.0,
+         'NY Primary','primary',  '2026-03-17T14:30:00+00:00','2026-03-17T15:45:00+00:00',  5790.0,  2.0, 'partial'),
+        ('NQ','long', 'B_choch_breaker','swing', 20850.0, 20775.0, 21150.0, 4.0,
+         'NY Primary','primary',  '2026-03-18T13:45:00+00:00','2026-03-18T15:30:00+00:00', 20775.0, -1.0, 'stop'),
+        ('GC','short','C_bos_ob',       'swing',  3090.0,  3110.0,  3010.0, 4.0,
+         'GC Primary','primary',  '2026-03-19T13:00:00+00:00','2026-03-19T14:45:00+00:00',  3010.0,  4.0, 'target'),
+    ]
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        inserted = 0
+        for row in SEED:
+            (sym, dr, setup, mode, entry, stop, tgt, rr, sess, qual,
+             ent_t, ex_t, ex_p, pnl, reason) = row
+            risk = abs(entry - stop)
+            # Verify pnl_r matches prices
+            if risk > 0:
+                calc_pnl = round((ex_p - entry) / risk if dr == 'long' else (entry - ex_p) / risk, 3)
+            else:
+                calc_pnl = pnl
+            conn.execute(
+                'INSERT OR IGNORE INTO apex_trades '
+                '(symbol,direction,setup,mode,entry_price,stop,target,rr_planned,'
+                ' session,quality,entry_time,exit_price,exit_time,exit_reason,pnl_r,status,bars_held) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (sym, dr, setup, mode, entry, stop, tgt, rr,
+                 sess, qual, ent_t, ex_p, ex_t, reason, calc_pnl, 'closed', 0)
+            )
+            inserted += conn.execute('SELECT changes()').fetchone()[0]
+        conn.commit()
+        conn.close()
+        logger.info(f'Seed trades inserted: {inserted}')
+        return jsonify({'ok': True, 'inserted': inserted,
+                        'message': f'Seeded {inserted} sample trades (skipped duplicates)'})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
