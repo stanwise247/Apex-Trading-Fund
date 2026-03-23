@@ -286,7 +286,10 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
         <div class="status-row"><span class="status-label">Telegram</span><div class="status-val"><div class="status-dot"></div>Connected</div></div>
         <div class="status-row"><span class="status-label">Railway</span><div class="status-val"><div class="status-dot"></div>Deployed</div></div>
         <div style="margin-top:12px">
-          <button class="btn btn-outline" style="width:100%;font-size:11px" onclick="seedTrades()" id="seed-btn">&#127807; Seed Test Trades</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-outline" style="flex:1;font-size:11px" onclick="seedTrades()" id="seed-btn">&#127807; Seed</button>
+            <button class="btn btn-outline" style="flex:1;font-size:11px;color:#dc2626;border-color:#fecaca" onclick="resetTrades()" id="reset-btn">&#128465; Reset</button>
+          </div>
         </div>
       </div>
     </div>
@@ -898,6 +901,27 @@ async function seedTrades() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '&#127807; Seed Test Trades';
+  }
+}
+
+async function resetTrades() {
+  const btn = document.getElementById('reset-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>';
+  try {
+    const res  = await fetch(API + '/api/apex/trades/reset', {method:'DELETE'});
+    const data = await res.json();
+    if (data.ok) {
+      showToast('🗑 ' + data.message);
+      await refresh();
+    } else {
+      showToast('❌ Reset failed: ' + (data.error||'unknown'));
+    }
+  } catch(e) {
+    showToast('❌ Request failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#128465; Reset';
   }
 }
 

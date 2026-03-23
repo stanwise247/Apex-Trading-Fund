@@ -1937,10 +1937,10 @@ def apex_trades_seed():
             conn.execute(
                 'INSERT OR IGNORE INTO apex_trades '
                 '(symbol,direction,setup,mode,entry_price,stop,target,rr_planned,'
-                ' session,quality,entry_time,exit_price,exit_time,exit_reason,pnl_r,status,bars_held) '
-                'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ' session,quality,entry_time,exit_price,exit_time,exit_reason,pnl_r,status,bars_held,notes) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (sym, dr, setup, mode, entry, stop, tgt, rr,
-                 sess, qual, ent_t, ex_p, ex_t, reason, calc_pnl, 'closed', 0)
+                 sess, qual, ent_t, ex_p, ex_t, reason, calc_pnl, 'closed', 0, 'seeded')
             )
             inserted += conn.execute('SELECT changes()').fetchone()[0]
         conn.commit()
@@ -1948,6 +1948,24 @@ def apex_trades_seed():
         logger.info(f'Seed trades inserted: {inserted}')
         return jsonify({'ok': True, 'inserted': inserted,
                         'message': f'Seeded {inserted} sample trades (skipped duplicates)'})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/trades/reset', methods=['DELETE'])
+def apex_trades_reset():
+    """Remove all seeded test trades (notes='seeded')."""
+    try:
+        from trade_tracker import init_trades_table
+        init_trades_table()
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.execute("DELETE FROM apex_trades WHERE notes='seeded'")
+        deleted = conn.execute('SELECT changes()').fetchone()[0]
+        conn.commit()
+        conn.close()
+        logger.info(f'Seed trades deleted: {deleted}')
+        return jsonify({'ok': True, 'deleted': deleted,
+                        'message': f'Removed {deleted} seeded test trades'})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
