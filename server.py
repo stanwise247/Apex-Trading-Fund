@@ -1833,17 +1833,26 @@ def apex_market():
 
 
 @app.route('/api/apex/candles/<symbol>', methods=['GET'])
-def apex_candles(symbol):
-    """Return last 100 5min OHLCV bars for lightweight-charts (time, open, high, low, close, volume)."""
+@app.route('/api/apex/candles/<symbol>/<timeframe>', methods=['GET'])
+def apex_candles(symbol, timeframe='5m'):
+    """Return OHLCV bars for lightweight-charts. Timeframe: 1m 5m 15m 1h 4h."""
     symbol = symbol.upper()
     if symbol not in INSTRUMENTS:
         return jsonify({'ok': False, 'error': 'Unknown symbol'})
+    TF_MAP = {
+        '1m':  ('1min',   200),
+        '5m':  ('5min',   100),
+        '15m': ('15min',  100),
+        '1h':  ('1hour',  100),
+        '4h':  ('4hour',  100),
+    }
+    db_tf, limit = TF_MAP.get(timeframe, ('5min', 100))
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         rows = conn.execute(
             'SELECT ts, open, high, low, close, volume FROM ohlcv '
-            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 100',
-            (symbol, '5min')
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
+            (symbol, db_tf, limit)
         ).fetchall()
         conn.close()
         bars = [
@@ -1851,7 +1860,7 @@ def apex_candles(symbol):
              'low': float(r[3]), 'close': float(r[4]), 'volume': float(r[5])}
             for r in reversed(rows)
         ]
-        return jsonify({'ok': True, 'symbol': symbol, 'bars': bars})
+        return jsonify({'ok': True, 'symbol': symbol, 'timeframe': timeframe, 'bars': bars})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 

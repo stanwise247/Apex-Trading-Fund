@@ -137,12 +137,24 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
 .candle-section{margin-top:24px}
 .candle-row{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 .candle-card-inner{padding:16px}
-.candle-sym-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.candle-sym-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap}
 .candle-sym-title{font-size:13px;font-weight:700}
-.candle-tf{font-size:11px;color:#bbb;margin-left:6px}
-.candle-trade-levels{display:flex;gap:8px;flex-wrap:wrap}
+.candle-trade-levels{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .candle-chart-wrap{height:240px;position:relative}
 .candle-empty{height:240px;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:12px;border:1.5px dashed #efefef;border-radius:8px}
+/* Timeframe buttons */
+.tf-btns{display:flex;gap:2px}
+.tf-btn{padding:2px 7px;font-size:10px;font-weight:500;border-radius:4px;border:1px solid #e5e5e5;background:white;color:#aaa;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .1s;line-height:1.6}
+.tf-btn:hover{background:#f5f5f5;color:#0a0a0a}
+.tf-btn.active{background:#0a0a0a;color:white;border-color:#0a0a0a}
+/* Fullscreen */
+.candle-icon-btn{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;border:1px solid #e5e5e5;background:white;color:#aaa;cursor:pointer;font-size:11px;transition:all .1s;line-height:1;padding:0}
+.candle-icon-btn:hover{background:#f5f5f5;color:#0a0a0a}
+.candle-card-fs{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:500!important;border-radius:0!important;overflow:hidden!important;display:flex;flex-direction:column}
+.candle-card-fs .candle-card-inner{flex:1;display:flex;flex-direction:column;padding:12px 16px}
+.candle-card-fs .candle-chart-wrap{flex:1;height:auto!important}
+/* Last updated */
+.candle-updated{font-family:'DM Mono',monospace;font-size:10px;color:#d1d5db;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -298,33 +310,79 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
   <!-- Candlestick Charts Row -->
   <div class="candle-section">
     <div class="candle-row">
-      <div class="card">
+
+      <div class="card" id="candle-card-NQ">
         <div class="candle-card-inner">
           <div class="candle-sym-header">
-            <div><span class="candle-sym-title">NQ</span><span class="candle-tf">5min</span></div>
-            <div class="candle-trade-levels" id="nq-trade-levels"></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="candle-sym-title">NQ</span>
+              <div class="tf-btns" id="tf-NQ">
+                <button class="tf-btn" data-tf="1m"  onclick="setTf('NQ','1m')">1m</button>
+                <button class="tf-btn active" data-tf="5m" onclick="setTf('NQ','5m')">5m</button>
+                <button class="tf-btn" data-tf="15m" onclick="setTf('NQ','15m')">15m</button>
+                <button class="tf-btn" data-tf="1h"  onclick="setTf('NQ','1h')">1h</button>
+                <button class="tf-btn" data-tf="4h"  onclick="setTf('NQ','4h')">4h</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="candle-updated" id="updated-NQ"></span>
+              <div class="candle-trade-levels" id="nq-trade-levels"></div>
+              <button class="candle-icon-btn" id="fs-btn-NQ"    onclick="toggleFs('NQ')" title="Fullscreen">&#x26F6;</button>
+              <button class="candle-icon-btn" id="close-btn-NQ" onclick="toggleFs('NQ')" title="Exit fullscreen" style="display:none">&#x2715;</button>
+            </div>
           </div>
           <div class="candle-chart-wrap" id="chart-NQ"></div>
         </div>
       </div>
-      <div class="card">
+
+      <div class="card" id="candle-card-ES">
         <div class="candle-card-inner">
           <div class="candle-sym-header">
-            <div><span class="candle-sym-title">ES</span><span class="candle-tf">5min</span></div>
-            <div class="candle-trade-levels" id="es-trade-levels"></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="candle-sym-title">ES</span>
+              <div class="tf-btns" id="tf-ES">
+                <button class="tf-btn" data-tf="1m"  onclick="setTf('ES','1m')">1m</button>
+                <button class="tf-btn active" data-tf="5m" onclick="setTf('ES','5m')">5m</button>
+                <button class="tf-btn" data-tf="15m" onclick="setTf('ES','15m')">15m</button>
+                <button class="tf-btn" data-tf="1h"  onclick="setTf('ES','1h')">1h</button>
+                <button class="tf-btn" data-tf="4h"  onclick="setTf('ES','4h')">4h</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="candle-updated" id="updated-ES"></span>
+              <div class="candle-trade-levels" id="es-trade-levels"></div>
+              <button class="candle-icon-btn" id="fs-btn-ES"    onclick="toggleFs('ES')" title="Fullscreen">&#x26F6;</button>
+              <button class="candle-icon-btn" id="close-btn-ES" onclick="toggleFs('ES')" title="Exit fullscreen" style="display:none">&#x2715;</button>
+            </div>
           </div>
           <div class="candle-chart-wrap" id="chart-ES"></div>
         </div>
       </div>
-      <div class="card">
+
+      <div class="card" id="candle-card-GC">
         <div class="candle-card-inner">
           <div class="candle-sym-header">
-            <div><span class="candle-sym-title">GC</span><span class="candle-tf">5min</span></div>
-            <div class="candle-trade-levels" id="gc-trade-levels"></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="candle-sym-title">GC</span>
+              <div class="tf-btns" id="tf-GC">
+                <button class="tf-btn" data-tf="1m"  onclick="setTf('GC','1m')">1m</button>
+                <button class="tf-btn active" data-tf="5m" onclick="setTf('GC','5m')">5m</button>
+                <button class="tf-btn" data-tf="15m" onclick="setTf('GC','15m')">15m</button>
+                <button class="tf-btn" data-tf="1h"  onclick="setTf('GC','1h')">1h</button>
+                <button class="tf-btn" data-tf="4h"  onclick="setTf('GC','4h')">4h</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="candle-updated" id="updated-GC"></span>
+              <div class="candle-trade-levels" id="gc-trade-levels"></div>
+              <button class="candle-icon-btn" id="fs-btn-GC"    onclick="toggleFs('GC')" title="Fullscreen">&#x26F6;</button>
+              <button class="candle-icon-btn" id="close-btn-GC" onclick="toggleFs('GC')" title="Exit fullscreen" style="display:none">&#x2715;</button>
+            </div>
           </div>
           <div class="candle-chart-wrap" id="chart-GC"></div>
         </div>
       </div>
+
     </div>
   </div>
 
@@ -627,7 +685,65 @@ async function loadEquityChart() {
 }
 
 // ── Candlestick Charts ────────────────────────────────────────
-function getLwChartOptions(containerId) {
+
+// Per-chart state
+const _chartTf = { NQ: '5m', ES: '5m', GC: '5m' };
+
+function setTf(symbol, tf) {
+  _chartTf[symbol] = tf;
+  document.querySelectorAll('#tf-' + symbol + ' .tf-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tf === tf);
+  });
+  // Destroy existing chart instance so it re-creates at correct tf
+  if (_lwCharts[symbol]) {
+    try { _lwCharts[symbol].chart.remove(); } catch(e) {}
+    delete _lwCharts[symbol];
+    const wrap = document.getElementById('chart-' + symbol);
+    if (wrap) wrap.innerHTML = '';
+  }
+  loadCandleChart(symbol, _lastOpenTrades);
+}
+
+function toggleFs(symbol) {
+  const card      = document.getElementById('candle-card-' + symbol);
+  const chartWrap = document.getElementById('chart-' + symbol);
+  const fsBtn     = document.getElementById('fs-btn-' + symbol);
+  const closeBtn  = document.getElementById('close-btn-' + symbol);
+  const isFs      = card.classList.contains('candle-card-fs');
+
+  if (isFs) {
+    card.classList.remove('candle-card-fs');
+    document.body.style.overflow = '';
+    fsBtn.style.display   = '';
+    closeBtn.style.display = 'none';
+    if (_lwCharts[symbol]) {
+      _lwCharts[symbol].chart.applyOptions({ height: 240 });
+      setTimeout(() => _lwCharts[symbol].chart.timeScale().fitContent(), 50);
+    }
+  } else {
+    card.classList.add('candle-card-fs');
+    document.body.style.overflow = 'hidden';
+    fsBtn.style.display   = 'none';
+    closeBtn.style.display = '';
+    const h = Math.max(300, window.innerHeight - 80);
+    if (_lwCharts[symbol]) {
+      _lwCharts[symbol].chart.applyOptions({ height: h });
+      setTimeout(() => _lwCharts[symbol].chart.timeScale().fitContent(), 50);
+    }
+  }
+}
+
+// Escape key exits fullscreen
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    ['NQ','ES','GC'].forEach(sym => {
+      const card = document.getElementById('candle-card-' + sym);
+      if (card && card.classList.contains('candle-card-fs')) toggleFs(sym);
+    });
+  }
+});
+
+function _lwChartOptions() {
   return {
     autoSize: true,
     height: 240,
@@ -652,8 +768,9 @@ function getLwChartOptions(containerId) {
 }
 
 async function loadCandleChart(symbol, openTrades) {
+  const tf = _chartTf[symbol] || '5m';
   try {
-    const res  = await fetch(API + '/api/apex/candles/' + symbol);
+    const res  = await fetch(API + '/api/apex/candles/' + symbol + '/' + tf);
     const data = await res.json();
 
     const containerId = 'chart-' + symbol;
@@ -661,45 +778,38 @@ async function loadCandleChart(symbol, openTrades) {
     if (!container) return;
 
     if (!data.ok || !data.bars || data.bars.length === 0) {
-      container.innerHTML = '<div class="candle-empty">No 5min data — run backfill</div>';
+      container.innerHTML = '<div class="candle-empty">No ' + tf + ' data — run backfill</div>';
       return;
     }
 
-    // Create or reuse chart
+    // Create chart instance if needed
     if (!_lwCharts[symbol]) {
-      const chart  = LightweightCharts.createChart(container, getLwChartOptions(containerId));
+      const chart  = LightweightCharts.createChart(container, _lwChartOptions());
       const series = chart.addCandlestickSeries({
-        upColor:        '#22c55e',
-        downColor:      '#ef4444',
-        borderUpColor:  '#22c55e',
-        borderDownColor:'#ef4444',
-        wickUpColor:    '#22c55e',
-        wickDownColor:  '#ef4444',
+        upColor:         '#22c55e',
+        downColor:       '#ef4444',
+        borderUpColor:   '#22c55e',
+        borderDownColor: '#ef4444',
+        wickUpColor:     '#22c55e',
+        wickDownColor:   '#ef4444',
       });
       _lwCharts[symbol] = { chart, series, priceLines: [] };
     }
 
     const { chart, series } = _lwCharts[symbol];
 
-    // Set candle data
     series.setData(data.bars.map(b => ({
-      time:  b.time,
-      open:  b.open,
-      high:  b.high,
-      low:   b.low,
-      close: b.close,
+      time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
     })));
 
-    // Remove old price lines, re-add from open trades
-    // Clear existing price lines tracked per symbol
-    if (!_lwCharts[symbol].priceLines) _lwCharts[symbol].priceLines = [];
-    _lwCharts[symbol].priceLines.forEach(pl => {
+    // Clear old price lines
+    (_lwCharts[symbol].priceLines || []).forEach(pl => {
       try { series.removePriceLine(pl); } catch(e) {}
     });
     _lwCharts[symbol].priceLines = [];
 
-    // Find open trade for this symbol
-    const trade = (openTrades || []).find(t => t.symbol === symbol);
+    // Draw trade levels if open trade exists for this symbol
+    const trade    = (openTrades || []).find(t => t.symbol === symbol);
     const levelsEl = document.getElementById(symbol.toLowerCase() + '-trade-levels');
 
     if (trade) {
@@ -709,31 +819,20 @@ async function loadCandleChart(symbol, openTrades) {
       const slPts = Math.abs(entry - stop).toFixed(1);
       const tpPts = Math.abs(tp - entry).toFixed(1);
 
-      const entryLine = series.createPriceLine({
-        price:            entry,
-        color:            '#2563eb',
-        lineWidth:        1,
-        lineStyle:        0,
-        axisLabelVisible: true,
-        title:            `Entry ${fmtPrice(entry)}`,
-      });
-      const slLine = series.createPriceLine({
-        price:            stop,
-        color:            '#ef4444',
-        lineWidth:        1,
-        lineStyle:        2,
-        axisLabelVisible: true,
-        title:            `SL ${fmtPrice(stop)} (−${slPts}pts)`,
-      });
-      const tpLine = series.createPriceLine({
-        price:            tp,
-        color:            '#22c55e',
-        lineWidth:        1,
-        lineStyle:        2,
-        axisLabelVisible: true,
-        title:            `TP ${fmtPrice(tp)} (+${tpPts}pts)`,
-      });
-      _lwCharts[symbol].priceLines = [entryLine, slLine, tpLine];
+      _lwCharts[symbol].priceLines = [
+        series.createPriceLine({
+          price: entry, color: '#2563eb', lineWidth: 1, lineStyle: 0,
+          axisLabelVisible: true, title: `Entry ${fmtPrice(entry)}`,
+        }),
+        series.createPriceLine({
+          price: stop, color: '#ef4444', lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: `SL ${fmtPrice(stop)} (−${slPts}pts)`,
+        }),
+        series.createPriceLine({
+          price: tp, color: '#22c55e', lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: `TP ${fmtPrice(tp)} (+${tpPts}pts)`,
+        }),
+      ];
 
       if (levelsEl) levelsEl.innerHTML =
         `<span class="badge badge-blue" style="font-size:10px">${trade.direction.toUpperCase()}</span>` +
@@ -745,6 +844,14 @@ async function loadCandleChart(symbol, openTrades) {
     }
 
     chart.timeScale().fitContent();
+
+    // Last updated timestamp
+    const now = new Date();
+    const upd = document.getElementById('updated-' + symbol);
+    if (upd) upd.textContent =
+      String(now.getUTCHours()).padStart(2,'0') + ':' +
+      String(now.getUTCMinutes()).padStart(2,'0') + ' UTC';
+
   } catch(e) {
     console.error('Candle chart error ' + symbol + ':', e);
   }
