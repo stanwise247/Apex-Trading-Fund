@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>APEX Markets — Stanley Wise</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:#0a0a0a}
@@ -119,6 +121,28 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
 .toast.show{opacity:1}
 .loading{display:inline-block;width:12px;height:12px;border:2px solid #e5e5e5;border-top-color:#0a0a0a;border-radius:50%;animation:spin .6s linear infinite;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Equity curve ─────────────────────────── */
+.equity-section{position:relative}
+.equity-meta{display:flex;gap:20px;margin-bottom:12px;align-items:baseline}
+.equity-value{font-family:'DM Mono',monospace;font-size:20px;font-weight:600}
+.equity-meta-item{font-size:11px;color:#aaa}
+.equity-meta-item span{font-weight:600;color:#0a0a0a}
+.equity-chart-wrap{position:relative;height:140px}
+.dd-chart-wrap{position:relative;height:60px;border-top:1px solid #f5f5f5;margin-top:2px;padding-top:2px}
+.dd-label{font-size:10px;color:#bbb;position:absolute;top:6px;right:0}
+.equity-empty{height:180px;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:13px;border:1.5px dashed #efefef;border-radius:10px}
+
+/* ── Candlestick charts ───────────────────── */
+.candle-section{margin-top:24px}
+.candle-row{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.candle-card-inner{padding:16px}
+.candle-sym-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.candle-sym-title{font-size:13px;font-weight:700}
+.candle-tf{font-size:11px;color:#bbb;margin-left:6px}
+.candle-trade-levels{display:flex;gap:8px;flex-wrap:wrap}
+.candle-chart-wrap{height:240px;position:relative}
+.candle-empty{height:240px;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:12px;border:1.5px dashed #efefef;border-radius:8px}
 </style>
 </head>
 <body>
@@ -200,6 +224,22 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
           <div class="inst-card"><div class="inst-sym">GC</div><div class="inst-price">Loading...</div></div>
         </div>
       </div>
+
+      <!-- Equity Curve -->
+      <div class="card card-body">
+        <div class="section-label">Equity Curve</div>
+        <div class="equity-section">
+          <div class="equity-meta">
+            <div class="equity-value" id="equity-balance">$10,000</div>
+            <div class="equity-meta-item">Max DD: <span id="equity-maxdd">0.0%</span></div>
+            <div class="equity-meta-item">Start: <span>$10,000</span></div>
+            <div class="equity-meta-item" style="font-size:10px;color:#d1d5db">1% risk · compounding</div>
+          </div>
+          <div id="equity-chart-area">
+            <div class="equity-empty" id="equity-empty">No closed trades yet — equity curve will appear here</div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Sidebar -->
@@ -235,7 +275,6 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
           <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:48.5%;background:#f59e0b"></div></div>
           <div class="setup-footer"><span>Sharpe 4.2 | ~13/wk</span><span>955 trades</span></div>
         </div>
-
       </div>
 
       <!-- Scanner status -->
@@ -249,13 +288,51 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
       </div>
     </div>
   </div>
-</div>
+
+  <!-- Candlestick Charts Row -->
+  <div class="candle-section">
+    <div class="candle-row">
+      <div class="card">
+        <div class="candle-card-inner">
+          <div class="candle-sym-header">
+            <div><span class="candle-sym-title">NQ</span><span class="candle-tf">5min</span></div>
+            <div class="candle-trade-levels" id="nq-trade-levels"></div>
+          </div>
+          <div class="candle-chart-wrap" id="chart-NQ"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="candle-card-inner">
+          <div class="candle-sym-header">
+            <div><span class="candle-sym-title">ES</span><span class="candle-tf">5min</span></div>
+            <div class="candle-trade-levels" id="es-trade-levels"></div>
+          </div>
+          <div class="candle-chart-wrap" id="chart-ES"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="candle-card-inner">
+          <div class="candle-sym-header">
+            <div><span class="candle-sym-title">GC</span><span class="candle-tf">5min</span></div>
+            <div class="candle-trade-levels" id="gc-trade-levels"></div>
+          </div>
+          <div class="candle-chart-wrap" id="chart-GC"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /.main -->
 
 <div class="toast" id="toast"></div>
 
 <script>
 const API = window.location.origin;
 let gateLog = [];
+
+// Chart instances
+let _equityChart = null, _ddChart = null;
+const _lwCharts  = {}; // {symbol: {chart, series}}
 
 function showTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -280,6 +357,10 @@ function fmtR(r) {
 function fmtPrice(p) {
   if (!p) return '--';
   return parseFloat(p).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function fmtDollar(v) {
+  return '$' + parseFloat(v).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
 }
 
 // Clock
@@ -317,7 +398,7 @@ function updateSessions() {
 setInterval(updateSessions, 30000);
 updateSessions();
 
-// Market data
+// ── Market data ───────────────────────────────────────────────
 async function loadMarket() {
   try {
     const res = await fetch(API + '/api/apex/market');
@@ -325,7 +406,6 @@ async function loadMarket() {
     if (!data.ok) return;
     const m = data.market;
 
-    // Update prices in header
     ['NQ','ES','GC'].forEach(sym => {
       const d = m[sym];
       if (!d || d.error) return;
@@ -341,7 +421,6 @@ async function loadMarket() {
       }
     });
 
-    // Update instruments grid
     const grid = document.getElementById('instruments-grid');
     grid.innerHTML = ['NQ','ES','GC'].map(sym => {
       const d = m[sym];
@@ -367,7 +446,9 @@ async function loadMarket() {
   }
 }
 
-// Trades
+// ── Trades ────────────────────────────────────────────────────
+let _lastOpenTrades = [];
+
 async function loadTrades() {
   try {
     const res = await fetch(API + '/api/apex/trades');
@@ -385,11 +466,13 @@ async function loadTrades() {
     document.getElementById('expectancy').textContent  = fmtR(stats.expectancy);
     document.getElementById('open-tab-count').textContent = stats.open_trades;
 
+    _lastOpenTrades = data.open_trades || [];
+
     const openList = document.getElementById('open-trades-list');
-    if (!data.open_trades || data.open_trades.length === 0) {
+    if (!_lastOpenTrades.length) {
       openList.innerHTML = '<div class="empty">No open trades</div>';
     } else {
-      openList.innerHTML = data.open_trades.map(t => {
+      openList.innerHTML = _lastOpenTrades.map(t => {
         const pnl  = t.current_pnl_r || 0;
         const prog = Math.min(100, Math.abs((t.current_price - t.entry_price) / (t.target - t.entry_price)) * 100);
         const dir  = t.direction.toUpperCase();
@@ -419,7 +502,262 @@ async function loadTrades() {
   }
 }
 
-// Scan
+// ── Equity Curve ──────────────────────────────────────────────
+async function loadEquityChart() {
+  try {
+    const res  = await fetch(API + '/api/apex/equity');
+    const data = await res.json();
+    if (!data.ok) return;
+
+    const pts = data.points;
+    document.getElementById('equity-balance').textContent = fmtDollar(data.current_balance);
+    document.getElementById('equity-maxdd').textContent   = data.max_drawdown + '%';
+
+    const balEl  = document.getElementById('equity-balance');
+    const gain   = data.current_balance - 10000;
+    balEl.style.color = gain > 0 ? '#16a34a' : gain < 0 ? '#dc2626' : '#0a0a0a';
+
+    const area = document.getElementById('equity-chart-area');
+    const emptyEl = document.getElementById('equity-empty');
+
+    // Only real data points (skip the synthetic Start point if only that exists)
+    if (pts.length <= 1) {
+      if (emptyEl) emptyEl.style.display = 'flex';
+      return;
+    }
+
+    // Build or replace chart containers
+    if (emptyEl) emptyEl.remove();
+    if (!document.getElementById('equity-canvas')) {
+      area.innerHTML =
+        '<div class="equity-chart-wrap"><canvas id="equity-canvas"></canvas></div>' +
+        '<div class="dd-chart-wrap"><div class="dd-label">Drawdown</div><canvas id="dd-canvas"></canvas></div>';
+    }
+
+    const labels   = pts.map(p => p.label);
+    const equities = pts.map(p => p.equity);
+    const dds      = pts.map(p => p.drawdown);
+
+    const chartDefaults = {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+    };
+
+    if (_equityChart) {
+      _equityChart.data.labels   = labels;
+      _equityChart.data.datasets[0].data = equities;
+      _equityChart.update('none');
+    } else {
+      _equityChart = new Chart(document.getElementById('equity-canvas').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            data: equities,
+            borderColor: '#0a0a0a',
+            backgroundColor: 'rgba(10,10,10,0.04)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 1.5,
+          }],
+        },
+        options: {
+          ...chartDefaults,
+          scales: {
+            x: { display: false },
+            y: {
+              grid: { color: '#f5f5f5' },
+              ticks: {
+                font: { family: "'DM Mono', monospace", size: 10 },
+                callback: v => '$' + v.toLocaleString(),
+              },
+            },
+          },
+        },
+      });
+    }
+
+    if (_ddChart) {
+      _ddChart.data.labels   = labels;
+      _ddChart.data.datasets[0].data = dds;
+      _ddChart.update('none');
+    } else {
+      _ddChart = new Chart(document.getElementById('dd-canvas').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            data: dds,
+            borderColor: '#ef4444',
+            backgroundColor: 'rgba(239,68,68,0.07)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          ...chartDefaults,
+          scales: {
+            x: { display: false },
+            y: {
+              max: 0,
+              grid: { color: '#f5f5f5' },
+              ticks: {
+                font: { family: "'DM Mono', monospace", size: 9 },
+                callback: v => v + '%',
+              },
+            },
+          },
+        },
+      });
+    }
+  } catch(e) {
+    console.error('Equity chart error:', e);
+  }
+}
+
+// ── Candlestick Charts ────────────────────────────────────────
+function getLwChartOptions(containerId) {
+  const el = document.getElementById(containerId);
+  return {
+    width:  el ? el.clientWidth  : 300,
+    height: el ? el.clientHeight : 240,
+    layout: {
+      background:  { color: '#ffffff' },
+      textColor:   '#888888',
+      fontFamily:  "'DM Mono', monospace",
+      fontSize:    10,
+    },
+    grid: {
+      vertLines: { color: '#f7f7f5' },
+      horzLines: { color: '#f5f5f5' },
+    },
+    crosshair: { mode: 1 },
+    rightPriceScale: { borderColor: '#efefef' },
+    timeScale: {
+      borderColor:    '#efefef',
+      timeVisible:    true,
+      secondsVisible: false,
+    },
+  };
+}
+
+async function loadCandleChart(symbol, openTrades) {
+  try {
+    const res  = await fetch(API + '/api/apex/candles/' + symbol);
+    const data = await res.json();
+
+    const containerId = 'chart-' + symbol;
+    const container   = document.getElementById(containerId);
+    if (!container) return;
+
+    if (!data.ok || !data.bars || data.bars.length === 0) {
+      container.innerHTML = '<div class="candle-empty">No 5min data — run backfill</div>';
+      return;
+    }
+
+    // Create or reuse chart
+    if (!_lwCharts[symbol]) {
+      const chart  = LightweightCharts.createChart(container, getLwChartOptions(containerId));
+      const series = chart.addCandlestickSeries({
+        upColor:        '#22c55e',
+        downColor:      '#ef4444',
+        borderUpColor:  '#22c55e',
+        borderDownColor:'#ef4444',
+        wickUpColor:    '#22c55e',
+        wickDownColor:  '#ef4444',
+      });
+      _lwCharts[symbol] = { chart, series };
+
+      // Resize observer
+      new ResizeObserver(() => {
+        chart.applyOptions({ width: container.clientWidth });
+      }).observe(container);
+    }
+
+    const { chart, series } = _lwCharts[symbol];
+
+    // Set candle data
+    series.setData(data.bars.map(b => ({
+      time:  b.time,
+      open:  b.open,
+      high:  b.high,
+      low:   b.low,
+      close: b.close,
+    })));
+
+    // Remove old price lines, re-add from open trades
+    series.dataByIndex; // force render
+    // Clear existing price lines by recreating series options — lightweight-charts
+    // doesn't have a bulk removePriceLine, so track them per symbol
+    if (!_lwCharts[symbol].priceLines) _lwCharts[symbol].priceLines = [];
+    _lwCharts[symbol].priceLines.forEach(pl => {
+      try { series.removePriceLine(pl); } catch(e) {}
+    });
+    _lwCharts[symbol].priceLines = [];
+
+    // Find open trade for this symbol
+    const trade = (openTrades || []).find(t => t.symbol === symbol);
+    const levelsEl = document.getElementById(symbol.toLowerCase() + '-trade-levels');
+
+    if (trade) {
+      const entry = parseFloat(trade.entry_price);
+      const stop  = parseFloat(trade.stop);
+      const tp    = parseFloat(trade.target);
+      const slPts = Math.abs(entry - stop).toFixed(1);
+      const tpPts = Math.abs(tp - entry).toFixed(1);
+
+      const entryLine = series.createPriceLine({
+        price:            entry,
+        color:            '#2563eb',
+        lineWidth:        1,
+        lineStyle:        0,
+        axisLabelVisible: true,
+        title:            `Entry ${fmtPrice(entry)}`,
+      });
+      const slLine = series.createPriceLine({
+        price:            stop,
+        color:            '#ef4444',
+        lineWidth:        1,
+        lineStyle:        2,
+        axisLabelVisible: true,
+        title:            `SL ${fmtPrice(stop)} (−${slPts}pts)`,
+      });
+      const tpLine = series.createPriceLine({
+        price:            tp,
+        color:            '#22c55e',
+        lineWidth:        1,
+        lineStyle:        2,
+        axisLabelVisible: true,
+        title:            `TP ${fmtPrice(tp)} (+${tpPts}pts)`,
+      });
+      _lwCharts[symbol].priceLines = [entryLine, slLine, tpLine];
+
+      if (levelsEl) levelsEl.innerHTML =
+        `<span class="badge badge-blue" style="font-size:10px">${trade.direction.toUpperCase()}</span>` +
+        `<span style="font-size:10px;color:#2563eb">E ${fmtPrice(entry)}</span>` +
+        `<span style="font-size:10px;color:#ef4444">SL −${slPts}</span>` +
+        `<span style="font-size:10px;color:#22c55e">TP +${tpPts}</span>`;
+    } else {
+      if (levelsEl) levelsEl.innerHTML = '';
+    }
+
+    chart.timeScale().fitContent();
+  } catch(e) {
+    console.error('Candle chart error ' + symbol + ':', e);
+  }
+}
+
+async function loadAllCandleCharts() {
+  const trades = _lastOpenTrades;
+  await Promise.all(['NQ','ES','GC'].map(sym => loadCandleChart(sym, trades)));
+}
+
+// ── Scan ──────────────────────────────────────────────────────
 async function runScan() {
   const btn  = document.getElementById('scan-btn');
   const btn2 = document.getElementById('scan-btn2');
@@ -427,7 +765,6 @@ async function runScan() {
   btn.innerHTML  = '<span class="loading"></span>Scanning...';
   btn2.innerHTML = '<span class="loading"></span>Scanning...';
 
-  // Switch to scan tab
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-scan').classList.add('active');
@@ -443,7 +780,6 @@ async function runScan() {
     const signals  = results.filter(r => r.valid);
     const failures = results.filter(r => !r.valid);
 
-    // Update signals tab
     document.getElementById('signals-count').textContent = signals.length;
     const sigList = document.getElementById('signals-list');
     if (signals.length === 0) {
@@ -473,7 +809,6 @@ async function runScan() {
       }).join('');
     }
 
-    // Update scan results tab
     const scanEl = document.getElementById('scan-results');
     const fvgStatus = data.fvg_signals && data.fvg_signals.length > 0
       ? `<div class="scan-result-row" style="background:#fffbeb;border:1px solid #fde68a;margin-bottom:8px">
@@ -491,8 +826,6 @@ async function runScan() {
     scanEl.innerHTML = `<div style="font-size:11px;color:#aaa;margin-bottom:10px">${data.time}</div>` + fvgStatus +
       results.map(r => {
         const dir    = r.direction.toUpperCase();
-        const passed = r.gates.filter(g=>g.passed).length;
-        const total  = r.gates.length;
         const failed = r.gates.find(g=>!g.passed);
         return `<div class="scan-result-row">
           <span class="scan-sym">${r.symbol}</span>
@@ -506,7 +839,6 @@ async function runScan() {
         </div>`;
       }).join('');
 
-    // Update gate log
     const now = new Date().toUTCString().slice(17,22);
     failures.forEach(r => {
       const failed = r.gates.find(g=>!g.passed);
@@ -535,7 +867,7 @@ async function runScan() {
   }
 }
 
-// Test Telegram
+// ── Test Telegram ─────────────────────────────────────────────
 async function testTelegram() {
   const btn = document.getElementById('tg-btn');
   btn.disabled = true;
@@ -552,9 +884,15 @@ async function testTelegram() {
   }
 }
 
-// Auto refresh
+// ── Auto refresh ──────────────────────────────────────────────
+let _refreshCount = 0;
+
 async function refresh() {
   await Promise.all([loadMarket(), loadTrades()]);
+  await loadEquityChart();
+  // Reload candle charts every refresh (trades may have changed levels)
+  await loadAllCandleCharts();
+  _refreshCount++;
 }
 
 refresh();

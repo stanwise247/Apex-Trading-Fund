@@ -1826,6 +1826,69 @@ def apex_market():
     return jsonify({'ok': True, 'market': results})
 
 
+@app.route('/api/apex/candles/<symbol>', methods=['GET'])
+def apex_candles(symbol):
+    """Return last 100 5min OHLCV bars for lightweight-charts (time, open, high, low, close, volume)."""
+    symbol = symbol.upper()
+    if symbol not in INSTRUMENTS:
+        return jsonify({'ok': False, 'error': 'Unknown symbol'})
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        rows = conn.execute(
+            'SELECT ts, open, high, low, close, volume FROM ohlcv '
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 100',
+            (symbol, '5min')
+        ).fetchall()
+        conn.close()
+        bars = [
+            {'time': int(r[0]), 'open': float(r[1]), 'high': float(r[2]),
+             'low': float(r[3]), 'close': float(r[4]), 'volume': float(r[5])}
+            for r in reversed(rows)
+        ]
+        return jsonify({'ok': True, 'symbol': symbol, 'bars': bars})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/equity', methods=['GET'])
+def apex_equity():
+    """Return compounding equity curve: $10k start, 1% risk per trade."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        trades = conn.execute(
+            'SELECT entry_time, exit_time, pnl_r FROM apex_trades '
+            'WHERE status=? AND pnl_r IS NOT NULL ORDER BY exit_time ASC',
+            ('closed',)
+        ).fetchall()
+        conn.close()
+
+        START = 10000.0
+        RISK  = 0.01
+        balance = START
+        peak    = START
+        points  = [{'label': 'Start', 'equity': START, 'drawdown': 0.0}]
+
+        for i, (entry_time, exit_time, pnl_r) in enumerate(trades, 1):
+            if pnl_r is None:
+                continue
+            balance = round(balance + float(pnl_r) * balance * RISK, 2)
+            if balance > peak:
+                peak = balance
+            dd = round((balance - peak) / peak * 100, 2) if peak > 0 else 0.0
+            ts_label = (exit_time or entry_time or '')[:10]
+            points.append({'label': f'T{i} {ts_label}', 'equity': balance, 'drawdown': dd})
+
+        max_dd = round(min((p['drawdown'] for p in points), default=0.0), 2)
+        return jsonify({
+            'ok': True,
+            'points': points,
+            'current_balance': round(balance, 2),
+            'max_drawdown': max_dd,
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/apex/telegram_test', methods=['POST'])
 def apex_telegram_test():
     """Send a test Telegram message."""
