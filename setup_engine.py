@@ -583,6 +583,11 @@ def gate3_poi_setup_c(symbol, direction):
 
 def check_setup_c(symbol, direction, mode='swing', dt=None):
     gates = []
+    # Block 07:00–09:59 UTC — 68% loss rate in this window, negative expectancy in backtest
+    _hour = (dt or datetime.now(timezone.utc)).hour
+    if 7 <= _hour <= 9:
+        gates.append(GateResult(False, 0, 'TimeFilter', 'Setup C blocked 07-09 UTC (low-edge window)'))
+        return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
     g1 = gate1_htf_bias(symbol, direction)
     gates.append(g1)
     if not g1.passed:

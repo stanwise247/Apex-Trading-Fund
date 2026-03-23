@@ -633,6 +633,9 @@ def run_backtest(symbol: str, mode: str = 'swing',
             if setup == 'A':
                 poi_ok, poi = check_poi_setup_a(df_1h_slice, direction, price, atr_1h)
             elif setup == 'C':
+                # Block 07:00–09:59 UTC — data-validated low-edge window
+                if 7 <= bar_time.hour <= 9:
+                    continue
                 # Setup C requires BOS not CHoCH
                 last_event = events_1h[-1][1] if events_1h else ''
                 if 'CHOCH' in last_event:

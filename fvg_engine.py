@@ -15,13 +15,13 @@ logger  = logging.getLogger('APEX.FVG')
 DB_PATH = 'apex_market.db'
 
 FVG_PARAMS = {
-    'min_fvg_atr':        0.3,
+    'min_fvg_atr':        0.7,   # raised from 0.3 — sub-0.7 ATR FVGs have 44% WR, no edge
     'target_rr':          2.0,
     'max_trades_session': 3,
     'vol_multiplier':     1.0,
     'min_score':          60,   # validated: Score 60 = Sharpe 6.46 OOS
     'session_windows': {
-        'NQ': [{'start': 13, 'end': 19}],
+        'NQ': [{'start': 14, 'end': 18}],  # was 13-19: block 13:00 (bad first candle) and 18:00 (negative EV)
         # ES disabled — last 3 months negative, monitoring
         # GC disabled — failed walk-forward validation
     },

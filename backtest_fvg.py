@@ -18,7 +18,7 @@ from collections import defaultdict
 DB_PATH = 'apex_market.db'
 
 PARAMS = {
-    'min_fvg_atr':       0.3,   # minimum FVG size as fraction of ATR
+    'min_fvg_atr':       0.7,   # raised from 0.3 — sub-0.7 ATR FVGs have 44% WR, no edge
     'entry_tf':          '1min',
     'fvg_tf':            '15min',
     'htf_tf':            '4hour',
@@ -26,8 +26,9 @@ PARAMS = {
     'max_trades_session':3,      # max trades per session per instrument
     'vol_filter':        True,
     'vol_multiplier':    1.0,
-    'session_start_utc': 13,
-    'session_end_utc':   19,
+    'session_start_utc': 14,   # was 13: block first candle (55% loss rate)
+    'session_end_utc':   18,   # was 19: block 18:00 UTC (-0.357R EV)
+
     'max_bars_held':     60,     # max 1min bars held (60 min)
     'fvg_fill_pct':      0.5,    # price must reach 50% of FVG to trigger
 }

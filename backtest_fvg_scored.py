@@ -88,11 +88,11 @@ def run_scored_fvg_backtest(symbol, min_score=50, start='2024-09-01',
                              end=None, params=None):
     """Run FVG backtest with quality scoring filter."""
 
-    SESSION_START = 13
-    SESSION_END   = 19
+    SESSION_START = 14   # was 13: block first candle of US session (55% loss rate)
+    SESSION_END   = 18   # was 19: block 18:00 UTC (77% loss rate, -0.357R EV)
     MAX_TRADES    = 3
     TARGET_RR     = 2.0
-    MIN_FVG_ATR   = 0.3
+    MIN_FVG_ATR   = 0.7  # was 0.3: sub-0.7 ATR FVGs have 44% WR, no edge
     MAX_BARS_HELD = 60
 
     df_1m  = load_bars(symbol, '1min',  start)
