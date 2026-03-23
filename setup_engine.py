@@ -162,29 +162,16 @@ def gate3_poi(symbol: str, direction: str) -> tuple[GateResult, str, object]:
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
     obs       = find_order_blocks(df, sh, sl, events)
-    sweeps    = find_sweeps(df, sh, sl)
     breakers  = find_breakers(obs)
     atr_series= calc_atr(df)
 
     price     = float(df['close'].iloc[-1])
     atr_val   = float(atr_series.iloc[-1])
 
-    # Setup A — Sweep + OB
-    recent_sweeps = [s for s in sweeps if s.index >= len(df) - 24]  # last 24 bars
-    for sweep in reversed(recent_sweeps):
-        if direction == 'long'  and sweep.kind != 'bull': continue
-        if direction == 'short' and sweep.kind != 'bear': continue
-        nearby_obs = [o for o in obs
-                      if not o.broken
-                      and o.kind == ('bull' if direction == 'long' else 'bear')
-                      and abs((o.high + o.low) / 2 - price) < atr_val]
-        if nearby_obs:
-            ob = nearby_obs[0]
-            return (
-                GateResult(True, 3, 'POI',
-                           f'Setup A: sweep@{sweep.swept_level:.2f} + OB [{ob.low:.2f}-{ob.high:.2f}]'),
-                'A_sweep_ob', ob
-            )
+    # Setup A — delegate to gate3_poi_setup_a to avoid duplicating logic
+    g3a, stype_a, poi_a = gate3_poi_setup_a(symbol, direction)
+    if g3a.passed:
+        return g3a, stype_a, poi_a
 
     # Setup B — CHoCH + Breaker
     choch_events = [e for e in events
@@ -311,7 +298,9 @@ def gate4_session(symbol: str, dt: datetime = None) -> tuple[GateResult, str]:
 
 def gate5_entry_trigger(symbol: str, direction: str, poi) -> GateResult:
     df  = load_bars(symbol, '15min', limit=100)
-    atr = calc_atr(df).iloc[-1]
+    # ATR from 1hour to match backtest (backtester.py passes atr_1h to check_entry_trigger_15m)
+    df_1h = load_bars(symbol, '1hour', limit=50)
+    atr   = calc_atr(df_1h).iloc[-1]
 
     if poi is None:
         return GateResult(False, 5, 'Entry Trigger', 'No POI passed from Gate 3')

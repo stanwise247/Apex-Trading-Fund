@@ -80,6 +80,7 @@ YF_PERIOD_MAP   = {'1min': '7d', '5min': '60d', '15min': '60d', '1hour': '2y', '
 
 def yf_fetch(yahoo_ticker, tf_label):
     import yfinance as yf
+    import pandas as _pd
     interval = YF_INTERVAL_MAP.get(tf_label, '1d')
     period   = YF_PERIOD_MAP.get(tf_label, '5y')
     try:
@@ -87,6 +88,12 @@ def yf_fetch(yahoo_ticker, tf_label):
         if df.empty:
             logger.warning('yfinance empty: ' + yahoo_ticker + ' ' + tf_label)
             return []
+        # yfinance has no 4h interval — fetched as 1h, must aggregate to 4h
+        if tf_label == '4hour':
+            df = df.resample('4h').agg({
+                'Open': 'first', 'High': 'max', 'Low': 'min',
+                'Close': 'last', 'Volume': 'sum',
+            }).dropna(subset=['Open'])
         bars = []
         for ts, row in df.iterrows():
             bars.append({
@@ -249,22 +256,22 @@ def databento_fetch(symbol, tf_label, years=3):
             logger.warning(f'Databento: no parseable bars for {symbol} {tf_label}')
             return None
 
-        # Aggregate if needed (e.g. 5x 1min bars -> 1x 5min bar)
+        # Aggregate if needed — use clock-aligned resample, not positional chunking
         if agg > 1:
-            aggregated = []
-            for i in range(0, len(parsed), agg):
-                chunk = parsed[i:i+agg]
-                if not chunk:
-                    continue
-                aggregated.append({
-                    't': chunk[0]['t'],
-                    'o': chunk[0]['o'],
-                    'h': max(b['h'] for b in chunk),
-                    'l': min(b['l'] for b in chunk),
-                    'c': chunk[-1]['c'],
-                    'v': sum(b['v'] for b in chunk),
-                })
-            parsed = aggregated
+            import pandas as _pd
+            _df = _pd.DataFrame(parsed)
+            _df['dt'] = _pd.to_datetime(_df['t'], unit='s', utc=True)
+            _df.set_index('dt', inplace=True)
+            resample_rule = {1: '1min', 5: '5min', 15: '15min', 4: '4h', 7: '1W'}.get(agg, f'{agg}min')
+            _agg = _df.resample(resample_rule).agg(
+                o=('o', 'first'), h=('h', 'max'), l=('l', 'min'),
+                c=('c', 'last'), v=('v', 'sum')
+            ).dropna(subset=['o'])
+            parsed = [
+                {'t': int(ts.timestamp()), 'o': row['o'], 'h': row['h'],
+                 'l': row['l'], 'c': row['c'], 'v': int(row['v'])}
+                for ts, row in _agg.iterrows()
+            ]
 
         logger.info(f'Databento OK: {symbol} {tf_label} {len(parsed)} bars')
         return parsed
@@ -1169,12 +1176,14 @@ def background_scheduler():
 
         # ── APEX FVG Scanner — runs every minute ─────────────────
         try:
-            from fvg_engine import scan_fvg, format_fvg_alert
+            from fvg_engine import scan_fvg, format_fvg_alert, FVG_PARAMS
             from live_scanner import send_telegram
             from trade_tracker import log_trade
             from datetime import datetime, timezone
             now_utc = datetime.now(timezone.utc)
-            if 13 <= now_utc.hour < 19:
+            _fvg_windows = FVG_PARAMS.get('session_windows', {}).get('NQ', [{'start': 13, 'end': 19}])
+            _in_fvg_session = any(w['start'] <= now_utc.hour < w['end'] for w in _fvg_windows)
+            if _in_fvg_session:
                 fvg_signals = scan_fvg('NQ', now_utc)
                 for sig in fvg_signals:
                     msg = format_fvg_alert(sig)
@@ -1672,19 +1681,24 @@ def _startup():
     def startup_backfill():
         import time as _t
         _t.sleep(10)
-        try:
-            import sqlite3 as _sq
-            conn = _sq.connect(DB_PATH, timeout=30)
-            count = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol='ES'").fetchone()[0]
-            conn.close()
-            if count < 100:
-                logger.info('  ES data missing — running backfill...')
-                backfill_history('ES', years=2)
-                logger.info('  ES backfill complete')
-            else:
-                logger.info(f'  ES data OK ({count} bars)')
-        except Exception as e:
-            logger.warning('  ES backfill check failed: ' + str(e))
+        # Check all Databento-supported instruments, not just ES
+        _db_syms = [s for s, info in INSTRUMENTS.items() if info.get('databento')]
+        for _sym in _db_syms:
+            try:
+                import sqlite3 as _sq
+                conn = _sq.connect(DB_PATH, timeout=30)
+                count = conn.execute(
+                    'SELECT COUNT(*) FROM ohlcv WHERE symbol=?', (_sym,)
+                ).fetchone()[0]
+                conn.close()
+                if count < 100:
+                    logger.info(f'  {_sym} data missing — running backfill...')
+                    backfill_history(_sym, years=2)
+                    logger.info(f'  {_sym} backfill complete')
+                else:
+                    logger.info(f'  {_sym} data OK ({count} bars)')
+            except Exception as e:
+                logger.warning(f'  {_sym} backfill check failed: ' + str(e))
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
