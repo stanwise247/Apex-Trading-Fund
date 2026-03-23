@@ -266,26 +266,61 @@ body{font-family:'DM Sans',sans-serif;background:#f7f7f5;min-height:100vh;color:
 
       <!-- Setup performance -->
       <div class="card card-body">
-        <div class="section-label">Setup Performance (Backtest)</div>
+        <div class="section-label">Setup Performance (Validated Backtest)</div>
         <div class="setup-row">
-          <div class="setup-header"><div><span class="setup-name">Setup A</span><span class="setup-label">Sweep + OB</span></div><span class="setup-wr">82.6% WR</span></div>
-          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:82.6%"></div></div>
-          <div class="setup-footer"><span>Sharpe 13.1</span><span>23 trades</span></div>
+          <div class="setup-header"><div><span class="setup-name">Setup A</span><span class="setup-label">Sweep + OB &mdash; NQ/ES primary</span></div><span class="setup-wr">81.1% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:81.1%"></div></div>
+          <div class="setup-footer"><span>Sharpe 12.0 &middot; EV +1.12R</span><span>37 trades &middot; 0.5/wk</span></div>
         </div>
         <div class="setup-row">
-          <div class="setup-header"><div><span class="setup-name">Setup B</span><span class="setup-label">CHoCH + Breaker</span></div><span class="setup-wr">60.0% WR</span></div>
-          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:60%"></div></div>
-          <div class="setup-footer"><span>Sharpe 7.1</span><span>130 trades</span></div>
+          <div class="setup-header"><div><span class="setup-name">Setup B</span><span class="setup-label">CHoCH + Breaker &mdash; NQ/ES/GC</span></div><span class="setup-wr">56.0% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:56%"></div></div>
+          <div class="setup-footer"><span>Sharpe 7.2 &middot; EV +0.82R</span><span>191 trades &middot; 2.1/wk</span></div>
         </div>
         <div class="setup-row">
-          <div class="setup-header"><div><span class="setup-name">Setup C</span><span class="setup-label">BOS + OB Pullback</span></div><span class="setup-wr">62.5% WR</span></div>
-          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:62.5%"></div></div>
-          <div class="setup-footer"><span>Sharpe 6.9</span><span>56 trades</span></div>
+          <div class="setup-header"><div><span class="setup-name">Setup C</span><span class="setup-label">BOS + OB Pullback &mdash; NQ/ES/GC</span></div><span class="setup-wr">66.7% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:66.7%"></div></div>
+          <div class="setup-footer"><span>Sharpe 8.4 &middot; EV +0.82R</span><span>84 trades &middot; 1.0/wk</span></div>
         </div>
         <div class="setup-row">
-          <div class="setup-header"><div><span class="setup-name">Setup D</span><span class="setup-label">FVG Fill &mdash; NQ</span></div><span class="setup-wr">48.5% WR</span></div>
-          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:48.5%;background:#f59e0b"></div></div>
-          <div class="setup-footer"><span>Sharpe 4.2 | ~13/wk</span><span>955 trades</span></div>
+          <div class="setup-header"><div><span class="setup-name">Setup D</span><span class="setup-label">FVG Fill &mdash; NQ score&ge;60</span></div><span class="setup-wr">64.0% WR</span></div>
+          <div class="setup-bar-wrap"><div class="setup-bar-fill" style="width:64%;background:#f59e0b"></div></div>
+          <div class="setup-footer"><span>Sharpe 6.6 &middot; EV +0.47R</span><span>197 trades &middot; 2.5/wk</span></div>
+        </div>
+      </div>
+
+      <!-- Portfolio overview -->
+      <div class="card card-body">
+        <div class="section-label">Portfolio Overview (Validated)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div style="background:#f9fafb;border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Combined WR</div>
+            <div style="font-size:18px;font-weight:700;color:#10b981">62.7%</div>
+          </div>
+          <div style="background:#f9fafb;border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Expectancy</div>
+            <div style="font-size:18px;font-weight:700;color:#10b981">+0.704R</div>
+          </div>
+          <div style="background:#f9fafb;border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Portfolio Sharpe</div>
+            <div style="font-size:18px;font-weight:700;color:#1d4ed8">7.17</div>
+          </div>
+          <div style="background:#f9fafb;border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Avg T/week</div>
+            <div style="font-size:18px;font-weight:700;color:#374151">6.0</div>
+          </div>
+        </div>
+        <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Compounded from $1,000</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <div style="display:flex;justify-content:space-between;align-items:center;background:#ecfdf5;border-radius:5px;padding:6px 8px">
+            <span style="font-size:11px;color:#374151;font-weight:600">1% risk / trade</span>
+            <span style="font-size:13px;font-weight:700;color:#10b981">$33,482 <span style="font-size:10px;font-weight:500;color:#6b7280">(+3,248% &middot; CAGR 617%)</span></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;background:#eff6ff;border-radius:5px;padding:6px 8px">
+            <span style="font-size:11px;color:#374151;font-weight:600">2% risk / trade</span>
+            <span style="font-size:13px;font-weight:700;color:#1d4ed8">$973,406 <span style="font-size:10px;font-weight:500;color:#6b7280">(+97,240% &middot; CAGR 4,649%)</span></span>
+          </div>
+          <div style="font-size:9px;color:#9ca3af;margin-top:2px">509 trades · Jun 2024–Mar 2026 · max DD 5.4% @1R</div>
         </div>
       </div>
 

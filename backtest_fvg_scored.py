@@ -278,6 +278,7 @@ def run_scored_fvg_backtest(symbol, min_score=50, start='2024-09-01',
         'exp':       round(np.mean(r),3),
         'max_dd':    round(max_dd,2),
         'sharpe':    sharpe,
+        'trade_log': trade_log,
     }
 
 
