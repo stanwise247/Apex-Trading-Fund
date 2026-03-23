@@ -591,7 +591,12 @@ def check_setup_c(symbol, direction, mode='swing', dt=None):
     gates.append(g2)
     if not g2.passed:
         return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
-    if 'CHOCH' in g2.detail:
+    # Check event type directly from events list — do not parse g2.detail string
+    _df_1h = load_bars(symbol, '1hour', limit=500)
+    _sh, _sl = find_swings(_df_1h, lookback=5)
+    _events, _ = detect_structure(_df_1h, _sh, _sl)
+    _last_event = _events[-1] if _events else None
+    if _last_event and 'CHOCH' in _last_event.event_type:
         gates.append(GateResult(False, 2, 'Structure', 'Setup C requires BOS not CHoCH'))
         return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
     g3, setup_type, poi = gate3_poi_setup_c(symbol, direction)

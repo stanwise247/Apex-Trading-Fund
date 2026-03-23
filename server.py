@@ -1204,6 +1204,7 @@ def background_scheduler():
             for result in signals:
                 if tracker.is_new(result):
                     send_telegram(format_alert(result))
+                    tracker.mark_sent(result)
                     log_trade({
                         'symbol':    result.symbol,
                         'direction': result.direction,

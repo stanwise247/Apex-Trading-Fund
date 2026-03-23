@@ -278,6 +278,17 @@ def scan_fvg(symbol, dt=None):
 
     # Load 15min bars for FVG detection
     df_15m  = load_bars(symbol, '15min', limit=200)
+
+    # Staleness check — 15min data must be within 30 minutes of now
+    if not df_15m.empty:
+        last_15m_time = df_15m.index[-1]
+        if last_15m_time.tzinfo is None:
+            last_15m_time = last_15m_time.tz_localize('UTC')
+        age_15m = (dt.replace(tzinfo=timezone.utc) - last_15m_time).total_seconds() / 60
+        if age_15m > 30:
+            logger.warning(f'FVG scan skipped — 15min data {round(age_15m)}min stale (last bar {last_15m_time.strftime("%H:%M")} UTC)')
+            return signals
+
     atr_15m = calc_atr(df_15m, 14)
     fvgs    = detect_fvgs(df_15m, atr_15m,
                           params['min_fvg_atr'],
@@ -311,8 +322,8 @@ def scan_fvg(symbol, dt=None):
     last_vol   = float(last_bar['volume'])
     last_ts    = int(last_bar['ts'])
 
-    # Volume baseline
-    vol_baseline = float(df_1m['volume'].tail(20).mean())
+    # Volume baseline — use 15min bars for a more stable baseline
+    vol_baseline = float(df_15m['volume'].tail(20).mean())
 
     # Check each FVG
     for fvg in fvgs:

@@ -583,10 +583,6 @@ def run_backtest(symbol: str, mode: str = 'swing',
             continue  # still in trade, skip signal check
 
         # ── Signal check ─────────────────────────────────────
-        # Cooldown — skip 3 bars after closing a trade
-        if i - last_trade_bar < 24:
-            continue
-
         # Day filter — match live_scanner.py so backtest uses identical trading days
         allowed_days = DAY_FILTERS.get(symbol, [0, 1, 2, 3, 4])
         if bar_time.weekday() not in allowed_days:

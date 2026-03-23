@@ -107,10 +107,64 @@ def format_alert(result) -> str:
     return msg
 
 
+def init_swing_dedup_table():
+    """Create swing_alerted_signals table for DB-backed dedup (matches fvg_alerted_zones pattern)."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS swing_alerted_signals (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol    TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                setup     TEXT NOT NULL,
+                date      TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_swing_alert_key ON swing_alerted_signals (symbol, direction, setup, date)')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f'swing dedup table init failed: {e}')
+
+
+def is_swing_signal_new(symbol: str, direction: str, setup: str, dt: datetime = None) -> bool:
+    """Return True if this signal has NOT been alerted today (DB-backed check)."""
+    date_str = (dt or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        row = conn.execute(
+            'SELECT id FROM swing_alerted_signals WHERE symbol=? AND direction=? AND setup=? AND date=?',
+            (symbol, direction, setup, date_str)
+        ).fetchone()
+        conn.close()
+        return row is None
+    except Exception as e:
+        logger.warning(f'swing dedup check failed: {e}')
+        return True  # fail open — allow alert
+
+
+def record_swing_signal(symbol: str, direction: str, setup: str, dt: datetime = None):
+    """Insert a row into swing_alerted_signals to mark this signal as alerted."""
+    date_str = (dt or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
+    now_str  = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.execute(
+            'INSERT INTO swing_alerted_signals (symbol, direction, setup, date, created_at) VALUES (?,?,?,?,?)',
+            (symbol, direction, setup, date_str, now_str)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f'swing dedup insert failed: {e}')
+
+
 class SignalTracker:
     def __init__(self):
         self.sent = {}
         self.ttl  = 4 * 3600
+        init_swing_dedup_table()
 
     def is_new(self, result) -> bool:
         key = (result.symbol, result.direction, result.setup,
@@ -118,8 +172,15 @@ class SignalTracker:
         now = time.time()
         if key in self.sent and now - self.sent[key] < self.ttl:
             return False
+        # Also check DB dedup
+        if not is_swing_signal_new(result.symbol, result.direction, result.setup):
+            return False
         self.sent[key] = now
         return True
+
+    def mark_sent(self, result):
+        """Record in DB after successfully sending alert."""
+        record_swing_signal(result.symbol, result.direction, result.setup)
 
     def cleanup(self):
         now = time.time()
@@ -208,6 +269,7 @@ def main():
                 if tracker.is_new(result):
                     msg = format_alert(result)
                     send_telegram(msg)
+                    tracker.mark_sent(result)
                     logger.info(f'Alert sent: {result.symbol} {result.direction}')
                     # Log trade to tracker
                     try:

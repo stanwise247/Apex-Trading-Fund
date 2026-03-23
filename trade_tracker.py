@@ -286,20 +286,23 @@ def monitor_trades():
                 exit_reason = 'target'
                 exit_price  = target
 
-        # Check session end
+        # Compute bars_held (needed for both session_end guard and max_bars check)
+        entry_time = datetime.fromisoformat(t['entry_time'])
+        if entry_time.tzinfo is None:
+            entry_time = entry_time.replace(tzinfo=timezone.utc)
+        bar_seconds = 60 if is_fvg else 300
+        bars_held = int((now - entry_time).total_seconds() / bar_seconds)
+
+        # Check session end — require at least 5 bars open to prevent
+        # crash-restart from force-closing fresh trades
         if exit_reason is None:
             sess_end = SESSION_END_UTC.get(sym, 19)
-            if now.hour >= sess_end:
+            if now.hour >= sess_end and bars_held >= 5:
                 exit_reason = 'session_end'
                 exit_price  = price
 
         # Check max bars
         if exit_reason is None:
-            entry_time = datetime.fromisoformat(t['entry_time'])
-            if entry_time.tzinfo is None:
-                entry_time = entry_time.replace(tzinfo=timezone.utc)
-            bar_seconds = 60 if is_fvg else 300
-            bars_held = int((now - entry_time).total_seconds() / bar_seconds)
             max_b = MAX_BARS.get(mode, 100)
             if bars_held >= max_b:
                 exit_reason = 'max_bars'
