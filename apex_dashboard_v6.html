@@ -45,6 +45,16 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .health-dot.ok{background:var(--green)}
 .health-label{font-size:10px;color:var(--text2)}
 
+/* TAB NAV */
+.tab-nav{position:sticky;top:52px;z-index:190;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:0;padding:0 20px;overflow-x:auto;scrollbar-width:none}
+.tab-nav::-webkit-scrollbar{display:none}
+.tab-btn{padding:0 18px;height:40px;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif;letter-spacing:.5px;background:none;border:none;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{color:var(--amber);border-bottom-color:var(--amber)}
+
+/* SECTIONS */
+.tab-section{display:none}.tab-section.active{display:block}
+
 /* MAIN */
 .main{max-width:1600px;margin:0 auto;padding:20px 20px 40px}
 
@@ -251,10 +261,21 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   </div>
 </div>
 
+<!-- TAB NAV -->
+<nav class="tab-nav" id="tabNav">
+  <button class="tab-btn active" data-tab="overview">Overview</button>
+  <button class="tab-btn" data-tab="charts">Charts</button>
+  <button class="tab-btn" data-tab="signals">Signals</button>
+  <button class="tab-btn" data-tab="trades">Trades</button>
+  <button class="tab-btn" data-tab="analytics">Analytics</button>
+  <button class="tab-btn" data-tab="journal">Journal</button>
+</nav>
+
 <!-- MAIN -->
 <div class="main">
 
   <!-- SECTION 2: HERO ROW -->
+  <div class="tab-section active" id="tab-overview">
   <div class="hero-row" id="heroRow">
     <!-- Equity Curve -->
     <div class="card" id="equityCard">
@@ -315,8 +336,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
     </div>
   </div>
+  </div><!-- /tab-overview -->
 
   <!-- SECTION 3: CANDLE CHARTS -->
+  <div class="tab-section" id="tab-charts">
   <div class="charts-row" id="chartsRow">
     <!-- NQ -->
     <div class="chart-card" id="cc-NQ">
@@ -368,7 +391,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     </div>
   </div>
 
+  </div><!-- /tab-charts -->
+
   <!-- SECTION 4: SIGNAL INTELLIGENCE -->
+  <div class="tab-section" id="tab-signals">
   <div class="signal-row" id="signalRow">
     <!-- Gate Status -->
     <div class="card">
@@ -396,7 +422,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     </div>
   </div>
 
+  </div><!-- /tab-signals -->
+
   <!-- SECTION 5: OPEN TRADES -->
+  <div class="tab-section" id="tab-trades">
   <div class="trades-section" id="tradesSection">
     <div class="section-header">Open Positions</div>
     <div id="tradesBody">
@@ -411,7 +440,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     </div>
   </div>
 
+  </div><!-- /tab-trades -->
+
   <!-- SECTION 6: PERFORMANCE ANALYTICS -->
+  <div class="tab-section" id="tab-analytics">
   <div class="analytics-section">
     <div class="section-header">Performance Analytics</div>
     <div class="analytics-grid">
@@ -456,7 +488,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     </div>
   </div>
 
+  </div><!-- /tab-analytics -->
+
   <!-- SECTION 7: TRADE JOURNAL -->
+  <div class="tab-section" id="tab-journal">
   <div class="journal-section">
     <div class="section-header">
       Trade Journal
@@ -516,6 +551,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
     </div>
   </div>
+  </div><!-- /tab-journal -->
 
 </div><!-- /main -->
 
@@ -560,27 +596,50 @@ function updateClock() {
 
 function updateSessionStatus(now) {
   const el = document.getElementById('sessionStatus');
-  if (!el) return;
-  const totalMin = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const nyOpen = 13 * 60;
-  const nyClose = 19 * 60;
-  let text = '';
-  if (totalMin >= nyOpen && totalMin < nyClose) {
-    const rem = nyClose - totalMin;
-    text = `NY closes in ${Math.floor(rem/60)}h ${rem%60}m`;
-  } else if (totalMin < nyOpen) {
-    const rem = nyOpen - totalMin;
-    text = `NY opens in ${Math.floor(rem/60)}h ${rem%60}m`;
-  } else {
-    const rem = 24*60 - totalMin + nyOpen;
-    text = `NY opens in ${Math.floor(rem/60)}h ${rem%60}m`;
-  }
-  el.textContent = text;
-
   const nsEl = document.getElementById('st-nextsess');
   const ns2El = document.getElementById('st-nextsess2');
-  if (nsEl) nsEl.textContent = totalMin >= nyOpen && totalMin < nyClose ? `${Math.floor((nyClose-totalMin)/60)}h ${(nyClose-totalMin)%60}m` : `${Math.floor(((totalMin < nyOpen ? nyOpen - totalMin : 24*60 - totalMin + nyOpen))/60)}h ${((totalMin < nyOpen ? nyOpen - totalMin : 24*60 - totalMin + nyOpen))%60}m`;
-  if (ns2El) ns2El.textContent = totalMin >= nyOpen && totalMin < nyClose ? 'NY Session (active)' : 'NY Session';
+  const totalMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+
+  const SESSIONS = [
+    { name: 'London',     open: 7*60,  close: 11*60 },
+    { name: 'GC Primary', open: 12*60, close: 17*60 },
+    { name: 'NY Primary', open: 13*60, close: 19*60 },
+  ];
+
+  // Find active session (highest-priority = last match)
+  let active = null;
+  for (const s of SESSIONS) {
+    if (totalMin >= s.open && totalMin < s.close) active = s;
+  }
+
+  let topbarText = '';
+  let tileTime = '';
+  let tileName = '';
+
+  if (active) {
+    const rem = active.close - totalMin;
+    topbarText = `${active.name} closes in ${Math.floor(rem/60)}h ${rem%60}m`;
+    tileTime = `${Math.floor(rem/60)}h ${rem%60}m`;
+    tileName = `${active.name} (active)`;
+  } else {
+    // Find next upcoming session (could wrap to next day)
+    let minWait = Infinity;
+    let nextSess = null;
+    for (const s of SESSIONS) {
+      let wait = s.open - totalMin;
+      if (wait <= 0) wait += 24 * 60;
+      if (wait < minWait) { minWait = wait; nextSess = s; }
+    }
+    if (nextSess) {
+      topbarText = `${nextSess.name} opens in ${Math.floor(minWait/60)}h ${minWait%60}m`;
+      tileTime = `${Math.floor(minWait/60)}h ${minWait%60}m`;
+      tileName = `${nextSess.name}`;
+    }
+  }
+
+  if (el) el.textContent = topbarText;
+  if (nsEl) nsEl.textContent = tileTime;
+  if (ns2El) ns2El.textContent = tileName;
 }
 
 // ─── FETCH HELPERS ───────────────────────────────────────────────────────────
@@ -593,12 +652,14 @@ async function apiFetch(path) {
 // ─── PRICES ──────────────────────────────────────────────────────────────────
 async function fetchPrices() {
   try {
-    const data = await apiFetch('/api/apex/prices');
+    const data = await apiFetch('/api/apex/market');
+    const market = data.market || data;
     for (const sym of SYMBOLS) {
-      const p = data[sym];
+      const p = market[sym];
       if (p == null) continue;
       S.prevPrices[sym] = S.prices[sym];
-      S.prices[sym] = p;
+      // Normalise to { close, change, change_pct }
+      S.prices[sym] = { close: p.close || 0, change: p.change || 0, change_pct: p.pct || p.change_pct || 0 };
       updateTickerUI(sym);
     }
     setHealthDot('data', true);
@@ -615,10 +676,10 @@ function updateTickerUI(sym) {
   const p = S.prices[sym];
   if (p == null) return;
   const prev = S.prevPrices[sym];
-  const price = typeof p === 'object' ? (p.price || p.last || p.close || 0) : p;
-  const prevPrice = prev != null ? (typeof prev === 'object' ? (prev.price || prev.last || prev.close || 0) : prev) : price;
+  const price = typeof p === 'object' ? (p.close || p.price || p.last || 0) : p;
+  const prevPrice = prev != null ? (typeof prev === 'object' ? (prev.close || prev.price || prev.last || 0) : prev) : price;
   const chg = typeof p === 'object' ? (p.change || 0) : 0;
-  const chgPct = typeof p === 'object' ? (p.change_pct || 0) : 0;
+  const chgPct = typeof p === 'object' ? (p.change_pct || p.pct || 0) : 0;
   priceEl.textContent = price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
   const isPos = chg >= 0;
   chgEl.style.color = isPos ? 'var(--green)' : 'var(--red)';
@@ -650,7 +711,15 @@ function filterEquityByTab(points) {
   if (tab === 'ALL') return points;
   const now = Date.now();
   const cutoff = { '1W': 7*86400000, '1M': 30*86400000, '3M': 90*86400000 }[tab] || 0;
-  return points.filter(p => (now - (p.ts || p.time || 0)*1000) < cutoff);
+  return points.filter(p => {
+    if (p.ts)   return (now - p.ts * 1000) < cutoff;
+    if (p.time) return (now - p.time * 1000) < cutoff;
+    if (p.label) {
+      const m = p.label.match(/(\d{4}-\d{2}-\d{2})/);
+      if (m) return (now - new Date(m[1]).getTime()) < cutoff;
+    }
+    return true;
+  });
 }
 
 function renderEquity() {
@@ -660,7 +729,7 @@ function renderEquity() {
   const todayEl = document.getElementById('eqToday');
   const ddEl = document.getElementById('eqMaxDD');
   const totalEl = document.getElementById('eqTotal');
-  if (balEl) balEl.textContent = `$${(data.balance || 0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  if (balEl) balEl.textContent = `$${(data.current_balance || data.balance || 0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   if (todayEl) {
     const td = data.today_r || 0;
     const tdDol = data.today_pnl || 0;
@@ -673,17 +742,18 @@ function renderEquity() {
     ddEl.style.color = 'var(--red)';
   }
   if (totalEl) {
-    const tot = data.total_return || 0;
+    const bal = data.current_balance || data.balance || 10000;
+    const tot = data.total_return != null ? data.total_return : (bal - 10000) / 10000 * 100;
     totalEl.textContent = `${tot >= 0 ? '+' : ''}${tot.toFixed(1)}%`;
     totalEl.style.color = tot >= 0 ? 'var(--green)' : 'var(--red)';
   }
 
-  const rawPoints = data.equity_curve || data.points || [];
+  const rawPoints = data.points || data.equity_curve || [];
   const points = filterEquityByTab(rawPoints);
   if (!points.length) return;
 
   const labels = points.map((p, i) => p.label || i);
-  const vals = points.map(p => p.value || p.balance || p.equity || 0);
+  const vals = points.map(p => p.equity || p.value || p.balance || 0);
   const dds = points.map(p => p.drawdown || 0);
 
   buildEquityChart('equityChart', labels, vals, false);
@@ -906,7 +976,7 @@ function renderGates() {
     const matching = results.filter(r => r.symbol === sym && (r.direction||'').toLowerCase() === dir);
     let best = null; let bestGateCount = -1;
     for (const r of matching) {
-      const gatesPassed = (r.gates || []).filter(g => g === true || g === 'pass' || g === 1).length;
+      const gatesPassed = (r.gates || []).filter(g => g && g.passed === true).length;
       if (gatesPassed > bestGateCount) { bestGateCount = gatesPassed; best = r; }
     }
     if (bestGateCount > bestCount) { bestCount = bestGateCount; bestPair = `${sym}-${dir}`; }
@@ -921,7 +991,7 @@ function renderGates() {
     const allPass = best && best.valid;
     const dotsHtml = GATE_NAMES.map((name, i) => {
       const g = gates[i];
-      const cls = g === true || g === 'pass' || g === 1 ? 'pass' : g === false || g === 'fail' || g === 0 ? 'fail' : '';
+      const cls = (g && g.passed === true) ? 'pass' : (g && g.passed === false) ? 'fail' : '';
       return `<div class="gate-dot ${cls}" title="${name}">${name.slice(0,2)}</div>`;
     }).join('');
     return `<div class="gate-card-item${isBest ? ' best' : ''}">
@@ -1034,7 +1104,7 @@ async function loadCandles(sym) {
   const limit = TF_LIMITS[tf] || 300;
   try {
     const data = await apiFetch(`/api/apex/candles/${sym}/${tf}?limit=${limit}`);
-    const candles = (data.candles || data || []).filter(c => c && c.time && c.open != null);
+    const candles = (data.bars || data.candles || []).filter(c => c && c.time && c.open != null);
     if (!candles.length) {
       showNoData(sym, tf);
       return;
@@ -1487,8 +1557,30 @@ async function refresh() {
   ]);
 }
 
+// ─── TAB NAVIGATION ──────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-section').forEach(s => s.classList.toggle('active', s.id === `tab-${name}`));
+  // Resize LWC charts when charts tab becomes visible
+  if (name === 'charts') {
+    setTimeout(() => {
+      for (const sym of SYMBOLS) {
+        if (LWC[sym]) {
+          const cont = document.getElementById(`lwc-${sym}`);
+          if (cont && cont.clientWidth > 0) LWC[sym].applyOptions({ width: cont.clientWidth });
+        }
+      }
+    }, 50);
+  }
+}
+
 // ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
 function bindEvents() {
+  // Tab nav
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+
   // Equity tabs
   document.querySelectorAll('.eq-tab').forEach(btn => {
     btn.addEventListener('click', () => {
