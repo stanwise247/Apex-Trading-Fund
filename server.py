@@ -1184,42 +1184,78 @@ def background_scheduler():
             _fvg_windows = FVG_PARAMS.get('session_windows', {}).get('NQ', [{'start': 13, 'end': 19}])
             _in_fvg_session = any(w['start'] <= now_utc.hour < w['end'] for w in _fvg_windows)
             if _in_fvg_session:
-                fvg_signals = scan_fvg('NQ', now_utc)
-                for sig in fvg_signals:
-                    msg = format_fvg_alert(sig)
-                    send_telegram(msg)
-                    log_trade(sig)
-                    logger.info(f'FVG signal: NQ {sig["direction"].upper()} entry={sig["entry"]}')
+                if not hasattr(background_scheduler, '_risk_gate'):
+                    from risk_manager import RiskGate
+                    background_scheduler._risk_gate = RiskGate()
+                _rg = background_scheduler._risk_gate
+                if _rg.daily.is_daily_limit_hit():
+                    logger.info('FVG scanner: daily loss limit hit — signals suppressed')
+                else:
+                    _regime  = _rg.regime.get_regime()
+                    _dd_mult = _rg.dd.get_risk_multiplier()
+                    _risk_footer = (
+                        f'\n⚙️ <i>Regime: {_regime.label} | '
+                        f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
+                    )
+                    fvg_signals = scan_fvg('NQ', now_utc)
+                    for sig in fvg_signals:
+                        msg = format_fvg_alert(sig) + _risk_footer
+                        send_telegram(msg)
+                        log_trade(sig)
+                        logger.info(
+                            f'FVG signal: NQ {sig["direction"].upper()} entry={sig["entry"]} '
+                            f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
+                        )
         except Exception as e:
             logger.warning(f'FVG scanner error: {e}')
 
-        # ── APEX Engine v2 — Setup B Scanner ──────────────────────
+        # ── APEX Engine v2 — Setup A/B/C/E Scanner ──────────────────────
         try:
             from live_scanner import run_scan, send_telegram, format_alert, SignalTracker
+            from setup_e import format_alert as format_alert_e
             from trade_tracker import log_trade
             if not hasattr(background_scheduler, '_apex_tracker'):
                 background_scheduler._apex_tracker = SignalTracker()
+            if not hasattr(background_scheduler, '_risk_gate'):
+                from risk_manager import RiskGate
+                background_scheduler._risk_gate = RiskGate()
             tracker = background_scheduler._apex_tracker
-            signals = run_scan()
-            for result in signals:
-                if tracker.is_new(result):
-                    send_telegram(format_alert(result))
-                    tracker.mark_sent(result)
-                    log_trade({
-                        'symbol':    result.symbol,
-                        'direction': result.direction,
-                        'setup':     result.setup,
-                        'mode':      'swing',
-                        'entry':     result.entry,
-                        'stop':      result.stop,
-                        'target':    result.target,
-                        'rr':        result.rr,
-                        'session':   getattr(result, 'session', ''),
-                        'quality':   result.quality,
-                    })
-                    logger.info(f'APEX signal: {result.symbol} {result.direction} {result.setup}')
-            if not signals:
-                logger.debug('APEX scan: no signals')
+            _rg     = background_scheduler._risk_gate
+            if _rg.daily.is_daily_limit_hit():
+                logger.info('APEX scanner: daily loss limit hit — signals suppressed')
+            else:
+                _regime  = _rg.regime.get_regime()
+                _dd_mult = _rg.dd.get_risk_multiplier()
+                _risk_footer = (
+                    f'\n⚙️ <i>Regime: {_regime.label} | '
+                    f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
+                )
+                signals = run_scan()
+                for result in signals:
+                    if tracker.is_new(result):
+                        msg = (format_alert_e(result)
+                               if getattr(result, 'setup', '') == 'E_ema50_pullback'
+                               else format_alert(result))
+                        send_telegram(msg + _risk_footer)
+                        tracker.mark_sent(result)
+                        log_trade({
+                            'symbol':    result.symbol,
+                            'direction': result.direction,
+                            'setup':     result.setup,
+                            'mode':      'swing',
+                            'entry':     result.entry,
+                            'stop':      result.stop,
+                            'target':    result.target,
+                            'rr':        result.rr,
+                            'session':   getattr(result, 'session', ''),
+                            'quality':   result.quality,
+                        })
+                        logger.info(
+                            f'APEX signal: {result.symbol} {result.direction} {result.setup} '
+                            f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
+                        )
+                if not signals:
+                    logger.debug('APEX scan: no signals')
         except Exception as e:
             logger.debug(f'APEX scanner error: {e}')
 
@@ -1818,6 +1854,40 @@ def apex_trades():
             'ok':         True,
             'open_trades': get_open_trades(),
             'stats':      get_stats(),
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/risk', methods=['GET'])
+def apex_risk():
+    """Return current risk management status — regime, daily P&L, drawdown, multiplier."""
+    try:
+        from risk_manager import RegimeDetector, DailyRiskMonitor, DrawdownTracker
+        rd     = RegimeDetector()
+        drm    = DailyRiskMonitor()
+        ddt    = DrawdownTracker()
+        regime = rd.get_regime()
+        daily  = drm.get_status()
+        dd     = ddt.get_status()
+        open_count = 0
+        try:
+            from trade_tracker import get_open_trades
+            open_count = len(get_open_trades())
+        except Exception:
+            pass
+        return jsonify({
+            'ok':               True,
+            'current_regime':   regime.label,
+            'regime_adx':       round(regime.adx, 1),
+            'regime_atr_ratio': round(regime.atr_ratio, 2),
+            'daily_pnl_r':      daily['daily_pnl_r'],
+            'daily_limit_hit':  daily['limit_hit'],
+            'win_protection':   daily['win_protection'],
+            'drawdown_pct':     dd['drawdown_pct'],
+            'risk_multiplier':  dd['risk_multiplier'],
+            'open_trades_count': open_count,
+            'max_open_trades':  3,
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})

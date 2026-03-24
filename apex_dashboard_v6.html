@@ -349,6 +349,47 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
     </div>
   </div>
+  <!-- Risk Management Card -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-header" style="display:flex;align-items:center;gap:10px">
+      <span class="card-title">Risk Management</span>
+      <span id="riskRegimeBadge" style="font-size:11px;padding:3px 10px;border-radius:12px;font-weight:600;border:1px solid #333">—</span>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+        <div class="stat-tile">
+          <div class="stat-tile-label">Daily P&amp;L</div>
+          <div class="stat-tile-val" id="risk-daily-pnl">—R</div>
+          <div class="stat-tile-sub" id="risk-daily-status">—</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Drawdown</div>
+          <div class="stat-tile-val" id="risk-dd-pct">—%</div>
+          <div class="stat-tile-sub" id="risk-dd-status">—</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Risk Multiplier</div>
+          <div class="stat-tile-val" id="risk-mult">—×</div>
+          <div class="stat-tile-sub">of base 1%</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Daily Limit</div>
+          <div class="stat-tile-val" id="risk-limit-status">—</div>
+          <div class="stat-tile-sub">−3R stop / +5R lock</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Open Trades</div>
+          <div class="stat-tile-val" id="risk-open-trades">—</div>
+          <div class="stat-tile-sub">max 3 concurrent</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile-label">Regime ADX</div>
+          <div class="stat-tile-val" id="risk-adx">—</div>
+          <div class="stat-tile-sub">ATR ratio: <span id="risk-atr-ratio">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
   </div><!-- /tab-overview -->
 
   <!-- SECTION 3: CANDLE CHARTS -->
@@ -616,6 +657,7 @@ const S = {
   equity: null,
   scan: null,
   trades: null,
+  risk: null,
   journal: [],
   fvgZones: [],
   journalPage: 0,
@@ -1678,6 +1720,81 @@ function setHealthDot(name, ok) {
   el.className = 'health-dot' + (ok ? ' ok' : '');
 }
 
+// ─── RISK MANAGEMENT ─────────────────────────────────────────────────────────
+async function fetchRisk() {
+  try {
+    const d = await apiFetch('/api/apex/risk');
+    if (d && d.ok) { S.risk = d; renderRisk(); }
+  } catch(e) {}
+}
+
+function renderRisk() {
+  const d = S.risk;
+  if (!d) return;
+
+  const REGIME_COLORS = {
+    'TRENDING_BULL':    '#22c55e',
+    'TRENDING_BEAR':    '#ef4444',
+    'RANGING_HIGH_VOL': '#f97316',
+    'RANGING_LOW_VOL':  '#eab308',
+    'NORMAL':           '#6b7280',
+  };
+  const badge = document.getElementById('riskRegimeBadge');
+  if (badge) {
+    const c = REGIME_COLORS[d.current_regime] || '#6b7280';
+    badge.textContent = (d.current_regime || '—').replace(/_/g, ' ');
+    badge.style.background = c + '22';
+    badge.style.color       = c;
+    badge.style.borderColor = c + '66';
+  }
+
+  const pnl = d.daily_pnl_r ?? 0;
+  const pnlEl = document.getElementById('risk-daily-pnl');
+  if (pnlEl) {
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + 'R';
+    pnlEl.style.color = d.daily_limit_hit ? '#ef4444' : d.win_protection ? '#22c55e' : '#f1f5f9';
+  }
+  const pnlSub = document.getElementById('risk-daily-status');
+  if (pnlSub) {
+    pnlSub.textContent = d.daily_limit_hit ? '🚫 BLOCKED' : d.win_protection ? '🔒 LOCKED IN' : 'active';
+    pnlSub.style.color  = d.daily_limit_hit ? '#ef4444' : d.win_protection ? '#22c55e' : '';
+  }
+
+  const dd = d.drawdown_pct ?? 0;
+  const ddEl = document.getElementById('risk-dd-pct');
+  if (ddEl) ddEl.textContent = dd.toFixed(1) + '%';
+  const ddSub = document.getElementById('risk-dd-status');
+  if (ddSub) {
+    ddSub.textContent = dd >= 15 ? '⛔ STOP TRADING' : dd >= 10 ? '⚠️ HALF SIZE' : dd >= 5 ? '⚠️ REDUCED' : 'normal';
+    ddSub.style.color  = dd >= 10 ? '#ef4444' : dd >= 5 ? '#f97316' : '';
+  }
+
+  const mult = d.risk_multiplier ?? 1;
+  const multEl = document.getElementById('risk-mult');
+  if (multEl) {
+    multEl.textContent = mult.toFixed(2) + '×';
+    multEl.style.color  = mult < 0.5 ? '#ef4444' : mult < 1 ? '#f97316' : '#22c55e';
+  }
+
+  const limEl = document.getElementById('risk-limit-status');
+  if (limEl) {
+    limEl.textContent = d.daily_limit_hit ? 'BLOCKED' : d.win_protection ? 'LOCKED' : 'OK';
+    limEl.style.color  = d.daily_limit_hit ? '#ef4444' : d.win_protection ? '#eab308' : '#22c55e';
+  }
+
+  const otEl = document.getElementById('risk-open-trades');
+  if (otEl) {
+    const ot = d.open_trades_count ?? 0, mx = d.max_open_trades ?? 3;
+    otEl.textContent = ot + ' / ' + mx;
+    otEl.style.color  = ot >= mx ? '#ef4444' : '#f1f5f9';
+  }
+
+  const adxEl = document.getElementById('risk-adx');
+  if (adxEl) adxEl.textContent = d.regime_adx != null ? d.regime_adx.toFixed(1) : '—';
+  const atrEl = document.getElementById('risk-atr-ratio');
+  if (atrEl) atrEl.textContent = d.regime_atr_ratio != null ? d.regime_atr_ratio.toFixed(2) : '—';
+}
+
 // ─── TELEGRAM HEALTH ────────────────────────────────────────────────────────
 async function checkTelegramHealth() {
   try {
@@ -1733,6 +1850,7 @@ async function refresh() {
     refreshCharts(),
     fetchFvgZones(),
     checkTelegramHealth(),
+    fetchRisk(),
   ]);
 }
 

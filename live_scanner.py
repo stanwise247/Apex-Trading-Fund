@@ -260,6 +260,13 @@ def main():
     tracker         = SignalTracker()
     last_bar_minute = -1
 
+    try:
+        from risk_manager import RiskGate
+        risk_gate = RiskGate()
+    except Exception as _re:
+        logger.warning(f'RiskGate init failed — risk checks disabled: {_re}')
+        risk_gate = None
+
     send_telegram(
         '🚀 <b>APEX Scanner Online</b>\n'
         f'Monitoring: {", ".join(INSTRUMENTS)}\n'
@@ -282,31 +289,53 @@ def main():
 
             signals = run_scan(now)
 
-            for result in signals:
-                if tracker.is_new(result):
-                    msg = format_alert_e(result) if getattr(result, 'setup', '') == 'E_ema50_pullback' else format_alert(result)
-                    send_telegram(msg)
-                    tracker.mark_sent(result)
-                    logger.info(f'Alert sent: {result.symbol} {result.direction}')
-                    # Log trade to tracker
-                    try:
-                        from trade_tracker import log_trade
-                        log_trade({
-                            'symbol':    result.symbol,
-                            'direction': result.direction,
-                            'setup':     result.setup,
-                            'mode':      'swing',
-                            'entry':     result.entry,
-                            'stop':      result.stop,
-                            'target':    result.target,
-                            'rr':        result.rr,
-                            'session':   result.session,
-                            'quality':   result.quality,
-                        })
-                    except Exception as e:
-                        logger.error(f'Trade log error: {e}')
-                else:
-                    logger.debug(f'Duplicate suppressed: {result.symbol} {result.direction}')
+            # Risk gate check — block all signals if daily limit hit
+            _risk_blocked = False
+            _risk_footer  = ''
+            if risk_gate is not None:
+                try:
+                    if risk_gate.daily.is_daily_limit_hit():
+                        logger.info('Daily loss limit hit — all signals suppressed')
+                        _risk_blocked = True
+                    else:
+                        _regime  = risk_gate.regime.get_regime()
+                        _dd_mult = risk_gate.dd.get_risk_multiplier()
+                        _risk_footer = (
+                            f'\n⚙️ <i>Regime: {_regime.label} | '
+                            f'Risk: {_dd_mult:.2f}× | DD: {risk_gate.dd.get_drawdown_pct():.1f}%</i>'
+                        )
+                        logger.debug(f'Risk: regime={_regime.label} dd_mult={_dd_mult:.2f}×')
+                except Exception as _rge:
+                    logger.warning(f'Risk gate check failed: {_rge}')
+
+            if not _risk_blocked:
+                for result in signals:
+                    if tracker.is_new(result):
+                        msg = (format_alert_e(result)
+                               if getattr(result, 'setup', '') == 'E_ema50_pullback'
+                               else format_alert(result))
+                        send_telegram(msg + _risk_footer)
+                        tracker.mark_sent(result)
+                        logger.info(f'Alert sent: {result.symbol} {result.direction}')
+                        # Log trade to tracker
+                        try:
+                            from trade_tracker import log_trade
+                            log_trade({
+                                'symbol':    result.symbol,
+                                'direction': result.direction,
+                                'setup':     result.setup,
+                                'mode':      'swing',
+                                'entry':     result.entry,
+                                'stop':      result.stop,
+                                'target':    result.target,
+                                'rr':        result.rr,
+                                'session':   result.session,
+                                'quality':   result.quality,
+                            })
+                        except Exception as e:
+                            logger.error(f'Trade log error: {e}')
+                    else:
+                        logger.debug(f'Duplicate suppressed: {result.symbol} {result.direction}')
 
             tracker.cleanup()
 
