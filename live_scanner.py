@@ -18,6 +18,7 @@ import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from setup_engine import check_setup
+from setup_e import check_setup_e, format_alert as format_alert_e
 
 logging.basicConfig(
     level  = logging.INFO,
@@ -84,9 +85,10 @@ def format_alert(result) -> str:
     direction_emoji = '🟢' if result.direction == 'long' else '🔴'
     quality_tag     = '⭐ PRIMARY' if result.quality == 'primary' else 'SECONDARY'
     setup_names = {
-        'A_sweep_ob':      'Setup A — Sweep + OB',
-        'B_choch_breaker': 'Setup B — CHoCH + Breaker',
-        'C_bos_ob':        'Setup C — BOS + OB',
+        'A_sweep_ob':       'Setup A — Sweep + OB',
+        'B_choch_breaker':  'Setup B — CHoCH + Breaker',
+        'C_bos_ob':         'Setup C — BOS + OB',
+        'E_ema50_pullback': 'Setup E — EMA50 Pullback',
     }
     setup_name = setup_names.get(result.setup, result.setup)
     msg = (
@@ -210,6 +212,21 @@ def run_scan(dt: datetime = None) -> list:
                         )
                 except Exception as e:
                     logger.error(f'Gate check failed {symbol} {direction}: {e}')
+
+    # Setup E — EMA50 Pullback, NQ only, session-gated internally
+    if dow < 5:
+        for direction in ('long', 'short'):
+            try:
+                result = check_setup_e('NQ', direction, dt)
+                if result.valid:
+                    results.append(result)
+                    logger.info(
+                        f'SIGNAL: NQ {direction.upper()} E_ema50_pullback '
+                        f'entry={result.entry} stop={result.stop} target={result.target}'
+                    )
+            except Exception as e:
+                logger.error(f'Setup E gate check failed NQ {direction}: {e}')
+
     return results
 
 
@@ -246,7 +263,7 @@ def main():
     send_telegram(
         '🚀 <b>APEX Scanner Online</b>\n'
         f'Monitoring: {", ".join(INSTRUMENTS)}\n'
-        f'Setup B — CHoCH + Breaker\n'
+        f'Setups: A/B/C (swing) + E (EMA50 Pullback, NQ)\n'
         f'<i>{datetime.now(timezone.utc).astimezone(NY_TZ).strftime("%Y-%m-%d %H:%M")} ET</i>'
     )
 
@@ -267,7 +284,7 @@ def main():
 
             for result in signals:
                 if tracker.is_new(result):
-                    msg = format_alert(result)
+                    msg = format_alert_e(result) if getattr(result, 'setup', '') == 'E_ema50_pullback' else format_alert(result)
                     send_telegram(msg)
                     tracker.mark_sent(result)
                     logger.info(f'Alert sent: {result.symbol} {result.direction}')

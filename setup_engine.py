@@ -628,6 +628,36 @@ def check_setup_c(symbol, direction, mode='swing', dt=None):
                        gates=gates, entry=entry, stop=stop, target=target, rr=rr,
                        session=g4.detail, quality=quality, timestamp=ts)
 
+# ─────────────────────────────────────────────────────────────
+#  SETUP E — EMA50 PULLBACK  (canonical logic lives in setup_e.py)
+# ─────────────────────────────────────────────────────────────
+
+def check_setup_e(symbol: str, direction: str,
+                  dt: datetime = None) -> 'SetupResult':
+    """
+    Thin wrapper — delegates to setup_e.py (canonical implementation).
+    Adapts ESetupResult → SetupResult for compatibility with scan_all / server.py.
+    """
+    from setup_e import check_setup_e as _check_e
+    e = _check_e(symbol, direction, dt)
+    # Convert EGateResult list → GateResult list
+    gates = [GateResult(g.passed, g.gate, g.name, g.detail) for g in e.gates]
+    return SetupResult(
+        symbol    = e.symbol,
+        direction = e.direction,
+        setup     = e.setup,
+        valid     = e.valid,
+        gates     = gates,
+        entry     = e.entry,
+        stop      = e.stop,
+        target    = e.target,
+        rr        = e.rr,
+        session   = 'NY Primary (13-18 UTC)',
+        quality   = 'primary',
+        timestamp = e.timestamp,
+    )
+
+
 def scan_all(dt: datetime = None) -> list[SetupResult]:
     """Scan all instruments and directions for all setups."""
     results   = []
@@ -646,6 +676,16 @@ def scan_all(dt: datetime = None) -> list[SetupResult]:
                 r = check_setup_c(symbol, direction, mode, dt)
                 if r.valid and key not in triggered:
                     results.append(r); triggered.add(key)
+
+    # Setup E — EMA50 Pullback (NQ validated; independent of swing setups)
+    for direction in ('long', 'short'):
+        try:
+            r = check_setup_e('NQ', direction, dt)
+            if r.valid:
+                results.append(r)
+        except Exception:
+            pass
+
     return results
 
 

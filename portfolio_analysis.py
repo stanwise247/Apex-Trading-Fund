@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from backtest_fvg_scored import run_scored_fvg_backtest
+from backtest_ema50_pullback import run_ema50_backtest
 
 # ─────────────────────────────────────────────────────────────
 #  CONFIG — day filters and session rules per instrument/setup
@@ -63,6 +64,20 @@ def load_fvg(min_score=60):
     for t in result.get('trade_log', []):
         rows.append({
             'strategy':   f'FVG_NQ_s{min_score}',
+            'entry_time': pd.Timestamp(t['entry_time']),
+            'pnl_r':      float(t['pnl_r']),
+            'exit_reason':t.get('exit_reason', ''),
+            'session':    'primary',
+        })
+    return rows
+
+
+def load_setup_e():
+    result = run_ema50_backtest('NQ', start='2024-09-01')
+    rows = []
+    for t in result.get('trade_log', []):
+        rows.append({
+            'strategy':   'E_NQ_ema50',
             'entry_time': pd.Timestamp(t['entry_time']),
             'pnl_r':      float(t['pnl_r']),
             'exit_reason':t.get('exit_reason', ''),
@@ -132,6 +147,11 @@ print('\nLoading FVG NQ (min_score=60)...')
 fvg_trades = load_fvg(min_score=60)
 all_trades.extend(fvg_trades)
 per_instrument_stats('FVG_NQ_s60', fvg_trades)
+
+print('\nLoading Setup E — EMA50 Pullback NQ...')
+e_trades = load_setup_e()
+all_trades.extend(e_trades)
+per_instrument_stats('E_NQ_ema50', e_trades)
 
 # Sort all trades by entry time
 all_trades.sort(key=lambda t: t['entry_time'])

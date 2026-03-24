@@ -1723,6 +1723,7 @@ _startup()
 def apex_scan():
     """Run full gate check and return results."""
     from setup_engine import check_setup, check_setup_a, check_setup_c
+    from setup_e import check_setup_e
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
     NY = ZoneInfo('America/New_York')
@@ -1753,6 +1754,27 @@ def apex_scan():
                     })
                 except Exception as e:
                     pass
+
+    # Setup E — EMA50 Pullback, NQ only
+    for direction in ('long', 'short'):
+        try:
+            r = check_setup_e('NQ', direction, now)
+            gates = [{'gate': g.gate, 'name': g.name, 'passed': g.passed, 'detail': g.detail} for g in r.gates]
+            results.append({
+                'symbol':    'NQ',
+                'direction': direction,
+                'setup':     'E',
+                'valid':     r.valid,
+                'gates':     gates,
+                'entry':     r.entry,
+                'stop':      r.stop,
+                'target':    r.target,
+                'rr':        r.rr,
+                'quality':   r.quality,
+                'failed_at': next((g['name'] for g in gates if not g['passed']), None),
+            })
+        except Exception as e:
+            pass
 
     # FVG signals — NQ only
     fvg_signals = []

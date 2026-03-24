@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "name": "Setup F Candidate — Prior Day High/Low Test",
+    "status": "watchlist",
+    "banked_date": "2026-03-24",
+    "revisit_after": "2026-09-24",
+    "reason_not_live": "OOS n=48 < 50 minimum gate. Need ~6 more months of live data.",
+    "gate_criteria": {
+      "min_oos_sharpe": 4.0,
+      "min_oos_ev": 0.0,
+      "min_oos_n": 50
+    },
+    "oos_gate_result": "FAIL — n=48 (needs 50). Sharpe=8.27 and EV=+0.622R both PASS individually.",
+    "notes": "Highest OOS Sharpe of all patterns tested (8.27). Narrowly missed n gate by 2 trades. Very high conviction candidate for Setup F once sample size clears 50 OOS trades."
+  },
+  "specification": {
+    "symbol": "NQ",
+    "timeframe": "5min",
+    "session_utc": "13:00-18:59",
+    "days": "all weekdays (Mon-Fri)",
+    "htf_bias_required": true,
+    "htf_bias_method": "4hour EMA20 — close > ema*1.001 = bullish, < ema*0.999 = bearish",
+    "entry_conditions": {
+      "long": "Current bar low touches within 0.2 ATR of prior trading day low AND bar closes bullish AND 4h bias is bullish",
+      "short": "Current bar high touches within 0.2 ATR of prior trading day high AND bar closes bearish AND 4h bias is bearish"
+    },
+    "prior_day_calculation": "Prior calendar trading day (Mon uses Friday's levels). High and low of all 5min bars in the prior day's session.",
+    "stop_atr_mult": 1.5,
+    "target_atr_mult": 3.0,
+    "rr": 2.0,
+    "atr_period": 14,
+    "atr_smoothing": "Wilder (ewm alpha=1/14, adjust=False)",
+    "min_gap_bars": 12,
+    "volume_filter": "none"
+  },
+  "backtest_results": {
+    "data_range": "2024-09-01 to 2026-03-24",
+    "full_dataset": {
+      "n": 85,
+      "win_rate_pct": 56.5,
+      "expectancy_r": 0.543,
+      "total_r": 46.2,
+      "max_dd_r": -4.92,
+      "sharpe": 6.60,
+      "tpw": 1.1
+    },
+    "is_period": {
+      "range": "2024-09-01 to 2025-06-30",
+      "n": 37,
+      "win_rate_pct": 48.6,
+      "expectancy_r": 0.440,
+      "sharpe": 4.82
+    },
+    "oos_period": {
+      "range": "2025-07-01 to 2026-03-24",
+      "n": 48,
+      "win_rate_pct": 62.5,
+      "expectancy_r": 0.622,
+      "sharpe": 8.27,
+      "gate_pass": false,
+      "gate_fail_reason": "n=48 < 50 minimum"
+    }
+  },
+  "comparison": {
+    "setup_e_oos_sharpe": 5.80,
+    "setup_e_oos_n": 210,
+    "pdhl_oos_sharpe": 8.27,
+    "pdhl_oos_n": 48,
+    "verdict": "PDH/L has superior Sharpe but insufficient sample. Re-evaluate when OOS n >= 50."
+  },
+  "revisit_checklist": [
+    "Run backtest_ema50_pullback.py equivalent for PDH/L to get updated OOS n",
+    "Check if OOS n >= 50",
+    "Re-run IS/OOS split with updated data",
+    "If Sharpe >= 4.0 AND EV > 0 AND n >= 50: promote to Setup F and implement",
+    "Check for regime changes — if WR has decayed significantly, revisit entry conditions"
+  ]
+}

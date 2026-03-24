@@ -420,6 +420,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
         <button class="gate-setup-tab" data-setup="A">Setup A</button>
         <button class="gate-setup-tab" data-setup="C">Setup C</button>
         <button class="gate-setup-tab" data-setup="D">FVG D</button>
+        <button class="gate-setup-tab" data-setup="E">EMA50 E</button>
       </div>
       <div class="card-body" id="gateBody">
         <div class="skeleton" style="height:80px;margin-bottom:8px"></div>
@@ -437,6 +438,38 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
         <div class="skeleton" style="height:40px;margin-bottom:6px"></div>
         <div class="skeleton" style="height:40px;margin-bottom:6px"></div>
         <div class="skeleton" style="height:40px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Setup E live status bar -->
+  <div style="margin-top:16px">
+    <div class="card">
+      <div class="card-header" style="padding-bottom:8px">
+        <span class="card-title">Setup E — EMA50 Pullback</span>
+        <span style="font-size:10px;color:var(--text2);margin-left:8px">NQ · 5min · NY session · Sharpe 5.17 OOS</span>
+        <span class="chart-updated" id="setupELastScan" style="margin-left:auto">—</span>
+      </div>
+      <div class="card-body" style="padding:10px 16px">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px">
+          <div class="stat-tile">
+            <div class="stat-tile-label">4h Bias</div>
+            <div class="stat-tile-val" id="se-bias" style="font-size:14px">—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-tile-label">EMA50</div>
+            <div class="stat-tile-val" id="se-ema50" style="font-size:14px">—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-tile-label">ATR</div>
+            <div class="stat-tile-val" id="se-atr" style="font-size:14px">—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-tile-label">Signal</div>
+            <div class="stat-tile-val" id="se-signal" style="font-size:13px">—</div>
+          </div>
+        </div>
+        <div id="se-gate-row" style="font-size:11px;color:var(--text2);line-height:1.7">Scan to load gate status…</div>
       </div>
     </div>
   </div>
@@ -974,6 +1007,7 @@ async function fetchScan() {
     S.scan = data;
     setHealthDot('scanner', true);
     renderGates();
+    renderSetupE();
   } catch(e) {
     setHealthDot('scanner', false);
     renderGatesEmpty();
@@ -1043,11 +1077,13 @@ function renderGates() {
     const gates = r.gates || [];
     const allPass = r.valid;
     const isBest = `${sym}-${dir}` === bestKey && bestCount > 0;
-    const dotsHtml = GATE_NAMES.map((name, i) => {
+    const dotsHtml = GATE_NAMES.map((fallbackName, i) => {
       const g = gates[i];
       const cls = (g && g.passed === true) ? 'pass' : (g && g.passed === false) ? 'fail' : '';
       const detail = g ? g.detail || '' : '';
-      return `<div class="gate-dot ${cls}" title="${name}: ${detail}">${name.slice(0,2)}</div>`;
+      const name = (g && g.name) ? g.name : fallbackName;
+      const label = name.length > 4 ? name.slice(0,4) : name;
+      return `<div class="gate-dot ${cls}" title="${name}: ${detail}">${label}</div>`;
     }).join('');
     const failedAt = r.failed_at || '';
     return `<div class="gate-card-item${isBest ? ' best' : ''}">
@@ -1063,6 +1099,73 @@ function renderGatesEmpty() {
   const body = document.getElementById('gateBody');
   if (!body) return;
   body.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">No scan data available</div>';
+}
+
+// ─── SETUP E STATUS CARD ─────────────────────────────────────────────────────
+function renderSetupE() {
+  const results = (S.scan && S.scan.results) || [];
+  const eResults = results.filter(r => r.setup === 'E');
+
+  const biasEl   = document.getElementById('se-bias');
+  const ema50El  = document.getElementById('se-ema50');
+  const atrEl    = document.getElementById('se-atr');
+  const sigEl    = document.getElementById('se-signal');
+  const gateEl   = document.getElementById('se-gate-row');
+  const timeEl   = document.getElementById('setupELastScan');
+
+  if (timeEl && S.scan && S.scan.time) timeEl.textContent = S.scan.time;
+
+  // Extract bias from gate 2 detail of either direction
+  let biasStr = '—'; let ema50Str = '—'; let atrStr = '—';
+  for (const r of eResults) {
+    const g2 = (r.gates || [])[1];
+    if (g2 && g2.detail) {
+      const bm = g2.detail.match(/4h EMA20 (\w+)/i);
+      if (bm) biasStr = bm[1].toUpperCase();
+      const em = g2.detail.match(/ema=([\d.]+)/i);
+      if (em) ema50Str = parseFloat(em[1]).toFixed(2);
+    }
+    const g3 = (r.gates || [])[2];
+    if (g3 && g3.detail) {
+      const am = g3.detail.match(/EMA50 ([\d.]+)/i);
+      if (am) ema50Str = parseFloat(am[1]).toFixed(2);
+    }
+    break;
+  }
+
+  const validE = eResults.filter(r => r.valid);
+  if (validE.length > 0) {
+    const r = validE[0];
+    const dir = r.direction.toUpperCase();
+    const col = r.direction === 'long' ? 'var(--green)' : 'var(--red)';
+    if (sigEl) { sigEl.textContent = `${dir} ✓`; sigEl.style.color = col; }
+    if (biasEl) { biasEl.textContent = biasStr; biasEl.style.color = biasStr === 'BULLISH' ? 'var(--green)' : 'var(--red)'; }
+    if (ema50El) ema50El.textContent = r.entry ? r.entry.toFixed(2) : ema50Str;
+    if (atrEl) atrEl.textContent = atrStr;
+    if (gateEl) {
+      const gateHtml = (r.gates || []).map(g => {
+        const dot = g.passed ? '🟢' : '🔴';
+        return `<span style="margin-right:12px">${dot} ${g.name}</span>`;
+      }).join('');
+      gateEl.innerHTML = gateHtml + `<br><span style="color:var(--green);font-weight:600">SIGNAL ACTIVE — Entry: ${r.entry?.toFixed(2)} SL: ${r.stop?.toFixed(2)} TP: ${r.target?.toFixed(2)} RR: ${r.rr}x</span>`;
+    }
+  } else {
+    if (sigEl) { sigEl.textContent = 'Waiting'; sigEl.style.color = 'var(--text2)'; }
+    if (biasEl) { biasEl.textContent = biasStr; biasEl.style.color = biasStr === 'BULLISH' ? 'var(--green)' : biasStr === 'BEARISH' ? 'var(--red)' : 'var(--text2)'; }
+    if (ema50El) ema50El.textContent = ema50Str;
+    if (atrEl) atrEl.textContent = atrStr;
+    // Show gate state for one direction
+    const ref = eResults.find(r => r.direction === 'long') || eResults[0];
+    if (ref && gateEl) {
+      const gateHtml = (ref.gates || []).map(g => {
+        const dot = g.passed ? '🟢' : '🔴';
+        return `<span style="margin-right:12px">${dot} ${g.name}${!g.passed ? ` <span style="color:var(--text2)">(${g.detail.slice(0,50)})</span>` : ''}</span>`;
+      }).join('');
+      gateEl.innerHTML = gateHtml;
+    } else if (gateEl) {
+      gateEl.textContent = 'Waiting for session / bias alignment…';
+    }
+  }
 }
 
 // ─── FVG ZONES ───────────────────────────────────────────────────────────────
