@@ -103,6 +103,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
 /* SIGNAL + FVG */
 .signal-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.gate-setup-tabs{display:flex;gap:4px;padding:0 16px 10px}
+.gate-setup-tab{padding:3px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);font-family:'DM Sans',sans-serif;transition:all .15s}
+.gate-setup-tab:hover{color:var(--text)}
+.gate-setup-tab.active{background:var(--purple);border-color:var(--purple);color:#fff}
 .gate-card-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;position:relative;transition:border-color .2s}
 .gate-card-item.best{border-color:var(--amber)}
 .gate-sym-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:rgba(77,158,255,0.15);color:var(--blue);margin-right:6px}
@@ -407,9 +411,15 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   <div class="signal-row" id="signalRow">
     <!-- Gate Status -->
     <div class="card">
-      <div class="card-header" style="padding-bottom:12px">
+      <div class="card-header" style="padding-bottom:8px">
         <span class="card-title">Gate Status</span>
         <div id="gateSpinner" class="spinner" style="display:none"></div>
+      </div>
+      <div class="gate-setup-tabs" id="gateSetupTabs">
+        <button class="gate-setup-tab active" data-setup="B">Setup B</button>
+        <button class="gate-setup-tab" data-setup="A">Setup A</button>
+        <button class="gate-setup-tab" data-setup="C">Setup C</button>
+        <button class="gate-setup-tab" data-setup="D">FVG D</button>
       </div>
       <div class="card-body" id="gateBody">
         <div class="skeleton" style="height:80px;margin-bottom:8px"></div>
@@ -579,6 +589,7 @@ const S = {
   journalFilters: { symbol:'', direction:'', setup:'', dateFrom:'', dateTo:'' },
   journalSort: { field:'entry_time', dir:-1 },
   equityTab: 'ALL',
+  gateSetup: 'B',
 };
 
 const CHARTS = {};
@@ -974,41 +985,76 @@ async function fetchScan() {
 function renderGates() {
   const body = document.getElementById('gateBody');
   if (!body) return;
-  const results = (S.scan && (S.scan.results || S.scan.signals || [])) || [];
-  const pairs = [
-    ['NQ','long'],['NQ','short'],
-    ['ES','long'],['ES','short'],
-    ['GC','long'],['GC','short'],
-  ];
-  let bestPair = null; let bestCount = -1;
-  const pairData = pairs.map(([sym, dir]) => {
-    const matching = results.filter(r => r.symbol === sym && (r.direction||'').toLowerCase() === dir);
-    let best = null; let bestGateCount = -1;
-    for (const r of matching) {
-      const gatesPassed = (r.gates || []).filter(g => g && g.passed === true).length;
-      if (gatesPassed > bestGateCount) { bestGateCount = gatesPassed; best = r; }
-    }
-    if (bestGateCount > bestCount) { bestCount = bestGateCount; bestPair = `${sym}-${dir}`; }
-    return { sym, dir, best, bestGateCount };
-  });
+  const setup = S.gateSetup || 'B';
 
-  body.innerHTML = pairData.map(({ sym, dir, best, bestGateCount }) => {
-    const isBest = `${sym}-${dir}` === bestPair && bestGateCount > 0;
-    const gates = best ? (best.gates || []) : [];
-    const failedAt = best ? (best.failed_at || '') : '';
-    const setup = best ? (best.setup || '') : '';
-    const allPass = best && best.valid;
+  // Update tab active state
+  document.querySelectorAll('.gate-setup-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.setup === setup)
+  );
+
+  if (setup === 'D') {
+    // FVG signals panel
+    const sigs = (S.scan && S.scan.fvg_signals) || [];
+    if (!sigs.length) {
+      body.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">No FVG signals — scanner needs active session</div>';
+      return;
+    }
+    body.innerHTML = sigs.map(s => {
+      const dir = (s.direction || '').toLowerCase();
+      const entry = s.entry ? s.entry.toFixed(2) : '—';
+      const stop  = s.stop  ? s.stop.toFixed(2)  : '—';
+      const tgt   = s.target ? s.target.toFixed(2) : '—';
+      const rr    = s.rr ? s.rr.toFixed(1) : '—';
+      return `<div class="gate-card-item best">
+        <span class="setup-badge-sm">D</span>
+        <span class="gate-sym-badge">${s.symbol}</span>
+        <span class="gate-dir-badge ${dir}">${dir.toUpperCase()}</span>
+        <div style="font-size:11px;color:var(--text2);margin-top:6px">
+          Entry: <span style="color:var(--text)">${entry}</span> &nbsp;
+          SL: <span style="color:var(--red)">${stop}</span> &nbsp;
+          TP: <span style="color:var(--green)">${tgt}</span> &nbsp;
+          RR: <span style="color:var(--amber)">${rr}</span>
+        </div>
+        <div class="gate-result allpass">FVG SIGNAL ✓</div>
+      </div>`;
+    }).join('');
+    return;
+  }
+
+  // Setups A, B, C — filter scan results by setup name
+  const results = (S.scan && S.scan.results) || [];
+  const filtered = results.filter(r => r.setup === setup);
+
+  if (!filtered.length) {
+    body.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">No scan data — refresh to load</div>';
+    return;
+  }
+
+  // Find the highest-gates pair for highlight
+  let bestKey = ''; let bestCount = -1;
+  for (const r of filtered) {
+    const n = (r.gates || []).filter(g => g && g.passed === true).length;
+    if (n > bestCount) { bestCount = n; bestKey = `${r.symbol}-${r.direction}`; }
+  }
+
+  body.innerHTML = filtered.map(r => {
+    const sym = r.symbol;
+    const dir = (r.direction || '').toLowerCase();
+    const gates = r.gates || [];
+    const allPass = r.valid;
+    const isBest = `${sym}-${dir}` === bestKey && bestCount > 0;
     const dotsHtml = GATE_NAMES.map((name, i) => {
       const g = gates[i];
       const cls = (g && g.passed === true) ? 'pass' : (g && g.passed === false) ? 'fail' : '';
-      return `<div class="gate-dot ${cls}" title="${name}">${name.slice(0,2)}</div>`;
+      const detail = g ? g.detail || '' : '';
+      return `<div class="gate-dot ${cls}" title="${name}: ${detail}">${name.slice(0,2)}</div>`;
     }).join('');
+    const failedAt = r.failed_at || '';
     return `<div class="gate-card-item${isBest ? ' best' : ''}">
-      ${setup ? `<span class="setup-badge-sm">${setup}</span>` : ''}
       <span class="gate-sym-badge">${sym}</span>
       <span class="gate-dir-badge ${dir}">${dir.toUpperCase()}</span>
       <div class="gate-dots-row">${dotsHtml}</div>
-      <div class="gate-result${allPass ? ' allpass' : ''}">${allPass ? 'ALL PASS ✓' : failedAt ? `Failed at: ${failedAt}` : '—'}</div>
+      <div class="gate-result${allPass ? ' allpass' : ''}">${allPass ? 'ALL PASS ✓' : failedAt ? `Blocked: ${failedAt}` : '—'}</div>
     </div>`;
   }).join('');
 }
@@ -1072,15 +1118,20 @@ function initLWC(sym) {
   if (LWC[sym]) { try { LWC[sym].remove(); } catch(e) {} delete LWC[sym]; delete LWCS[sym]; }
   container.innerHTML = '';
 
+  // Measure width now — container must be visible before calling initLWC
+  const w = container.clientWidth || container.offsetWidth || 600;
   const chart = LightweightCharts.createChart(container, {
-    autoSize: true,
+    width: w,
+    height: 300,
     layout: { background: { color: '#141720' }, textColor: '#8892a4' },
     grid: { vertLines: { color: '#252a3a' }, horzLines: { color: '#252a3a' } },
     crosshair: { mode: 1 },
     rightPriceScale: { borderColor: '#252a3a', scaleMargins: { top: 0.05, bottom: 0.25 } },
     timeScale: { borderColor: '#252a3a', timeVisible: true, secondsVisible: false },
-    height: 300,
+    handleScroll: { mouseWheel: true, pressedMouseMove: true },
+    handleScale: { mouseWheel: true, pinch: true },
   });
+  console.log(`[LWC] initLWC(${sym}) container=${w}px`);
 
   const candleSeries = chart.addCandlestickSeries({
     upColor: 'var(--green)', downColor: 'var(--red)',
@@ -1587,13 +1638,19 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-section').forEach(s => s.classList.toggle('active', s.id === `tab-${name}`));
   if (name === 'charts') {
-    // Container is now visible — init + load any uninitialised charts, then reload all
-    setTimeout(() => {
+    // Wait 100ms for browser to paint the now-visible containers before measuring clientWidth
+    setTimeout(async () => {
       for (const sym of SYMBOLS) {
+        const cont = document.getElementById(`lwc-${sym}`);
+        if (!cont) continue;
+        // (Re)init if needed — container is visible so clientWidth is correct
         if (!LWC[sym]) initLWC(sym);
+        // Force sync width in case a stale chart exists from a prior smaller viewport
+        const w = cont.clientWidth;
+        if (w > 0 && LWC[sym]) LWC[sym].applyOptions({ width: w });
+        await loadCandles(sym);
       }
-      refreshCharts();
-    }, 50);
+    }, 100);
   }
 }
 
@@ -1602,6 +1659,14 @@ function bindEvents() {
   // Tab nav
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+
+  // Gate setup tabs
+  document.querySelectorAll('.gate-setup-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      S.gateSetup = btn.dataset.setup;
+      renderGates();
+    });
   });
 
   // Equity tabs
@@ -1722,6 +1787,14 @@ function bindEvents() {
 function init() {
   bindEvents();
   // LWC charts are initialised lazily on first Charts tab click (containers hidden at startup)
+  // Resize all active charts when window resizes
+  window.addEventListener('resize', () => {
+    for (const sym of SYMBOLS) {
+      if (!LWC[sym]) continue;
+      const cont = document.getElementById(`lwc-${sym}`);
+      if (cont && cont.clientWidth > 0) LWC[sym].applyOptions({ width: cont.clientWidth });
+    }
+  });
   updateClock();
   setInterval(updateClock, 1000);
   refresh();

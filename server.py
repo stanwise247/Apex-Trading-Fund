@@ -2050,12 +2050,18 @@ def apex_fvg_zones(symbol):
         if not current_price:
             current_price = float(df_15m['close'].iloc[-1])
 
+        # Scoring params computed once
+        current_bar_time = df_15m.index[-1]
+        vol_baseline     = float(df_15m['volume'].tail(20).mean())
+
         zones = []
         for fvg in fvgs:
             age_bars = len(df_15m) - df_15m.index.searchsorted(fvg['formed_at'])
             size_atr = round(fvg['size'] / fvg['atr'], 2) if fvg['atr'] else 0
-            # Simple score based on size and bias alignment
-            score = score_fvg(fvg, bias) if hasattr(__import__('fvg_engine'), 'score_fvg') else 0
+            try:
+                score = score_fvg(fvg, df_15m, current_bar_time, vol_baseline)
+            except Exception:
+                score = 0
             # Status
             if fvg['type'] == 'bullish':
                 in_zone = fvg['bottom'] <= current_price <= fvg['top']
