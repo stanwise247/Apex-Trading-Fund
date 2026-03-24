@@ -2083,6 +2083,13 @@ def apex_fvg_zones(symbol):
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/health', methods=['GET'])
+def apex_health():
+    """Health check — returns Telegram configured status without hitting the API."""
+    tg_ok = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT)
+    return jsonify({'ok': True, 'telegram': tg_ok})
+
+
 @app.route('/api/apex/telegram_test', methods=['POST'])
 def apex_telegram_test():
     """Send a test Telegram message."""

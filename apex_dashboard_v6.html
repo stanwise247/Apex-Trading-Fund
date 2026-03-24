@@ -44,6 +44,13 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .health-dot{width:8px;height:8px;border-radius:50%;background:#444}
 .health-dot.ok{background:var(--green)}
 .health-label{font-size:10px;color:var(--text2)}
+.topbar-action-btn{padding:4px 11px;border-radius:6px;font-size:11px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);transition:all .15s;white-space:nowrap}
+.topbar-action-btn:hover{border-color:var(--amber);color:var(--amber)}
+.topbar-action-btn:active{opacity:0.7}
+.toast{position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.5);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.ok{background:var(--green);color:#000}
+.toast.err{background:var(--red)}
 
 /* TAB NAV */
 .tab-nav{position:sticky;top:52px;z-index:190;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:0;padding:0 20px;overflow-x:auto;scrollbar-width:none}
@@ -253,6 +260,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   <div class="topbar-right">
     <span class="utc-clock" id="utcClock">00:00:00 UTC</span>
     <span class="session-status" id="sessionStatus">—</span>
+    <button class="topbar-action-btn" id="scanNowBtn">Scan Now</button>
+    <button class="topbar-action-btn" id="tgTestBtn">Test TG</button>
     <div class="health-dots">
       <div class="health-dot-item"><div class="health-dot" id="hd-data"></div><span class="health-label">Data</span></div>
       <div class="health-dot-item"><div class="health-dot" id="hd-scanner"></div><span class="health-label">Scanner</span></div>
@@ -1064,12 +1073,12 @@ function initLWC(sym) {
   container.innerHTML = '';
 
   const chart = LightweightCharts.createChart(container, {
+    autoSize: true,
     layout: { background: { color: '#141720' }, textColor: '#8892a4' },
     grid: { vertLines: { color: '#252a3a' }, horzLines: { color: '#252a3a' } },
     crosshair: { mode: 1 },
     rightPriceScale: { borderColor: '#252a3a', scaleMargins: { top: 0.05, bottom: 0.25 } },
     timeScale: { borderColor: '#252a3a', timeVisible: true, secondsVisible: false },
-    width: container.clientWidth,
     height: 300,
   });
 
@@ -1089,27 +1098,28 @@ function initLWC(sym) {
   LWC[sym] = chart;
   LWCS[sym] = { candle: candleSeries, vol: volSeries };
   LWCPL[sym] = [];
-
-  const ro = new ResizeObserver(() => {
-    if (LWC[sym]) {
-      const w = container.clientWidth;
-      if (w > 0) LWC[sym].applyOptions({ width: w });
-    }
-  });
-  ro.observe(container);
 }
 
 async function loadCandles(sym) {
   const tf = TF[sym];
   const limit = TF_LIMITS[tf] || 300;
   try {
-    const data = await apiFetch(`/api/apex/candles/${sym}/${tf}?limit=${limit}`);
+    const url = `/api/apex/candles/${sym}/${tf}?limit=${limit}`;
+    console.log(`[LWC] loadCandles ${sym} ${tf} limit=${limit} → ${url}`);
+    const data = await apiFetch(url);
+    console.log(`[LWC] ${sym} response: ok=${data.ok} bars=${(data.bars||data.candles||[]).length}`);
     const candles = (data.bars || data.candles || []).filter(c => c && c.time && c.open != null);
     if (!candles.length) {
+      console.warn(`[LWC] ${sym}: no valid candles in response`);
       showNoData(sym, tf);
       return;
     }
-    const sorted = candles.slice().sort((a,b) => a.time - b.time);
+    // Deduplicate and sort by time (LWC requires monotonically increasing, unique timestamps)
+    const seen = new Set();
+    const sorted = candles
+      .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; })
+      .sort((a,b) => a.time - b.time);
+    console.log(`[LWC] ${sym}: ${sorted.length} candles, range ${sorted[0].time}–${sorted[sorted.length-1].time}`);
     const candleData = sorted.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }));
     const volData = sorted.map(c => ({
       time: c.time,
@@ -1118,9 +1128,10 @@ async function loadCandles(sym) {
     }));
     if (!LWCS[sym]) initLWC(sym);
     const series = LWCS[sym];
-    if (!series) return;
+    if (!series) { console.error(`[LWC] ${sym}: series not initialised`); return; }
     series.candle.setData(candleData);
     series.vol.setData(volData);
+    console.log(`[LWC] ${sym}: setData() done`);
 
     // Price lines
     clearPriceLines(sym);
@@ -1195,7 +1206,11 @@ function addFvgPriceLines(sym) {
 }
 
 async function refreshCharts() {
+  const chartsTab = document.getElementById('tab-charts');
+  const chartsVisible = chartsTab && chartsTab.classList.contains('active');
   for (const sym of SYMBOLS) {
+    // Only init + load if the Charts tab is visible, or if already initialised
+    if (!chartsVisible && !LWC[sym]) continue;
     if (!LWC[sym]) initLWC(sym);
     await loadCandles(sym);
   }
@@ -1216,9 +1231,10 @@ function enterFullscreen(sym) {
     card.appendChild(btn);
   }
   if (LWC[sym]) {
-    LWC[sym].applyOptions({ width: window.innerWidth, height: window.innerHeight - 80 });
     const cont = document.getElementById(`lwc-${sym}`);
-    if (cont) { cont.style.height = (window.innerHeight - 80) + 'px'; }
+    const h = window.innerHeight - 80;
+    if (cont) cont.style.height = h + 'px';
+    LWC[sym].applyOptions({ height: h });
   }
 }
 
@@ -1230,10 +1246,8 @@ function exitFullscreen(sym) {
   const btn = card.querySelector('.fs-close-btn');
   if (btn) btn.remove();
   const cont = document.getElementById(`lwc-${sym}`);
-  if (cont) { cont.style.height = '300px'; }
-  if (LWC[sym]) {
-    LWC[sym].applyOptions({ width: cont ? cont.clientWidth : 400, height: 300 });
-  }
+  if (cont) cont.style.height = '300px';
+  if (LWC[sym]) LWC[sym].applyOptions({ height: 300 });
 }
 
 document.addEventListener('keydown', e => {
@@ -1513,11 +1527,22 @@ function setHealthDot(name, ok) {
 // ─── TELEGRAM HEALTH ────────────────────────────────────────────────────────
 async function checkTelegramHealth() {
   try {
-    await apiFetch('/api/apex/health');
-    setHealthDot('telegram', true);
+    const data = await apiFetch('/api/apex/health');
+    setHealthDot('telegram', data.telegram === true);
   } catch(e) {
     setHealthDot('telegram', false);
   }
+}
+
+// ─── TOAST ───────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg, ok = true) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `toast ${ok ? 'ok' : 'err'} show`;
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
 }
 
 // ─── EXPORT CSV ──────────────────────────────────────────────────────────────
@@ -1561,15 +1586,13 @@ async function refresh() {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-section').forEach(s => s.classList.toggle('active', s.id === `tab-${name}`));
-  // Resize LWC charts when charts tab becomes visible
   if (name === 'charts') {
+    // Container is now visible — init + load any uninitialised charts, then reload all
     setTimeout(() => {
       for (const sym of SYMBOLS) {
-        if (LWC[sym]) {
-          const cont = document.getElementById(`lwc-${sym}`);
-          if (cont && cont.clientWidth > 0) LWC[sym].applyOptions({ width: cont.clientWidth });
-        }
+        if (!LWC[sym]) initLWC(sym);
       }
+      refreshCharts();
     }, 50);
   }
 }
@@ -1661,12 +1684,44 @@ function bindEvents() {
   // Export
   const exportBtn = document.getElementById('exportCsvBtn');
   if (exportBtn) exportBtn.addEventListener('click', exportCSV);
+
+  // Scan Now — refresh signals tab data
+  const scanBtn = document.getElementById('scanNowBtn');
+  if (scanBtn) {
+    scanBtn.addEventListener('click', async () => {
+      scanBtn.textContent = 'Scanning…';
+      scanBtn.disabled = true;
+      await fetchScan();
+      await fetchFvgZones();
+      scanBtn.textContent = 'Scan Now';
+      scanBtn.disabled = false;
+      showToast('Scan complete');
+    });
+  }
+
+  // Test Telegram
+  const tgBtn = document.getElementById('tgTestBtn');
+  if (tgBtn) {
+    tgBtn.addEventListener('click', async () => {
+      tgBtn.textContent = 'Sending…';
+      tgBtn.disabled = true;
+      try {
+        const res = await fetch('/api/apex/telegram_test', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.ok ? 'Telegram OK ✓' : `Failed: ${d.error || 'unknown'}`, d.ok);
+      } catch(e) {
+        showToast('Failed: network error', false);
+      }
+      tgBtn.textContent = 'Test TG';
+      tgBtn.disabled = false;
+    });
+  }
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 function init() {
   bindEvents();
-  for (const sym of SYMBOLS) initLWC(sym);
+  // LWC charts are initialised lazily on first Charts tab click (containers hidden at startup)
   updateClock();
   setInterval(updateClock, 1000);
   refresh();
@@ -1682,5 +1737,6 @@ if (document.readyState === 'loading') {
   init();
 }
 </script>
+<div class="toast" id="toast"></div>
 </body>
 </html>
