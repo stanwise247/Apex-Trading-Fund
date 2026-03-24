@@ -1847,7 +1847,9 @@ def apex_candles(symbol, timeframe='5m'):
         '1h':  ('1hour',  100),
         '4h':  ('4hour',  100),
     }
-    db_tf, limit = TF_MAP.get(timeframe, ('5min', 100))
+    db_tf, default_limit = TF_MAP.get(timeframe, ('5min', 100))
+    req_limit = request.args.get('limit', None, type=int)
+    limit = req_limit if req_limit and 1 <= req_limit <= 2000 else default_limit
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         rows = conn.execute(
@@ -1976,6 +1978,107 @@ def apex_trades_reset():
         logger.info(f'Seed trades deleted: {deleted}')
         return jsonify({'ok': True, 'deleted': deleted,
                         'message': f'Removed {deleted} seeded test trades'})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/journal', methods=['GET'])
+def apex_journal():
+    """Return all closed trades for the trade journal table."""
+    try:
+        from trade_tracker import init_trades_table
+        init_trades_table()
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        rows = conn.execute(
+            'SELECT id,symbol,direction,setup,mode,entry_price,stop,target,rr_planned,'
+            '       session,quality,entry_time,exit_price,exit_time,exit_reason,pnl_r,bars_held,notes '
+            'FROM apex_trades WHERE status=? ORDER BY entry_time DESC',
+            ('closed',)
+        ).fetchall()
+        conn.close()
+        cols = ['id','symbol','direction','setup','mode','entry_price','stop','target','rr_planned',
+                'session','quality','entry_time','exit_price','exit_time','exit_reason','pnl_r','bars_held','notes']
+        trades = []
+        for row in rows:
+            t = dict(zip(cols, row))
+            # Compute duration in minutes
+            try:
+                from datetime import datetime, timezone
+                ent = datetime.fromisoformat(t['entry_time'].replace('Z','+00:00'))
+                ext = datetime.fromisoformat(t['exit_time'].replace('Z','+00:00'))
+                t['duration_mins'] = round((ext - ent).total_seconds() / 60)
+            except Exception:
+                t['duration_mins'] = None
+            # Compute pts (price movement)
+            try:
+                ep, xp = float(t['entry_price']), float(t['exit_price'])
+                t['pts'] = round(xp - ep if t['direction'] == 'long' else ep - xp, 2)
+            except Exception:
+                t['pts'] = None
+            trades.append(t)
+        return jsonify({'ok': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/fvg_zones/<symbol>', methods=['GET'])
+def apex_fvg_zones(symbol):
+    """Return all detected FVG zones with scores for the FVG watch panel."""
+    symbol = symbol.upper()
+    if symbol not in INSTRUMENTS:
+        return jsonify({'ok': False, 'error': 'Unknown symbol'})
+    try:
+        from fvg_engine import detect_fvgs, score_fvg, get_htf_bias, calc_atr
+        from market_structure import load_bars
+        from datetime import datetime, timezone
+
+        df_15m = load_bars(symbol, '15min', limit=200)
+        if df_15m.empty:
+            return jsonify({'ok': True, 'symbol': symbol, 'zones': []})
+
+        atr_15m = calc_atr(df_15m, 14)
+        fvgs    = detect_fvgs(df_15m, atr_15m, min_atr_mult=0.3, lookback=96)
+        bias    = get_htf_bias(symbol)
+        now     = datetime.now(timezone.utc)
+
+        current_price = None
+        try:
+            from data_feed import get_latest_price
+            current_price = get_latest_price(symbol)
+        except Exception:
+            pass
+        if not current_price:
+            current_price = float(df_15m['close'].iloc[-1])
+
+        zones = []
+        for fvg in fvgs:
+            age_bars = len(df_15m) - df_15m.index.searchsorted(fvg['formed_at'])
+            size_atr = round(fvg['size'] / fvg['atr'], 2) if fvg['atr'] else 0
+            # Simple score based on size and bias alignment
+            score = score_fvg(fvg, bias) if hasattr(__import__('fvg_engine'), 'score_fvg') else 0
+            # Status
+            if fvg['type'] == 'bullish':
+                in_zone = fvg['bottom'] <= current_price <= fvg['top']
+                status  = 'triggered' if in_zone else ('expired' if current_price > fvg['top'] * 1.002 else 'watching')
+            else:
+                in_zone = fvg['bottom'] <= current_price <= fvg['top']
+                status  = 'triggered' if in_zone else ('expired' if current_price < fvg['bottom'] * 0.998 else 'watching')
+
+            formed_str = str(fvg['formed_at'])
+            zones.append({
+                'type':      fvg['type'],
+                'top':       round(fvg['top'], 2),
+                'bottom':    round(fvg['bottom'], 2),
+                'mid':       round(fvg['mid'], 2),
+                'size_atr':  size_atr,
+                'age_bars':  int(age_bars),
+                'score':     int(score),
+                'formed_at': formed_str[:16],
+                'status':    status,
+            })
+
+        zones.sort(key=lambda z: z['score'], reverse=True)
+        return jsonify({'ok': True, 'symbol': symbol, 'zones': zones[:20], 'bias': bias})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
