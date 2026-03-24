@@ -124,7 +124,9 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 @keyframes spin{to{transform:rotate(360deg)}}
 
 .fvg-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);margin-bottom:6px;transition:background .15s}
-.fvg-row.hot{background:rgba(0,212,170,0.06)}
+.fvg-row.fvg-watching{border-color:rgba(77,158,255,0.35);background:rgba(77,158,255,0.04)}
+.fvg-row.fvg-watching.hot{border-color:rgba(0,212,170,0.5);background:rgba(0,212,170,0.08);box-shadow:0 0 0 1px rgba(0,212,170,0.15)}
+.fvg-row.fvg-triggered{opacity:0.45;border-color:rgba(136,146,164,0.18);background:transparent}
 .fvg-dir{padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600}
 .fvg-dir.bull{background:rgba(0,212,170,0.15);color:var(--green)}
 .fvg-dir.bear{background:rgba(255,77,109,0.15);color:var(--red)}
@@ -133,9 +135,9 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .fvg-score.hi{background:rgba(0,212,170,0.2);color:var(--green)}
 .fvg-score.mid{background:rgba(255,181,71,0.2);color:var(--amber)}
 .fvg-score.lo{background:rgba(136,146,164,0.15);color:var(--text2)}
-.fvg-status{padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600}
-.fvg-status.watching{background:rgba(77,158,255,0.15);color:var(--blue)}
-.fvg-status.triggered{background:rgba(0,212,170,0.2);color:var(--green);animation:pulse-dot 2s infinite}
+.fvg-status{padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;cursor:default}
+.fvg-status.watching{background:rgba(77,158,255,0.18);color:var(--blue)}
+.fvg-status.triggered{background:rgba(136,146,164,0.15);color:var(--text2)}
 .fvg-status.expired{background:rgba(136,146,164,0.1);color:var(--text2)}
 
 /* OPEN TRADES */
@@ -1228,24 +1230,47 @@ function renderFvg() {
   if (!body) return;
   const zones = S.fvgZones;
   if (!zones.length) { renderFvgEmpty(); return; }
-  const sorted = zones.slice().sort((a,b) => (b.score||0) - (a.score||0));
+  // watching zones first, then triggered, then expired — within each group sort by score desc
+  const rank = s => s === 'watching' ? 0 : s === 'triggered' ? 1 : 2;
+  const sorted = zones.slice().sort((a,b) => {
+    const rd = rank(a.status||'') - rank(b.status||'');
+    return rd !== 0 ? rd : (b.score||0) - (a.score||0);
+  });
   body.innerHTML = sorted.map(z => {
-    const dir = (z.direction || z.type || '').toLowerCase();
+    const dir    = (z.direction || z.type || '').toLowerCase();
     const isBull = dir === 'bull' || dir === 'bullish' || dir === 'long';
-    const top = z.top || z.high || z.zone_top || 0;
-    const bot = z.bottom || z.low || z.zone_bottom || 0;
-    const score = z.score || 0;
-    const age = z.age_bars || z.bars_ago || 0;
+    const top    = z.top    || z.high        || z.zone_top    || 0;
+    const bot    = z.bottom || z.low         || z.zone_bottom || 0;
+    const score  = z.score  || 0;
+    const age    = z.age_bars || z.bars_ago  || 0;
     const status = z.status || 'watching';
-    const atr = z.atr_size || z.size_atr || 0;
-    const scoreClass = score >= 60 ? 'hi' : score >= 40 ? 'mid' : 'lo';
-    return `<div class="fvg-row${score >= 60 ? ' hot' : ''}">
+    const atr    = z.atr_size || z.size_atr  || 0;
+
+    // formed_at: API returns "YYYY-MM-DD HH:MM" — extract HH:MM UTC
+    const formedAt  = z.formed_at || '';
+    const formedTime = formedAt.includes(' ') ? formedAt.split(' ')[1] : formedAt.slice(11, 16);
+
+    const isWatching   = status === 'watching';
+    const isTriggered  = status === 'triggered';
+    const scoreClass   = score >= 60 ? 'hi' : score >= 45 ? 'mid' : 'lo';
+    const rowClass     = isTriggered ? 'fvg-row fvg-triggered'
+                       : isWatching  ? `fvg-row fvg-watching${score >= 60 ? ' hot' : ''}`
+                       :               'fvg-row';
+
+    const statusTooltip = isTriggered ? ' title="Signal already fired this session"' : '';
+    const statusLabel   = isTriggered ? 'triggered ✓' : status;
+
+    const ageText = formedTime
+      ? `<span style="font-size:10px;color:var(--text2)">${formedTime} UTC &middot; ${age}b</span>`
+      : `<span style="font-size:10px;color:var(--text2)">${age}b</span>`;
+
+    return `<div class="${rowClass}">
       <span class="fvg-dir ${isBull ? 'bull' : 'bear'}">${isBull ? 'BULL' : 'BEAR'}</span>
       <span class="fvg-prices">${top.toFixed(2)} → ${bot.toFixed(2)}</span>
       ${atr ? `<span style="font-size:10px;color:var(--text2)">${atr.toFixed(1)} ATR</span>` : ''}
       <span class="fvg-score ${scoreClass}">${score}</span>
-      <span style="font-size:10px;color:var(--text2)">${age}b</span>
-      <span class="fvg-status ${status}">${status}</span>
+      ${ageText}
+      <span class="fvg-status ${status}"${statusTooltip}>${statusLabel}</span>
     </div>`;
   }).join('');
 }
