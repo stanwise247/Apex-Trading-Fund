@@ -109,6 +109,23 @@ def format_alert(result) -> str:
     return msg
 
 
+def has_opposite_swing_trade(symbol: str, direction: str) -> bool:
+    """Return True if an open swing trade (A/B/C) exists on symbol in the OPPOSITE direction.
+    Used to block FVG and Setup E signals that conflict with an existing position."""
+    try:
+        opp = 'short' if direction == 'long' else 'long'
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT id FROM apex_trades "
+            "WHERE symbol=? AND direction=? AND setup NOT LIKE 'FVG%' AND status='open' LIMIT 1",
+            (symbol, opp)
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
+
+
 def init_swing_dedup_table():
     """Create swing_alerted_signals table for DB-backed dedup (matches fvg_alerted_zones pattern)."""
     try:
@@ -310,6 +327,14 @@ def main():
 
             if not _risk_blocked:
                 for result in signals:
+                    # Correlation filter: suppress Setup E if opposite swing trade open
+                    if getattr(result, 'setup', '') == 'E_ema50_pullback':
+                        if has_opposite_swing_trade(result.symbol, result.direction):
+                            logger.info(
+                                f'Setup E {result.direction} suppressed — '
+                                f'opposite swing trade open on {result.symbol}'
+                            )
+                            continue
                     if tracker.is_new(result):
                         msg = (format_alert_e(result)
                                if getattr(result, 'setup', '') == 'E_ema50_pullback'

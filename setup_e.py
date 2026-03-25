@@ -25,6 +25,7 @@ Min gap: 12 bars (60 min) between trades.
 """
 
 import sqlite3
+import logging
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+logger  = logging.getLogger('APEX.SetupE')
 DB_PATH = 'apex_market.db'
 
 NY_TZ = ZoneInfo('America/New_York')
@@ -317,7 +319,7 @@ def scan_setup_e(dt: datetime = None) -> list:
             if r.valid:
                 results.append(r)
         except Exception as e:
-            pass
+            logger.debug(f'scan_setup_e error ({direction}): {e}')
     return results
 
 

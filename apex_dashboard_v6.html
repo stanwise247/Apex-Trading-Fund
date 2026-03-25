@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>APEX Trading Terminal</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -85,21 +84,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .stat-tile-val{font-family:'DM Mono',monospace;font-size:16px;font-weight:600}
 .stat-tile-sub{font-size:11px;color:var(--text2);margin-top:3px}
 
-/* CHARTS ROW */
-.charts-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
-.chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:visible;position:relative}
-.chart-card-header{padding:12px 14px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
-.chart-sym{font-size:16px;font-weight:700}
-.tf-pills{display:flex;gap:4px}
-.tf-pill{padding:3px 8px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);transition:all .15s}
-.tf-pill.active{background:var(--amber);border-color:var(--amber);color:#000}
 .chart-updated{font-size:10px;color:var(--text2)}
-.fullscreen-btn{background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text2);cursor:pointer;padding:3px 7px;font-size:12px;transition:all .15s}
-.fullscreen-btn:hover{border-color:var(--blue);color:var(--blue)}
-.lwc-container{width:100%;height:320px;position:relative}
-.chart-no-data{display:flex;align-items:center;justify-content:center;height:320px;color:var(--text2);font-size:13px}
-.chart-card.fullscreen{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:500!important;border-radius:0!important;overflow:hidden!important}
-.fs-close-btn{position:absolute;top:10px;right:10px;z-index:510;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px}
 
 /* SIGNAL + FVG */
 .signal-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
@@ -221,7 +206,6 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
 /* RESPONSIVE */
 @media(max-width:1199px){
-  .charts-row{grid-template-columns:1fr}
   .analytics-grid{grid-template-columns:1fr}
 }
 @media(max-width:899px){
@@ -279,7 +263,6 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 <!-- TAB NAV -->
 <nav class="tab-nav" id="tabNav">
   <button class="tab-btn active" data-tab="overview">Overview</button>
-  <button class="tab-btn" data-tab="charts">Charts</button>
   <button class="tab-btn" data-tab="signals">Signals</button>
   <button class="tab-btn" data-tab="trades">Trades</button>
   <button class="tab-btn" data-tab="analytics">Analytics</button>
@@ -394,60 +377,6 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   </div>
   </div><!-- /tab-overview -->
 
-  <!-- SECTION 3: CANDLE CHARTS -->
-  <div class="tab-section" id="tab-charts">
-  <div class="charts-row" id="chartsRow">
-    <!-- NQ -->
-    <div class="chart-card" id="cc-NQ">
-      <div class="chart-card-header">
-        <span class="chart-sym badge-sym-NQ">NQ</span>
-        <div class="tf-pills" id="tf-NQ">
-          <button class="tf-pill" data-sym="NQ" data-tf="1m">1m</button>
-          <button class="tf-pill active" data-sym="NQ" data-tf="5m">5m</button>
-          <button class="tf-pill" data-sym="NQ" data-tf="15m">15m</button>
-          <button class="tf-pill" data-sym="NQ" data-tf="1h">1h</button>
-          <button class="tf-pill" data-sym="NQ" data-tf="4h">4h</button>
-        </div>
-        <span class="chart-updated" id="cu-NQ">—</span>
-        <button class="fullscreen-btn" data-sym="NQ" title="Fullscreen">⛶</button>
-      </div>
-      <div class="lwc-container" id="lwc-NQ"></div>
-    </div>
-    <!-- ES -->
-    <div class="chart-card" id="cc-ES">
-      <div class="chart-card-header">
-        <span class="chart-sym badge-sym-ES">ES</span>
-        <div class="tf-pills" id="tf-ES">
-          <button class="tf-pill" data-sym="ES" data-tf="1m">1m</button>
-          <button class="tf-pill active" data-sym="ES" data-tf="5m">5m</button>
-          <button class="tf-pill" data-sym="ES" data-tf="15m">15m</button>
-          <button class="tf-pill" data-sym="ES" data-tf="1h">1h</button>
-          <button class="tf-pill" data-sym="ES" data-tf="4h">4h</button>
-        </div>
-        <span class="chart-updated" id="cu-ES">—</span>
-        <button class="fullscreen-btn" data-sym="ES" title="Fullscreen">⛶</button>
-      </div>
-      <div class="lwc-container" id="lwc-ES"></div>
-    </div>
-    <!-- GC -->
-    <div class="chart-card" id="cc-GC">
-      <div class="chart-card-header">
-        <span class="chart-sym badge-sym-GC">GC</span>
-        <div class="tf-pills" id="tf-GC">
-          <button class="tf-pill" data-sym="GC" data-tf="1m">1m</button>
-          <button class="tf-pill active" data-sym="GC" data-tf="5m">5m</button>
-          <button class="tf-pill" data-sym="GC" data-tf="15m">15m</button>
-          <button class="tf-pill" data-sym="GC" data-tf="1h">1h</button>
-          <button class="tf-pill" data-sym="GC" data-tf="4h">4h</button>
-        </div>
-        <span class="chart-updated" id="cu-GC">—</span>
-        <button class="fullscreen-btn" data-sym="GC" title="Fullscreen">⛶</button>
-      </div>
-      <div class="lwc-container" id="lwc-GC"></div>
-    </div>
-  </div>
-
-  </div><!-- /tab-charts -->
 
   <!-- SECTION 4: SIGNAL INTELLIGENCE -->
   <div class="tab-section" id="tab-signals">
@@ -670,14 +599,6 @@ const S = {
 };
 
 const CHARTS = {};
-const LWC = {};
-const LWCS = {};
-const LWCPL = {};
-const TF = { NQ:'5m', ES:'5m', GC:'5m' };
-const FS = {};
-
-const TF_LIMITS = { '1m':500, '5m':500, '15m':300, '1h':200, '4h':100 };
-const SYMBOLS = ['NQ', 'ES', 'GC'];
 const GATE_NAMES = ['HTF', 'Struct', 'POI', 'Sess', 'Entry', 'Confirm'];
 
 // ─── CLOCK & SESSION ─────────────────────────────────────────────────────────
@@ -1281,201 +1202,7 @@ function renderFvgEmpty() {
   body.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">No FVG zones detected</div>';
 }
 
-// ─── LWC CHARTS ──────────────────────────────────────────────────────────────
-function initLWC(sym) {
-  const container = document.getElementById(`lwc-${sym}`);
-  if (!container) return;
-  if (LWC[sym]) { try { LWC[sym].remove(); } catch(e) {} delete LWC[sym]; delete LWCS[sym]; }
-  container.innerHTML = '';
 
-  // Measure width now — container must be visible before calling initLWC
-  const w = container.clientWidth || container.offsetWidth || 600;
-  const chart = LightweightCharts.createChart(container, {
-    width: w,
-    height: 300,
-    layout: { background: { color: '#141720' }, textColor: '#8892a4' },
-    grid: { vertLines: { color: '#252a3a' }, horzLines: { color: '#252a3a' } },
-    crosshair: { mode: 1 },
-    rightPriceScale: { borderColor: '#252a3a', scaleMargins: { top: 0.05, bottom: 0.25 } },
-    timeScale: { borderColor: '#252a3a', timeVisible: true, secondsVisible: false },
-    handleScroll: { mouseWheel: true, pressedMouseMove: true },
-    handleScale: { mouseWheel: true, pinch: true },
-  });
-  console.log(`[LWC] initLWC(${sym}) container=${w}px`);
-
-  const candleSeries = chart.addCandlestickSeries({
-    upColor: 'var(--green)', downColor: 'var(--red)',
-    borderUpColor: 'var(--green)', borderDownColor: 'var(--red)',
-    wickUpColor: 'var(--green)', wickDownColor: 'var(--red)',
-  });
-
-  const volSeries = chart.addHistogramSeries({
-    priceFormat: { type: 'volume' },
-    priceScaleId: 'vol',
-    color: 'rgba(0,212,170,0.3)',
-  });
-  chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-
-  LWC[sym] = chart;
-  LWCS[sym] = { candle: candleSeries, vol: volSeries };
-  LWCPL[sym] = [];
-}
-
-async function loadCandles(sym) {
-  const tf = TF[sym];
-  const limit = TF_LIMITS[tf] || 300;
-  try {
-    const url = `/api/apex/candles/${sym}/${tf}?limit=${limit}`;
-    console.log(`[LWC] loadCandles ${sym} ${tf} limit=${limit} → ${url}`);
-    const data = await apiFetch(url);
-    console.log(`[LWC] ${sym} response: ok=${data.ok} bars=${(data.bars||data.candles||[]).length}`);
-    const candles = (data.bars || data.candles || []).filter(c => c && c.time && c.open != null);
-    if (!candles.length) {
-      console.warn(`[LWC] ${sym}: no valid candles in response`);
-      showNoData(sym, tf);
-      return;
-    }
-    // Deduplicate and sort by time (LWC requires monotonically increasing, unique timestamps)
-    const seen = new Set();
-    const sorted = candles
-      .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; })
-      .sort((a,b) => a.time - b.time);
-    console.log(`[LWC] ${sym}: ${sorted.length} candles, range ${sorted[0].time}–${sorted[sorted.length-1].time}`);
-    const candleData = sorted.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }));
-    const volData = sorted.map(c => ({
-      time: c.time,
-      value: c.volume || 0,
-      color: c.close >= c.open ? 'rgba(0,212,170,0.3)' : 'rgba(255,77,109,0.3)',
-    }));
-    if (!LWCS[sym]) initLWC(sym);
-    const series = LWCS[sym];
-    if (!series) { console.error(`[LWC] ${sym}: series not initialised`); return; }
-    series.candle.setData(candleData);
-    series.vol.setData(volData);
-    console.log(`[LWC] ${sym}: setData() done`);
-
-    // Price lines
-    clearPriceLines(sym);
-    addTradePriceLines(sym);
-    addFvgPriceLines(sym);
-
-    const cuEl = document.getElementById(`cu-${sym}`);
-    if (cuEl) {
-      const now = new Date();
-      cuEl.textContent = `${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')} UTC`;
-    }
-  } catch(e) {
-    showNoData(sym, tf);
-  }
-}
-
-function showNoData(sym, tf) {
-  const container = document.getElementById(`lwc-${sym}`);
-  if (!container) return;
-  if (LWC[sym]) { try { LWC[sym].remove(); } catch(er) {} delete LWC[sym]; delete LWCS[sym]; }
-  container.innerHTML = `<div class="chart-no-data">No data available for ${sym} ${tf}</div>`;
-}
-
-function clearPriceLines(sym) {
-  const lines = LWCPL[sym];
-  if (!lines || !LWCS[sym]) return;
-  for (const pl of lines) {
-    try { LWCS[sym].candle.removePriceLine(pl); } catch(e) {}
-  }
-  LWCPL[sym] = [];
-}
-
-function addTradePriceLines(sym) {
-  if (!S.trades || !LWCS[sym]) return;
-  const open = (S.trades.open_trades || S.trades.trades || []).filter(t =>
-    (t.symbol === sym) && (t.status === 'open' || t.status === 'active' || !t.exit_price)
-  );
-  for (const t of open) {
-    const entry = t.entry_price || t.entry;
-    const sl = t.stop_loss || t.sl;
-    const tp = t.take_profit || t.tp;
-    const series = LWCS[sym].candle;
-    if (entry) {
-      const pl = series.createPriceLine({ price: entry, color: '#4d9eff', lineWidth: 1, lineStyle: 0, title: `Entry ${entry}` });
-      LWCPL[sym].push(pl);
-    }
-    if (sl) {
-      const diff = entry ? Math.abs(entry - sl).toFixed(0) : '';
-      const pl = series.createPriceLine({ price: sl, color: '#ff4d6d', lineWidth: 1, lineStyle: 2, title: `SL ${sl} (-${diff}pts)` });
-      LWCPL[sym].push(pl);
-    }
-    if (tp) {
-      const diff = entry ? Math.abs(tp - entry).toFixed(0) : '';
-      const pl = series.createPriceLine({ price: tp, color: '#00d4aa', lineWidth: 1, lineStyle: 2, title: `TP ${tp} (+${diff}pts)` });
-      LWCPL[sym].push(pl);
-    }
-  }
-}
-
-function addFvgPriceLines(sym) {
-  if (sym !== 'NQ' || !S.fvgZones.length || !LWCS[sym]) return;
-  const series = LWCS[sym].candle;
-  for (const z of S.fvgZones) {
-    const top = z.top || z.high || z.zone_top;
-    const bot = z.bottom || z.low || z.zone_bottom;
-    const dir = (z.direction || z.type || '').toLowerCase();
-    const isBull = dir === 'bull' || dir === 'bullish';
-    const col = isBull ? 'rgba(0,212,170,0.4)' : 'rgba(255,77,109,0.4)';
-    if (top) { const pl = series.createPriceLine({ price: top, color: col, lineWidth: 1, lineStyle: 2, title: '' }); LWCPL[sym].push(pl); }
-    if (bot) { const pl = series.createPriceLine({ price: bot, color: col, lineWidth: 1, lineStyle: 2, title: '' }); LWCPL[sym].push(pl); }
-  }
-}
-
-async function refreshCharts() {
-  const chartsTab = document.getElementById('tab-charts');
-  const chartsVisible = chartsTab && chartsTab.classList.contains('active');
-  for (const sym of SYMBOLS) {
-    // Only init + load if the Charts tab is visible, or if already initialised
-    if (!chartsVisible && !LWC[sym]) continue;
-    if (!LWC[sym]) initLWC(sym);
-    await loadCandles(sym);
-  }
-}
-
-// ─── FULLSCREEN ───────────────────────────────────────────────────────────────
-function enterFullscreen(sym) {
-  const card = document.getElementById(`cc-${sym}`);
-  if (!card) return;
-  FS[sym] = true;
-  card.classList.add('fullscreen');
-  let btn = card.querySelector('.fs-close-btn');
-  if (!btn) {
-    btn = document.createElement('button');
-    btn.className = 'fs-close-btn';
-    btn.textContent = '✕ Close';
-    btn.addEventListener('click', () => exitFullscreen(sym));
-    card.appendChild(btn);
-  }
-  if (LWC[sym]) {
-    const cont = document.getElementById(`lwc-${sym}`);
-    const h = window.innerHeight - 80;
-    if (cont) cont.style.height = h + 'px';
-    LWC[sym].applyOptions({ height: h });
-  }
-}
-
-function exitFullscreen(sym) {
-  const card = document.getElementById(`cc-${sym}`);
-  if (!card) return;
-  FS[sym] = false;
-  card.classList.remove('fullscreen');
-  const btn = card.querySelector('.fs-close-btn');
-  if (btn) btn.remove();
-  const cont = document.getElementById(`lwc-${sym}`);
-  if (cont) cont.style.height = '300px';
-  if (LWC[sym]) LWC[sym].applyOptions({ height: 300 });
-}
-
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    for (const sym of SYMBOLS) { if (FS[sym]) exitFullscreen(sym); }
-  }
-});
 
 // ─── JOURNAL ──────────────────────────────────────────────────────────────────
 async function fetchJournal() {
@@ -1872,7 +1599,6 @@ async function refresh() {
     fetchTrades(),
     fetchScan(),
     fetchJournal(),
-    refreshCharts(),
     fetchFvgZones(),
     checkTelegramHealth(),
     fetchRisk(),
@@ -1883,21 +1609,6 @@ async function refresh() {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-section').forEach(s => s.classList.toggle('active', s.id === `tab-${name}`));
-  if (name === 'charts') {
-    // Wait 100ms for browser to paint the now-visible containers before measuring clientWidth
-    setTimeout(async () => {
-      for (const sym of SYMBOLS) {
-        const cont = document.getElementById(`lwc-${sym}`);
-        if (!cont) continue;
-        // (Re)init if needed — container is visible so clientWidth is correct
-        if (!LWC[sym]) initLWC(sym);
-        // Force sync width in case a stale chart exists from a prior smaller viewport
-        const w = cont.clientWidth;
-        if (w > 0 && LWC[sym]) LWC[sym].applyOptions({ width: w });
-        await loadCandles(sym);
-      }
-    }, 100);
-  }
 }
 
 // ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
@@ -1925,32 +1636,6 @@ function bindEvents() {
     });
   });
 
-  // TF pills
-  document.querySelectorAll('.tf-pill').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const sym = btn.dataset.sym;
-      const tf = btn.dataset.tf;
-      if (!sym || !tf) return;
-      TF[sym] = tf;
-      document.querySelectorAll(`#tf-${sym} .tf-pill`).forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      if (LWC[sym]) { try { LWC[sym].remove(); } catch(e) {} delete LWC[sym]; delete LWCS[sym]; }
-      const cont = document.getElementById(`lwc-${sym}`);
-      if (cont) cont.innerHTML = '';
-      initLWC(sym);
-      loadCandles(sym);
-    });
-  });
-
-  // Fullscreen buttons
-  document.querySelectorAll('.fullscreen-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const sym = btn.dataset.sym;
-      if (!sym) return;
-      if (FS[sym]) exitFullscreen(sym);
-      else enterFullscreen(sym);
-    });
-  });
 
   // Journal filters
   const filterIds = ['jf-symbol','jf-direction','jf-setup','jf-dateFrom','jf-dateTo'];
@@ -2032,15 +1717,6 @@ function bindEvents() {
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 function init() {
   bindEvents();
-  // LWC charts are initialised lazily on first Charts tab click (containers hidden at startup)
-  // Resize all active charts when window resizes
-  window.addEventListener('resize', () => {
-    for (const sym of SYMBOLS) {
-      if (!LWC[sym]) continue;
-      const cont = document.getElementById(`lwc-${sym}`);
-      if (cont && cont.clientWidth > 0) LWC[sym].applyOptions({ width: cont.clientWidth });
-    }
-  });
   updateClock();
   setInterval(updateClock, 1000);
   refresh();

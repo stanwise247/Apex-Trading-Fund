@@ -40,13 +40,12 @@ def save_config(cfg):
 
 cfg           = load_config()
 # Environment variables take priority — allows Railway/cloud deployment
-import os as _os
-POLYGON_KEY     = _os.environ.get('POLYGON_KEY',    cfg.get('polygon_key',   ''))
-NEWS_KEY        = _os.environ.get('NEWS_KEY',        cfg.get('news_key',      ''))
-ANTHROPIC_KEY   = _os.environ.get('ANTHROPIC_KEY',  cfg.get('anthropic_key', ''))
-TELEGRAM_TOKEN  = _os.environ.get('TELEGRAM_TOKEN', cfg.get('telegram_token', ''))
-TELEGRAM_CHAT   = _os.environ.get('TELEGRAM_CHAT_ID',cfg.get('telegram_chat_id',''))
-DB_PATH         = _os.environ.get('DB_PATH',        cfg.get('db_path', 'apex_market.db'))
+POLYGON_KEY     = os.environ.get('POLYGON_KEY',    cfg.get('polygon_key',   ''))
+NEWS_KEY        = os.environ.get('NEWS_KEY',        cfg.get('news_key',      ''))
+ANTHROPIC_KEY   = os.environ.get('ANTHROPIC_KEY',  cfg.get('anthropic_key', ''))
+TELEGRAM_TOKEN  = os.environ.get('TELEGRAM_TOKEN', cfg.get('telegram_token', ''))
+TELEGRAM_CHAT   = os.environ.get('TELEGRAM_CHAT_ID',cfg.get('telegram_chat_id',''))
+DB_PATH         = os.environ.get('DB_PATH',        cfg.get('db_path', 'apex_market.db'))
 # Write env vars back so other modules (telegram_alerts etc) can read config.json
 if TELEGRAM_TOKEN and not cfg.get('telegram_token'):
     cfg['telegram_token']   = TELEGRAM_TOKEN
@@ -1044,6 +1043,23 @@ def send_session_open_alert(sess_name, sess_quality, vix, dt_ny):
         logger.warning(f'Session open alert failed: {e}')
 
 
+def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
+    """Return True if an open swing trade (A/B/C) exists on symbol in the OPPOSITE direction.
+    Used to block FVG and Setup E signals that conflict with an existing position."""
+    try:
+        opp = 'short' if direction == 'long' else 'long'
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        row = conn.execute(
+            "SELECT id FROM apex_trades "
+            "WHERE symbol=? AND direction=? AND setup NOT LIKE 'FVG%' AND status='open' LIMIT 1",
+            (symbol, opp)
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
+
+
 def background_scheduler():
     logger.info('Background scheduler started')
     last_daily, last_macro_log = time.time(), time.time()
@@ -1199,6 +1215,12 @@ def background_scheduler():
                     )
                     fvg_signals = scan_fvg('NQ', now_utc)
                     for sig in fvg_signals:
+                        if _has_opposite_swing_trade(sig['symbol'], sig['direction']):
+                            logger.info(
+                                f'FVG {sig["direction"]} suppressed — '
+                                f'opposite swing trade open on {sig["symbol"]}'
+                            )
+                            continue
                         msg = format_fvg_alert(sig) + _risk_footer
                         send_telegram(msg)
                         log_trade(sig)
@@ -1232,6 +1254,14 @@ def background_scheduler():
                 )
                 signals = run_scan()
                 for result in signals:
+                    # Correlation filter: suppress FVG/Setup E if opposite swing trade open
+                    if getattr(result, 'setup', '') == 'E_ema50_pullback':
+                        if _has_opposite_swing_trade(result.symbol, result.direction):
+                            logger.info(
+                                f'Setup E {result.direction} suppressed — '
+                                f'opposite swing trade open on {result.symbol}'
+                            )
+                            continue
                     if tracker.is_new(result):
                         msg = (format_alert_e(result)
                                if getattr(result, 'setup', '') == 'E_ema50_pullback'
@@ -1789,7 +1819,7 @@ def apex_scan():
                         'failed_at': next((g['name'] for g in gates if not g['passed']), None),
                     })
                 except Exception as e:
-                    pass
+                    logger.debug(f'Gate check error {sym} {direction} Setup {setup_name}: {e}')
 
     # Setup E — EMA50 Pullback, NQ only
     for direction in ('long', 'short'):
@@ -1835,7 +1865,7 @@ def apex_scan():
                 'failed_at': None,
             })
     except Exception as e:
-        pass
+        logger.debug(f'FVG scan error in apex_scan: {e}')
 
     return jsonify({
         'ok':          True,
