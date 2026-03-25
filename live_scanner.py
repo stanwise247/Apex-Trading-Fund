@@ -329,8 +329,8 @@ def main():
                                 'stop':      result.stop,
                                 'target':    result.target,
                                 'rr':        result.rr,
-                                'session':   result.session,
-                                'quality':   result.quality,
+                                'session':   getattr(result, 'session', 'NY Primary'),
+                                'quality':   getattr(result, 'quality', 'primary'),
                             })
                         except Exception as e:
                             logger.error(f'Trade log error: {e}')

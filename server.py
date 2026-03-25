@@ -1247,8 +1247,8 @@ def background_scheduler():
                             'stop':      result.stop,
                             'target':    result.target,
                             'rr':        result.rr,
-                            'session':   getattr(result, 'session', ''),
-                            'quality':   result.quality,
+                            'session':   getattr(result, 'session', 'NY Primary'),
+                            'quality':   getattr(result, 'quality', 'primary'),
                         })
                         logger.info(
                             f'APEX signal: {result.symbol} {result.direction} {result.setup} '
@@ -1806,11 +1806,11 @@ def apex_scan():
                 'stop':      r.stop,
                 'target':    r.target,
                 'rr':        r.rr,
-                'quality':   r.quality,
+                'quality':   getattr(r, 'quality', 'primary'),
                 'failed_at': next((g['name'] for g in gates if not g['passed']), None),
             })
         except Exception as e:
-            pass
+            logger.debug(f'Setup E scan error ({direction}): {e}')
 
     # FVG signals — NQ only
     fvg_signals = []
@@ -1991,11 +1991,27 @@ def apex_equity():
             points.append({'label': f'T{i} {ts_label}', 'equity': balance, 'drawdown': dd})
 
         max_dd = round(min((p['drawdown'] for p in points), default=0.0), 2)
+
+        # Today's P&L — needed by dashboard sub-row
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        conn2 = sqlite3.connect(DB_PATH, timeout=30)
+        today_rows = conn2.execute(
+            'SELECT pnl_r FROM apex_trades WHERE status=? AND entry_time LIKE ?',
+            ('closed', today + '%')
+        ).fetchall()
+        conn2.close()
+        today_r      = round(sum(r[0] for r in today_rows if r[0] is not None), 2)
+        today_pnl    = round(today_r * START * RISK, 2)
+        total_return = round((balance - START) / START * 100, 2)
+
         return jsonify({
-            'ok': True,
-            'points': points,
+            'ok':              True,
+            'points':          points,
             'current_balance': round(balance, 2),
-            'max_drawdown': max_dd,
+            'max_drawdown':    max_dd,
+            'today_r':         today_r,
+            'today_pnl':       today_pnl,
+            'total_return':    total_return,
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
