@@ -323,6 +323,46 @@ def init_db():
     conn.commit()
     conn.close()
     logger.info('Database initialised: ' + DB_PATH)
+    _migrate_htf_prices()
+
+
+def _migrate_htf_prices():
+    """
+    Startup migration: fix ×1000 price bug on 1hour/4hour bars introduced by
+    the Databento Python SDK ohlcv-1h path (SDK divides by 1e9; raw price is ×1e12
+    so result was ×1000 too large).  Idempotent — only rows with close>100000
+    are touched, which is impossible for NQ/ES/GC at correct prices.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        total = 0
+        for sym in ('NQ', 'ES'):
+            for tf in ('1hour', '4hour'):
+                cur = conn.execute(
+                    'UPDATE ohlcv SET open=open/1000, high=high/1000, low=low/1000, close=close/1000 '
+                    'WHERE symbol=? AND timeframe=? AND close>100000',
+                    (sym, tf)
+                )
+                if cur.rowcount:
+                    logger.warning(f'_migrate_htf_prices: fixed {cur.rowcount} rows for {sym} {tf}')
+                    total += cur.rowcount
+        # GC: 1hour only (4hour correct — gold ~$3000-6000, threshold safe at 100000)
+        cur = conn.execute(
+            'UPDATE ohlcv SET open=open/1000, high=high/1000, low=low/1000, close=close/1000 '
+            'WHERE symbol=? AND timeframe=? AND close>100000',
+            ('GC', '1hour')
+        )
+        if cur.rowcount:
+            logger.warning(f'_migrate_htf_prices: fixed {cur.rowcount} rows for GC 1hour')
+            total += cur.rowcount
+        conn.commit()
+        conn.close()
+        if total:
+            logger.warning(f'_migrate_htf_prices: fixed {total} rows total')
+        else:
+            logger.info('_migrate_htf_prices: no bad rows found (already clean)')
+    except Exception as e:
+        logger.error(f'_migrate_htf_prices error: {e}')
 
 
 def store_ohlcv(symbol, timeframe, bars):

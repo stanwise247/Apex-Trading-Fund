@@ -90,13 +90,18 @@ def fetch_recent_bars(symbol: str, timeframe: str,
     if not db_symbol:
         return []
 
+    # HTF bars must come from build_htf_from_5min() — not the SDK.
+    # The ohlcv-1h Databento schema returns prices ×1000 too large via the
+    # Python SDK (SDK divides by 1e9 but raw integers are price×1e12).
+    if timeframe in ('1hour', '4hour'):
+        logger.debug(f'fetch_recent_bars: skipping {timeframe} — use build_htf_from_5min()')
+        return []
+
     # Map timeframe to schema and aggregation
     schema_map = {
         '1min':  ('ohlcv-1m', 1),
         '5min':  ('ohlcv-1m', 5),
         '15min': ('ohlcv-1m', 15),
-        '1hour': ('ohlcv-1h', 1),
-        '4hour': ('ohlcv-1h', 4),
         '1day':  ('ohlcv-1d', 1),
     }
     schema, agg = schema_map.get(timeframe, ('ohlcv-1m', 5))

@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 .env
 backtest_B_*.json
+apex_market.db
