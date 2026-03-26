@@ -1289,6 +1289,66 @@ def background_scheduler():
         except Exception as e:
             logger.debug(f'APEX scanner error: {e}')
 
+        # ── Setup F — Random Forest ML (every 5 min) ─────────────
+        if not hasattr(background_scheduler, '_last_setup_f'):
+            background_scheduler._last_setup_f = 0
+        if now - background_scheduler._last_setup_f >= 300:
+            background_scheduler._last_setup_f = now
+            try:
+                from setup_f_ml import scan_setup_f, format_f_alert, check_model_degradation
+                from live_scanner import send_telegram
+                from trade_tracker import log_trade
+                from datetime import datetime, timezone
+                _now_utc = datetime.now(timezone.utc)
+                if not hasattr(background_scheduler, '_risk_gate'):
+                    from risk_manager import RiskGate
+                    background_scheduler._risk_gate = RiskGate()
+                _rg = background_scheduler._risk_gate
+                _regime  = _rg.regime.get_regime()
+                _dd_mult = _rg.dd.get_risk_multiplier()
+                _risk_footer = (
+                    f'\n⚙️ <i>Regime: {_regime.label} | '
+                    f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
+                )
+                for _sym in ['NQ', 'ES']:  # GC paper only — no live signals
+                    try:
+                        if check_model_degradation(_sym):
+                            logger.warning(f'Setup F {_sym} model degraded — skipping')
+                            continue
+                        if _rg.daily.is_daily_limit_hit():
+                            logger.info(f'Setup F {_sym}: daily limit hit — suppressed')
+                            continue
+                        sig = scan_setup_f(_sym, _now_utc)
+                        if sig:
+                            if _has_opposite_swing_trade(_sym, sig['direction']):
+                                logger.info(
+                                    f'Setup F {_sym} {sig["direction"]} suppressed — '
+                                    f'opposite swing trade open'
+                                )
+                                continue
+                            msg = format_f_alert(sig) + _risk_footer
+                            send_telegram(msg)
+                            log_trade(sig)
+                            logger.info(
+                                f'Setup F signal: {_sym} {sig["direction"].upper()} '
+                                f'conf={sig["confidence"]:.0%} regime={_regime.label}'
+                            )
+                    except Exception as _fe:
+                        logger.warning(f'Setup F {_sym} error: {_fe}')
+            except Exception as e:
+                logger.warning(f'Setup F scanner error: {e}')
+
+        # ── Setup G — Wyckoff Upthrust Tracker (every 5 min) ─────
+        if not hasattr(background_scheduler, '_last_wyckoff'):
+            background_scheduler._last_wyckoff = 0
+        if now - background_scheduler._last_wyckoff >= 300:
+            background_scheduler._last_wyckoff = now
+            try:
+                from wyckoff_tracker import scan_and_log_wyckoff
+                scan_and_log_wyckoff()
+            except Exception as e:
+                logger.debug(f'Wyckoff tracker error: {e}')
+
         time.sleep(60)
 
 
@@ -1867,11 +1927,22 @@ def apex_scan():
     except Exception as e:
         logger.debug(f'FVG scan error in apex_scan: {e}')
 
+    # Setup F — ML predictions for all 3 symbols (dashboard only, no trade execution)
+    setup_f_predictions = []
+    try:
+        from setup_f_ml import get_current_prediction
+        for _sym in ('NQ', 'ES', 'GC'):
+            pred = get_current_prediction(_sym)
+            setup_f_predictions.append(pred)
+    except Exception as e:
+        logger.debug(f'Setup F prediction error: {e}')
+
     return jsonify({
-        'ok':          True,
-        'results':     results,
-        'fvg_signals': fvg_signals,
-        'time':        now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')
+        'ok':                  True,
+        'results':             results,
+        'fvg_signals':         fvg_signals,
+        'setup_f_predictions': setup_f_predictions,
+        'time':                now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')
     })
 
 
@@ -1919,6 +1990,17 @@ def apex_risk():
             'open_trades_count': open_count,
             'max_open_trades':  3,
         })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/wyckoff', methods=['GET'])
+def apex_wyckoff():
+    """Return Wyckoff upthrust log and stats for Setup G tracker."""
+    try:
+        from wyckoff_tracker import get_wyckoff_stats
+        stats = get_wyckoff_stats()
+        return jsonify({'ok': True, **stats})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 

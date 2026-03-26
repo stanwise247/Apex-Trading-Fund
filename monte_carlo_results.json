@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "n_trades": 1673,
+    "n_simulations": 10000,
+    "start_balance": 10000.0,
+    "risk_pct": 1.0,
+    "win_rate": 52.8,
+    "expectancy_r": 0.477,
+    "std_r": 1.479
+  },
+  "historical": {
+    "final_balance": 24041037.45,
+    "total_return_pct": 240310.4,
+    "max_drawdown_pct": 14.8,
+    "longest_losing_streak": 9,
+    "actual_percentile_rank": 49.3
+  },
+  "equity_percentiles": {
+    "1": 5815475.28,
+    "5": 9004168.1,
+    "10": 11288717.99,
+    "25": 16204322.87,
+    "50": 24286888.31,
+    "75": 35792551.28,
+    "90": 51431726.63,
+    "95": 64088328.84,
+    "99": 98349149.33
+  },
+  "probability_table": {
+    "p_lose_20pct": 0.0,
+    "p_lose_30pct": 0.0,
+    "p_lose_50pct": 0.0,
+    "p_double": 100.0,
+    "p_5x": 100.0,
+    "p_10x": 100.0,
+    "p_50x": 100.0,
+    "median_final_balance": 24286888.31,
+    "median_max_drawdown_pct": 10.83
+  },
+  "drawdown_analysis": {
+    "mean_max_dd_pct": 11.16,
+    "median_max_dd_pct": 10.83,
+    "p95_max_dd_pct": 15.14,
+    "p99_max_dd_pct": 17.73,
+    "worst_max_dd_pct": 26.43,
+    "p_exceed_10R_pct": 67.2,
+    "p_exceed_15R_pct": 5.5,
+    "p_exceed_20R_pct": 0.3,
+    "p_exceed_25R_pct": 0.0
+  },
+  "streak_analysis": {
+    "mean_longest_streak": 9.3,
+    "median_longest_streak": 9,
+    "p95_longest_streak": 12,
+    "p99_longest_streak": 14,
+    "worst_streak": 22,
+    "p_streak_gte_5": 100.0,
+    "p_streak_gte_8": 88.1,
+    "p_streak_gte_10": 37.5,
+    "p_streak_gte_12": 9.3,
+    "p_streak_gte_15": 1.0
+  },
+  "kelly": {
+    "full_kelly_pct": 27.48,
+    "half_kelly_pct": 13.74,
+    "p_win": 52.8,
+    "avg_win_r": 1.731,
+    "avg_loss_r": 0.931,
+    "b_ratio": 1.86
+  },
+  "sizing_analysis": {
+    "0.5pct_risk": {
+      "median_final": 515751.96,
+      "median_dd_pct": 5.52,
+      "p_dd_over_20pct": 0.0,
+      "p_ruin_50pct": 0.0,
+      "cagr_pct": 1286.0
+    },
+    "1.0pct_risk": {
+      "median_final": 24107482.71,
+      "median_dd_pct": 10.82,
+      "p_dd_over_20pct": 0.3,
+      "p_ruin_50pct": 0.0,
+      "cagr_pct": 17879.0
+    },
+    "1.5pct_risk": {
+      "median_final": 1029466943.93,
+      "median_dd_pct": 15.83,
+      "p_dd_over_20pct": 12.4,
+      "p_ruin_50pct": 0.0,
+      "cagr_pct": 219555.0
+    },
+    "2.0pct_risk": {
+      "median_final": 37503378486.75,
+      "median_dd_pct": 20.77,
+      "p_dd_over_20pct": 58.5,
+      "p_ruin_50pct": 0.0,
+      "cagr_pct": 2413768.0
+    },
+    "3.0pct_risk": {
+      "median_final": 43281019723384.34,
+      "median_dd_pct": 29.68,
+      "p_dd_over_20pct": 99.9,
+      "p_ruin_50pct": 0.0,
+      "cagr_pct": 265581708.0
+    }
+  },
+  "recommendation": {
+    "optimal_risk_pct": 2.0,
+    "reasoning": "Keeps median max drawdown near 20% while maximising return",
+    "kelly_recommendation": "Full Kelly=27.5% \u2014 use Half Kelly (13.7%) for live trading to account for estimation error and fat tails"
+  }
+}

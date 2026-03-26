@@ -1,0 +1,64 @@
+{
+  "meta": {
+    "generated": "2026-03-24T21:58:03.974212+00:00",
+    "current_regime": "TRENDING_BULL"
+  },
+  "backtest_impact": {
+    "before": {
+      "n": 1673,
+      "wr": 52.8,
+      "ev": 0.477,
+      "total_r": 798.46,
+      "max_dd_r": -15.88,
+      "max_dd_pct": 14.8,
+      "sharpe": 5.12,
+      "final_bal": 24041037.45
+    },
+    "after": {
+      "n": 1670,
+      "wr": 52.9,
+      "ev": 0.422,
+      "total_r": 705.24,
+      "max_dd_r": -11.79,
+      "max_dd_pct": 11.2,
+      "sharpe": 4.98,
+      "final_bal": 9802423.07
+    },
+    "n_blocked": 0,
+    "n_regime_reduced": 360,
+    "n_dd_reduced": 193,
+    "regime_breakdown": {
+      "TRENDING_BEAR": {
+        "n": 425,
+        "wr": 50.6,
+        "total_r_raw": 174.36,
+        "total_r_adj": 149.35
+      },
+      "RANGING_HIGH_VOL": {
+        "n": 36,
+        "wr": 58.3,
+        "total_r_raw": 28.78,
+        "total_r_adj": 13.81
+      },
+      "NORMAL": {
+        "n": 641,
+        "wr": 54.1,
+        "total_r_raw": 321.83,
+        "total_r_adj": 313.92
+      },
+      "TRENDING_BULL": {
+        "n": 366,
+        "wr": 50.8,
+        "total_r_raw": 138.76,
+        "total_r_adj": 128.48
+      },
+      "RANGING_LOW_VOL": {
+        "n": 205,
+        "wr": 56.1,
+        "total_r_raw": 134.72,
+        "total_r_adj": 99.68
+      }
+    },
+    "current_regime": "TRENDING_BULL"
+  }
+}

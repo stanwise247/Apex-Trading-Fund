@@ -334,6 +334,22 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
     </div>
   </div>
+  <!-- Setup F Performance Card -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-header">
+      <span class="card-title">Setup F — ML Signal</span>
+      <span style="font-size:10px;color:var(--text2);margin-left:8px">NQ + ES · 63.8% WR · Sharpe 53.39 OOS</span>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        <div class="stat-tile"><div class="stat-tile-label">OOS Sharpe</div><div class="stat-tile-val" style="color:var(--green)">53.39</div><div class="stat-tile-sub">NQ+ES combined</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">Win Rate</div><div class="stat-tile-val" style="color:var(--green)">63.8%</div><div class="stat-tile-sub">445 OOS trades</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">Expectancy</div><div class="stat-tile-val" style="color:var(--green)">+0.44R</div><div class="stat-tile-sub">per trade</div></div>
+        <div class="stat-tile"><div class="stat-tile-label">Model Age</div><div class="stat-tile-val" id="sf-model-age">—</div><div class="stat-tile-sub">retrain &lt;30d</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Risk Management Card -->
   <div class="card" style="margin-bottom:20px">
     <div class="card-header" style="display:flex;align-items:center;gap:10px">
@@ -393,6 +409,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
         <button class="gate-setup-tab" data-setup="C">Setup C</button>
         <button class="gate-setup-tab" data-setup="D">FVG D</button>
         <button class="gate-setup-tab" data-setup="E">EMA50 E</button>
+        <button class="gate-setup-tab" data-setup="F">ML F</button>
       </div>
       <div class="card-body" id="gateBody">
         <div class="skeleton" style="height:80px;margin-bottom:8px"></div>
@@ -442,6 +459,53 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
           </div>
         </div>
         <div id="se-gate-row" style="font-size:11px;color:var(--text2);line-height:1.7">Scan to load gate status…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Setup F — ML Signal Panel -->
+  <div style="margin-top:16px">
+    <div class="card">
+      <div class="card-header" style="padding-bottom:8px">
+        <span class="card-title">Setup F — Random Forest ML</span>
+        <span style="font-size:10px;color:var(--text2);margin-left:8px">NQ+ES live · GC paper · 5min · Sharpe 53.39 OOS</span>
+      </div>
+      <div class="card-body" style="padding:10px 16px">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px" id="setupFGrid">
+          <div class="stat-tile"><div class="stat-tile-label">NQ</div><div id="sf-NQ-bar" style="height:8px;border-radius:4px;background:var(--border);margin:6px 0;overflow:hidden"><div id="sf-NQ-fill" style="height:100%;width:50%;background:var(--text2);transition:width .4s,background .4s"></div></div><div class="stat-tile-val" id="sf-NQ-signal" style="font-size:12px">—</div><div class="stat-tile-sub" id="sf-NQ-prob">—</div></div>
+          <div class="stat-tile"><div class="stat-tile-label">ES</div><div id="sf-ES-bar" style="height:8px;border-radius:4px;background:var(--border);margin:6px 0;overflow:hidden"><div id="sf-ES-fill" style="height:100%;width:50%;background:var(--text2);transition:width .4s,background .4s"></div></div><div class="stat-tile-val" id="sf-ES-signal" style="font-size:12px">—</div><div class="stat-tile-sub" id="sf-ES-prob">—</div></div>
+          <div class="stat-tile"><div class="stat-tile-label">GC <span style="font-size:9px;background:var(--amber);color:#000;border-radius:3px;padding:1px 4px;font-weight:700">PAPER</span></div><div id="sf-GC-bar" style="height:8px;border-radius:4px;background:var(--border);margin:6px 0;overflow:hidden"><div id="sf-GC-fill" style="height:100%;width:50%;background:var(--text2);transition:width .4s,background .4s"></div></div><div class="stat-tile-val" id="sf-GC-signal" style="font-size:12px">—</div><div class="stat-tile-sub" id="sf-GC-prob">—</div></div>
+        </div>
+        <div id="sf-features" style="font-size:11px;color:var(--text2);margin-top:8px;line-height:1.8">Top drivers loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Setup G — Wyckoff Upthrust Tracker -->
+  <div style="margin-top:16px">
+    <div class="card">
+      <div class="card-header" style="padding-bottom:8px">
+        <span class="card-title">Setup G — Wyckoff Upthrust</span>
+        <span style="font-size:10px;color:var(--amber);margin-left:8px;font-weight:600">TRACKING — Not Live</span>
+      </div>
+      <div class="card-body" style="padding:10px 16px">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px">
+          <div>
+            <div style="font-size:11px;color:var(--text2)">Trades Logged</div>
+            <div style="font-size:22px;font-weight:700;font-family:'DM Mono',monospace"><span id="sg-count">0</span> <span style="font-size:14px;color:var(--text2)">/ 30</span></div>
+          </div>
+          <div style="flex:1">
+            <div style="font-size:11px;color:var(--text2);margin-bottom:4px">Progress to confirmation</div>
+            <div style="height:10px;border-radius:5px;background:var(--border);overflow:hidden">
+              <div id="sg-progress" style="height:100%;width:0%;background:var(--amber);transition:width .4s"></div>
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--text2)">Win Rate</div>
+            <div style="font-size:16px;font-weight:600;color:var(--green)" id="sg-wr">—</div>
+          </div>
+        </div>
+        <div id="sg-last" style="font-size:11px;color:var(--text2)">No events logged yet</div>
       </div>
     </div>
   </div>
@@ -589,6 +653,7 @@ const S = {
   scan: null,
   trades: null,
   risk: null,
+  wyckoff: null,
   journal: [],
   fvgZones: [],
   journalPage: 0,
@@ -974,6 +1039,7 @@ async function fetchScan() {
     setHealthDot('scanner', true);
     renderGates();
     renderSetupE();
+    renderSetupF();
   } catch(e) {
     setHealthDot('scanner', false);
     renderGatesEmpty();
@@ -991,6 +1057,34 @@ function renderGates() {
   document.querySelectorAll('.gate-setup-tab').forEach(b =>
     b.classList.toggle('active', b.dataset.setup === setup)
   );
+
+  if (setup === 'F') {
+    // Setup F — ML predictions panel
+    const preds = (S.scan && S.scan.setup_f_predictions) || [];
+    if (!preds.length) {
+      body.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">ML predictions loading — scan to refresh</div>';
+      return;
+    }
+    body.innerHTML = preds.map(p => {
+      const sym   = p.symbol;
+      const prob  = p.probability || 0.5;
+      const pct   = Math.round(prob * 100);
+      const state = p.signal_state || 'NO_EDGE';
+      let label = 'No Edge'; let cls = ''; let dotCls = 'fail';
+      if      (state === 'SIGNAL_LONG')    { label = 'LONG ✓';   cls = ' best'; dotCls = 'pass'; }
+      else if (state === 'SIGNAL_SHORT')   { label = 'SHORT ✓';  cls = ' best'; dotCls = 'pass'; }
+      else if (state.startsWith('WATCH'))  { label = 'Watching'; dotCls = ''; }
+      const paperBadge = p.paper_only ? '<span style="font-size:9px;background:var(--amber);color:#000;border-radius:3px;padding:1px 4px;margin-left:4px">PAPER</span>' : '';
+      return `<div class="gate-card-item${cls}">
+        <span class="gate-sym-badge">${sym}</span>${paperBadge}
+        <div style="margin:6px 0;height:6px;border-radius:3px;background:var(--border);overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${pct>=65?'var(--green)':pct>=50?'var(--amber)':'#ef4444'};transition:width .4s"></div>
+        </div>
+        <div class="gate-result${state.startsWith('SIGNAL')?' allpass':''}">${label} — P=${pct}%</div>
+      </div>`;
+    }).join('');
+    return;
+  }
 
   if (setup === 'D') {
     // FVG signals panel
@@ -1131,6 +1225,92 @@ function renderSetupE() {
     } else if (gateEl) {
       gateEl.textContent = 'Waiting for session / bias alignment…';
     }
+  }
+}
+
+// ─── SETUP F — ML SIGNAL PANEL ───────────────────────────────────────────────
+function renderSetupF() {
+  const preds = (S.scan && S.scan.setup_f_predictions) || [];
+  if (!preds.length) return;
+
+  for (const p of preds) {
+    const sym = p.symbol;
+    const fillEl   = document.getElementById(`sf-${sym}-fill`);
+    const sigEl    = document.getElementById(`sf-${sym}-signal`);
+    const probEl   = document.getElementById(`sf-${sym}-prob`);
+    if (!fillEl || !sigEl || !probEl) continue;
+
+    const prob = p.probability || 0.5;
+    const pct  = Math.round(prob * 100);
+
+    // Confidence bar
+    let barColor = 'var(--text2)';
+    if (prob > 0.65)      barColor = 'var(--green)';
+    else if (prob > 0.50) barColor = 'var(--amber)';
+    else if (prob < 0.35) barColor = '#ef4444';
+    else if (prob < 0.50) barColor = 'var(--amber)';
+    fillEl.style.width      = pct + '%';
+    fillEl.style.background = barColor;
+
+    // Signal label
+    const state = p.signal_state || 'NO_EDGE';
+    let label = '—'; let col = 'var(--text2)';
+    if      (state === 'SIGNAL_LONG')     { label = 'LONG ✓';    col = 'var(--green)'; }
+    else if (state === 'SIGNAL_SHORT')    { label = 'SHORT ✓';   col = '#ef4444'; }
+    else if (state === 'WATCHING_LONG')   { label = 'Watching↑'; col = 'var(--amber)'; }
+    else if (state === 'WATCHING_SHORT')  { label = 'Watching↓'; col = 'var(--amber)'; }
+    else                                   { label = 'No Edge';   col = 'var(--text2)'; }
+    sigEl.textContent  = label;
+    sigEl.style.color  = col;
+    probEl.textContent = `P=${pct}%` + (p.paper_only ? ' (paper)' : '');
+
+    // Feature drivers (show for first valid prediction)
+    const featEl = document.getElementById('sf-features');
+    if (featEl && p.top_features && p.top_features.length) {
+      featEl.innerHTML = `<b>Top drivers (${sym}):</b> ` +
+        p.top_features.map(f =>
+          `${f.name} <span style="color:var(--text)">${f.value > 0 ? '+' : ''}${f.value.toFixed(3)}</span> <span style="color:var(--text2)">(${Math.round(f.importance*100)}%)</span>`
+        ).join(' · ');
+    }
+
+    // Model age in overview card
+    if (p.trained_at) {
+      const ageEl = document.getElementById('sf-model-age');
+      if (ageEl) {
+        const days = Math.floor((Date.now() - new Date(p.trained_at).getTime()) / 86400000);
+        ageEl.textContent = days + 'd';
+        ageEl.style.color = days > 25 ? 'var(--amber)' : 'var(--text)';
+      }
+    }
+  }
+}
+
+// ─── SETUP G — WYCKOFF TRACKER ────────────────────────────────────────────────
+async function fetchWyckoff() {
+  try {
+    const data = await apiFetch('/api/apex/wyckoff');
+    S.wyckoff = data;
+    renderWyckoff();
+  } catch(e) {
+    // silent — tracker not critical
+  }
+}
+
+function renderWyckoff() {
+  const d = S.wyckoff;
+  if (!d) return;
+  const countEl    = document.getElementById('sg-count');
+  const progressEl = document.getElementById('sg-progress');
+  const wrEl       = document.getElementById('sg-wr');
+  const lastEl     = document.getElementById('sg-last');
+  if (countEl)    countEl.textContent    = d.total || 0;
+  if (progressEl) progressEl.style.width = (d.progress_pct || 0) + '%';
+  if (wrEl)       wrEl.textContent       = d.win_rate != null ? d.win_rate + '%' : '—';
+  if (lastEl && d.events && d.events.length) {
+    const ev = d.events[0];
+    lastEl.innerHTML = `Last: <span style="color:var(--text)">${ev.symbol} ${ev.date}</span> · entry ${ev.entry_price?.toFixed(2)} · target ${ev.target?.toFixed(2)}`;
+  } else if (lastEl) {
+    lastEl.textContent = 'No events logged yet';
   }
 }
 
@@ -1603,6 +1783,7 @@ async function refresh() {
     fetchFvgZones(),
     checkTelegramHealth(),
     fetchRisk(),
+    fetchWyckoff(),
   ]);
 }
 

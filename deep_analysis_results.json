@@ -1,0 +1,488 @@
+{
+  "analysis_1_hurst": {
+    "mean_H": 0.5888,
+    "std_H": 0.0378,
+    "pct_trending": 40.6,
+    "pct_random": 59.4,
+    "pct_mr": 0.0,
+    "setup_e_results": {
+      "no_filter": {
+        "IS_n": 16258,
+        "IS_Sharpe": -0.02,
+        "OOS_n": 6551,
+        "OOS_Sharpe": -0.59,
+        "pass": "FAIL"
+      },
+      "H_trending": {
+        "IS_n": 6802,
+        "IS_Sharpe": 0.08,
+        "OOS_n": 2244,
+        "OOS_Sharpe": 0.87,
+        "pass": "FAIL"
+      },
+      "H_random": {
+        "IS_n": 9456,
+        "IS_Sharpe": -0.09,
+        "OOS_n": 4307,
+        "OOS_Sharpe": -1.42,
+        "pass": "FAIL"
+      }
+    }
+  },
+  "analysis_2_microstructure": {
+    "PatternA_Absorption": {
+      "IS_n": 4,
+      "IS_Sharpe": 4.53,
+      "OOS_n": 2,
+      "OOS_Sharpe": 42.85,
+      "pass": "FAIL(n<30)"
+    },
+    "PatternB_Exhaustion": {
+      "IS_n": 245,
+      "IS_Sharpe": 2.71,
+      "OOS_n": 109,
+      "OOS_Sharpe": 0.62,
+      "pass": "FAIL"
+    },
+    "PatternC_DeltaFlip": {
+      "IS_n": 2728,
+      "IS_Sharpe": 0.49,
+      "OOS_n": 1191,
+      "OOS_Sharpe": 1.41,
+      "pass": "FAIL"
+    },
+    "PatternD_VelocityDrop": {
+      "IS_n": 0,
+      "IS_Sharpe": 0,
+      "OOS_n": 0,
+      "OOS_Sharpe": 0,
+      "pass": "FAIL"
+    }
+  },
+  "analysis_3_wyckoff": {
+    "Spring": {
+      "IS_n": 71,
+      "IS_WR": 0.634,
+      "IS_Sharpe": 9.4,
+      "OOS_n": 24,
+      "OOS_WR": 0.333,
+      "OOS_Sharpe": -1.58,
+      "pass": "FAIL"
+    },
+    "Upthrust": {
+      "IS_n": 61,
+      "IS_WR": 0.705,
+      "IS_Sharpe": 12.08,
+      "OOS_n": 24,
+      "OOS_WR": 0.5,
+      "OOS_Sharpe": 4.14,
+      "pass": "FAIL(n<30)"
+    },
+    "EffortResult": {
+      "IS_n": 419,
+      "IS_WR": 0.339,
+      "IS_Sharpe": -1.06,
+      "OOS_n": 140,
+      "OOS_WR": 0.257,
+      "OOS_Sharpe": -3.88,
+      "pass": "FAIL"
+    }
+  },
+  "analysis_4_random_forest": {
+    "IS_CV_accuracy": 0.5929,
+    "IS_accuracy": 0.5986,
+    "OOS_accuracy": 0.5958,
+    "feature_importance": {
+      "consecutive": 0.6618,
+      "htf_bias": 0.1128,
+      "ema50_dist": 0.0537,
+      "roc5": 0.0335,
+      "hour": 0.0283,
+      "atr_ratio": 0.0276,
+      "vol_regime": 0.0256,
+      "vol_ratio": 0.023,
+      "dow": 0.016,
+      "efficiency": 0.0127,
+      "hurst_regime": 0.005
+    },
+    "trading_IS": {
+      "n": 1443,
+      "WR": 0.691,
+      "exp": 0.866,
+      "Sharpe": 10.61
+    },
+    "trading_OOS": {
+      "n": 560,
+      "WR": 0.686,
+      "exp": 0.706,
+      "Sharpe": 9.38,
+      "pass": "PASS"
+    }
+  },
+  "analysis_5_seasonality": {
+    "A_open_bar": {
+      "IS_Sh": 0.65,
+      "OOS_Sh": 1.5,
+      "pass": "FAIL"
+    },
+    "B_hour_best": {
+      "17:00_SHORT_OOS_Sh": 3.02,
+      "14:00_SHORT_OOS_Sh": 2.62
+    },
+    "C_halfhour": "{'no signals pass'}",
+    "D_lunch_drift": {
+      "16-1630_avg_OOS": 0.3364,
+      "1630-17_avg_OOS": -0.2421,
+      "corr_OOS": 0.0956
+    },
+    "E_power_hour": {
+      "OOS_agreement_pct": 0.496,
+      "pattern": "Random",
+      "avg_18-19_R_OOS": 0.4121
+    }
+  },
+  "analysis_6_crossasset": {
+    "A_ES_NQ_leadlag": {
+      "best_lag": 1,
+      "best_corr_OOS": -0.0141,
+      "all_lags_FAIL": true
+    },
+    "B_GC_filter": {
+      "no_filter_OOS_Sh": 0.58,
+      "GC_filter_OOS_Sh": 1.09,
+      "pass": "FAIL"
+    },
+    "C_divergence": {
+      "IS_n": 290,
+      "IS_Sh": -0.59,
+      "OOS_n": 51,
+      "OOS_Sh": -0.99,
+      "pass": "FAIL"
+    }
+  },
+  "analysis_7_adaptive": {
+    "A_KAMA_vs_EMA": {
+      "EMA50_OOS_Sh": -0.59,
+      "KAMA_OOS_Sh": -0.8,
+      "winner": "Neither"
+    },
+    "B_adaptive_ATR": {
+      "fixed_ATR14_OOS_Sh": 0.98,
+      "adaptive_OOS_Sh": 1.21,
+      "marginal_improvement": true
+    },
+    "C_dynamic_RSI": {
+      "RSI14_OOS_Sh": 0.91,
+      "DynRSI_OOS_Sh": 2.79,
+      "improvement": true,
+      "pass": "FAIL"
+    }
+  },
+  "ranked_all_signals": [
+    {
+      "name": "A2_Absorption",
+      "IS_n": 4,
+      "IS_WR": 0.5,
+      "IS_exp": 0.045,
+      "IS_Sharpe": 4.53,
+      "OOS_n": 2,
+      "OOS_WR": 1.0,
+      "OOS_exp": 0.034,
+      "OOS_Sharpe": 42.85,
+      "pass": "FAIL(n<30)"
+    },
+    {
+      "name": "A4_RF_prob065_ML",
+      "IS_n": 1443,
+      "IS_WR": 0.691,
+      "IS_exp": 0.866,
+      "IS_Sharpe": 10.61,
+      "OOS_n": 560,
+      "OOS_WR": 0.686,
+      "OOS_exp": 0.706,
+      "OOS_Sharpe": 9.38,
+      "pass": "PASS"
+    },
+    {
+      "name": "A3_Wyckoff_Upthrust",
+      "IS_n": 61,
+      "IS_WR": 0.705,
+      "IS_exp": 1.036,
+      "IS_Sharpe": 12.08,
+      "OOS_n": 24,
+      "OOS_WR": 0.5,
+      "OOS_exp": 0.374,
+      "OOS_Sharpe": 4.14,
+      "pass": "FAIL(n<30)"
+    },
+    {
+      "name": "A5_Hour17_SHORT",
+      "IS_n": 267,
+      "IS_WR": 0.5,
+      "IS_exp": -0.013,
+      "IS_Sharpe": -0.13,
+      "OOS_n": 119,
+      "OOS_WR": 0.529,
+      "OOS_exp": 0.303,
+      "OOS_Sharpe": 3.02,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A7_DynRSI_Divergence",
+      "IS_n": 450,
+      "IS_WR": 0.369,
+      "IS_exp": -0.136,
+      "IS_Sharpe": -2.07,
+      "OOS_n": 210,
+      "OOS_WR": 0.514,
+      "OOS_exp": 0.178,
+      "OOS_Sharpe": 2.79,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A5_Hour14_SHORT",
+      "IS_n": 275,
+      "IS_WR": 0.48,
+      "IS_exp": -0.214,
+      "IS_Sharpe": -2.14,
+      "OOS_n": 120,
+      "OOS_WR": 0.583,
+      "OOS_exp": 0.262,
+      "OOS_Sharpe": 2.62,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A5_Hour13_LONG",
+      "IS_n": 278,
+      "IS_WR": 0.484,
+      "IS_exp": -0.036,
+      "IS_Sharpe": -0.36,
+      "OOS_n": 119,
+      "OOS_WR": 0.597,
+      "OOS_exp": 0.191,
+      "OOS_Sharpe": 1.91,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A5_OpenBar_Direction",
+      "IS_n": 274,
+      "IS_WR": 0.526,
+      "IS_exp": 0.136,
+      "IS_Sharpe": 0.65,
+      "OOS_n": 119,
+      "OOS_WR": 0.546,
+      "OOS_exp": 0.206,
+      "OOS_Sharpe": 1.5,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A2_DeltaFlip",
+      "IS_n": 2728,
+      "IS_WR": 0.404,
+      "IS_exp": 0.038,
+      "IS_Sharpe": 0.49,
+      "OOS_n": 1191,
+      "OOS_WR": 0.428,
+      "OOS_exp": 0.113,
+      "OOS_Sharpe": 1.41,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A7_Monday_AdaptiveATR",
+      "IS_n": 3434,
+      "IS_WR": 0.405,
+      "IS_exp": 0.11,
+      "IS_Sharpe": 1.07,
+      "OOS_n": 1445,
+      "OOS_WR": 0.433,
+      "OOS_exp": 0.098,
+      "OOS_Sharpe": 1.21,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A6_GC_Filter_Monday",
+      "IS_n": 4872,
+      "IS_WR": 0.505,
+      "IS_exp": 0.037,
+      "IS_Sharpe": 0.37,
+      "OOS_n": 1721,
+      "OOS_WR": 0.51,
+      "OOS_exp": 0.109,
+      "OOS_Sharpe": 1.09,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A7_RSI14_Divergence",
+      "IS_n": 193,
+      "IS_WR": 0.389,
+      "IS_exp": -0.1,
+      "IS_Sharpe": -1.53,
+      "OOS_n": 90,
+      "OOS_WR": 0.444,
+      "OOS_exp": 0.059,
+      "OOS_Sharpe": 0.91,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A1_SetupE_Trending_H>0.6",
+      "IS_n": 6802,
+      "IS_WR": 0.353,
+      "IS_exp": 0.01,
+      "IS_Sharpe": 0.08,
+      "OOS_n": 2244,
+      "OOS_WR": 0.399,
+      "OOS_exp": 0.087,
+      "OOS_Sharpe": 0.87,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A2_Exhaustion",
+      "IS_n": 245,
+      "IS_WR": 0.453,
+      "IS_exp": 0.235,
+      "IS_Sharpe": 2.71,
+      "OOS_n": 109,
+      "OOS_WR": 0.367,
+      "OOS_exp": 0.054,
+      "OOS_Sharpe": 0.62,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A6_ES_NQ_Lag1",
+      "IS_n": 21563,
+      "IS_WR": 0.48,
+      "IS_exp": -0.015,
+      "IS_Sharpe": -0.18,
+      "OOS_n": 9314,
+      "OOS_WR": 0.483,
+      "OOS_exp": 0.01,
+      "OOS_Sharpe": 0.13,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A2_VelocityDrop",
+      "IS_n": 0,
+      "IS_WR": 0.0,
+      "IS_exp": 0,
+      "IS_Sharpe": 0,
+      "OOS_n": 0,
+      "OOS_WR": 0.0,
+      "OOS_exp": 0,
+      "OOS_Sharpe": 0,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A1_SetupE_EMA50_NoFilter",
+      "IS_n": 16258,
+      "IS_WR": 0.35,
+      "IS_exp": -0.002,
+      "IS_Sharpe": -0.02,
+      "OOS_n": 6551,
+      "OOS_WR": 0.365,
+      "OOS_exp": -0.048,
+      "OOS_Sharpe": -0.59,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A7_KAMA_SetupE",
+      "IS_n": 15361,
+      "IS_WR": 0.359,
+      "IS_exp": 0.019,
+      "IS_Sharpe": 0.22,
+      "OOS_n": 6554,
+      "OOS_WR": 0.362,
+      "OOS_exp": -0.065,
+      "OOS_Sharpe": -0.8,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A6_Divergence_NQ_ES",
+      "IS_n": 290,
+      "IS_WR": 0.355,
+      "IS_exp": -0.059,
+      "IS_Sharpe": -0.59,
+      "OOS_n": 51,
+      "OOS_WR": 0.314,
+      "OOS_exp": -0.099,
+      "OOS_Sharpe": -0.99,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A1_SetupE_Random_H<=0.6",
+      "IS_n": 9456,
+      "IS_WR": 0.347,
+      "IS_exp": -0.009,
+      "IS_Sharpe": -0.09,
+      "OOS_n": 4307,
+      "OOS_WR": 0.348,
+      "OOS_exp": -0.142,
+      "OOS_Sharpe": -1.42,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A3_Wyckoff_Spring",
+      "IS_n": 71,
+      "IS_WR": 0.634,
+      "IS_exp": 0.851,
+      "IS_Sharpe": 9.4,
+      "OOS_n": 24,
+      "OOS_WR": 0.333,
+      "OOS_exp": -0.127,
+      "OOS_Sharpe": -1.58,
+      "pass": "FAIL"
+    },
+    {
+      "name": "A3_Wyckoff_EffortResult",
+      "IS_n": 419,
+      "IS_WR": 0.339,
+      "IS_exp": -0.086,
+      "IS_Sharpe": -1.06,
+      "OOS_n": 140,
+      "OOS_WR": 0.257,
+      "OOS_exp": -0.293,
+      "OOS_Sharpe": -3.88,
+      "pass": "FAIL"
+    }
+  ],
+  "top_pass": [
+    {
+      "name": "A4_RF_prob065_ML",
+      "IS_n": 1443,
+      "IS_WR": 0.691,
+      "IS_exp": 0.866,
+      "IS_Sharpe": 10.61,
+      "OOS_n": 560,
+      "OOS_WR": 0.686,
+      "OOS_exp": 0.706,
+      "OOS_Sharpe": 9.38,
+      "pass": "PASS"
+    }
+  ],
+  "setup_F_spec": {
+    "name": "RF_Directional_5min",
+    "instrument": "NQ",
+    "timeframe": "5min",
+    "session_utc": "13:00-19:00",
+    "entry": "RF P(up)>0.65 \u2192 LONG at bar close; P(up)<0.35 \u2192 SHORT",
+    "stop": "1.5 \u00d7 ATR(14)",
+    "target": "3.0 \u00d7 ATR(14)",
+    "max_bars": 12,
+    "model": "RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)",
+    "IS_Sharpe": 10.61,
+    "OOS_Sharpe": 9.38
+  },
+  "setup_G_spec": {
+    "name": "Wyckoff_Upthrust_Short",
+    "instrument": "NQ",
+    "timeframe": "15min",
+    "session_utc": "13:00-19:00",
+    "entry": "Short when close reverts below swing_high(20) after failed breakout",
+    "filter": "4h close < 4h SMA(20)",
+    "stop": "high[i] + 0.1 \u00d7 ATR(14)",
+    "target": "entry - 2 \u00d7 ATR(14)",
+    "IS_Sharpe": 12.08,
+    "OOS_Sharpe": 4.14,
+    "OOS_n": 24,
+    "status": "INSUFFICIENT_OOS_N"
+  }
+}

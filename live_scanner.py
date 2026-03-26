@@ -367,6 +367,46 @@ def main():
             if not signals:
                 logger.info('No signals this bar')
 
+            # ── Setup F — Random Forest ML (every 5 min) ──────────
+            if not hasattr(main, '_last_setup_f'):
+                main._last_setup_f = 0
+            _now_ts = time.time()
+            if _now_ts - main._last_setup_f >= 300:
+                main._last_setup_f = _now_ts
+                try:
+                    from setup_f_ml import scan_setup_f, format_f_alert, check_model_degradation
+                    for _sym in ['NQ', 'ES']:  # GC paper only
+                        try:
+                            if check_model_degradation(_sym):
+                                logger.warning(f'Setup F {_sym} model degraded — skipping')
+                                continue
+                            if risk_gate is not None and risk_gate.daily.is_daily_limit_hit():
+                                logger.info(f'Setup F {_sym}: daily limit hit')
+                                continue
+                            _sig = scan_setup_f(_sym, now)
+                            if _sig:
+                                if has_opposite_swing_trade(_sym, _sig['direction']):
+                                    logger.info(
+                                        f'Setup F {_sym} {_sig["direction"]} suppressed — '
+                                        f'opposite swing trade open'
+                                    )
+                                    continue
+                                _msg = format_f_alert(_sig) + _risk_footer
+                                send_telegram(_msg)
+                                try:
+                                    from trade_tracker import log_trade
+                                    log_trade(_sig)
+                                except Exception as _lte:
+                                    logger.error(f'Setup F trade log error: {_lte}')
+                                logger.info(
+                                    f'Setup F alert: {_sym} {_sig["direction"].upper()} '
+                                    f'conf={_sig["confidence"]:.0%}'
+                                )
+                        except Exception as _se:
+                            logger.warning(f'Setup F {_sym} error: {_se}')
+                except Exception as e:
+                    logger.warning(f'Setup F block error: {e}')
+
             time.sleep(SCAN_EVERY)
 
         except KeyboardInterrupt:
