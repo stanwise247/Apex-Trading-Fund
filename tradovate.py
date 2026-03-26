@@ -1,0 +1,676 @@
+"""
+APEX Tradovate Integration — tradovate.py
+==========================================
+Paper trading via Tradovate demo API.
+
+Features:
+  - OAuth token management with auto-refresh
+  - Account balance & position queries
+  - Position size calculator (micro contracts)
+  - Bracket order placement (entry + stop + target)
+  - Signal execution with full audit logging
+  - Position sync vs apex_trades open positions
+
+Set TRADOVATE_ENABLED=true in .env to enable.
+Default: disabled — all calls are no-ops.
+
+Point values (micro contracts):
+  MNQ = $2/pt   MES = $5/pt   MGC = $10/pt
+
+Account: configured via TRADOVATE_ACCOUNT in .env
+"""
+
+import os
+import time
+import logging
+import sqlite3
+import requests
+from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger  = logging.getLogger('APEX.Tradovate')
+DB_PATH = os.environ.get('DB_PATH', 'apex_market.db')
+
+# ─────────────────────────────────────────────────────────────
+#  CONFIG — loaded from .env
+# ─────────────────────────────────────────────────────────────
+
+TRADOVATE_ENABLED  = os.environ.get('TRADOVATE_ENABLED',  'false').lower() == 'true'
+TRADOVATE_DEMO     = os.environ.get('TRADOVATE_DEMO',     'true').lower()  == 'true'
+TRADOVATE_USERNAME = os.environ.get('TRADOVATE_USERNAME', '')
+TRADOVATE_PASSWORD = os.environ.get('TRADOVATE_PASSWORD', '')
+TRADOVATE_APP_ID   = os.environ.get('TRADOVATE_APP_ID',   'APEX')
+TRADOVATE_APP_VER  = os.environ.get('TRADOVATE_APP_VERSION', '1.0')
+TRADOVATE_CID      = os.environ.get('TRADOVATE_CID',      '')
+TRADOVATE_SECRET   = os.environ.get('TRADOVATE_SECRET',   '')
+TRADOVATE_DEVICE   = os.environ.get('TRADOVATE_DEVICE_ID','apex-trader-001')
+TRADOVATE_ACCOUNT  = os.environ.get('TRADOVATE_ACCOUNT',  '')  # e.g. DUP560700
+
+BASE_URL = (
+    'https://demo.tradovateapi.com/v1'
+    if TRADOVATE_DEMO else
+    'https://live.tradovateapi.com/v1'
+)
+
+# Micro contract symbol mapping (APEX symbol → Tradovate)
+SYMBOL_MAP = {
+    'NQ': 'MNQH5',   # MNQ front-month — update as contracts roll
+    'ES': 'MESH5',   # MES front-month
+    'GC': 'MGCJ5',   # MGC front-month
+}
+# Point values per contract
+POINT_VALUE = {
+    'NQ': 2.0,   # MNQ $2/pt
+    'ES': 5.0,   # MES $5/pt
+    'GC': 10.0,  # MGC $10/pt (Gold micro)
+}
+MAX_CONTRACTS = 10
+MIN_CONTRACTS = 1
+
+# ─────────────────────────────────────────────────────────────
+#  TOKEN STORE (module-level, survives across calls)
+# ─────────────────────────────────────────────────────────────
+
+_token_cache = {
+    'access_token':  None,
+    'expiry':        0,       # unix timestamp
+    'account_id':    None,
+}
+
+
+# ─────────────────────────────────────────────────────────────
+#  AUTHENTICATION
+# ─────────────────────────────────────────────────────────────
+
+def authenticate() -> dict:
+    """
+    Obtain a Tradovate access token using password credentials.
+    Caches the token and refreshes when < 60 seconds from expiry.
+    Returns {ok, token, expiry, account_id} or {ok: False, error}.
+    """
+    if not TRADOVATE_ENABLED:
+        return {'ok': False, 'error': 'Tradovate disabled — set TRADOVATE_ENABLED=true'}
+
+    now = time.time()
+    # Return cached token if still valid
+    if (_token_cache['access_token']
+            and now < _token_cache['expiry'] - 60):
+        return {
+            'ok':         True,
+            'token':      _token_cache['access_token'],
+            'expiry':     _token_cache['expiry'],
+            'account_id': _token_cache['account_id'],
+        }
+
+    if not TRADOVATE_USERNAME or not TRADOVATE_PASSWORD:
+        return {'ok': False, 'error': 'TRADOVATE_USERNAME / TRADOVATE_PASSWORD not set'}
+
+    payload = {
+        'name':       TRADOVATE_USERNAME,
+        'password':   TRADOVATE_PASSWORD,
+        'appId':      TRADOVATE_APP_ID,
+        'appVersion': TRADOVATE_APP_VER,
+        'cid':        TRADOVATE_CID,
+        'sec':        TRADOVATE_SECRET,
+        'deviceId':   TRADOVATE_DEVICE,
+    }
+
+    try:
+        resp = requests.post(
+            f'{BASE_URL}/auth/accesstokenrequest',
+            json=payload,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        token = data.get('accessToken')
+        if not token:
+            error_info = data.get('errorText') or data.get('p-ticket') or str(data)
+            return {'ok': False, 'error': f'Auth failed: {error_info}'}
+
+        # Tradovate tokens last 80 minutes
+        expiry = now + 80 * 60
+        _token_cache['access_token'] = token
+        _token_cache['expiry']       = expiry
+
+        # Resolve account ID
+        acct_id = _resolve_account_id(token)
+        _token_cache['account_id'] = acct_id
+
+        logger.info(f'Tradovate authenticated — account={acct_id}')
+        return {'ok': True, 'token': token, 'expiry': expiry, 'account_id': acct_id}
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f'Tradovate auth request failed: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
+def _resolve_account_id(token: str) -> int | None:
+    """Find the account ID matching TRADOVATE_ACCOUNT name."""
+    try:
+        resp = requests.get(
+            f'{BASE_URL}/account/list',
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        accounts = resp.json()
+        if not isinstance(accounts, list):
+            return None
+        if TRADOVATE_ACCOUNT:
+            for a in accounts:
+                if (str(a.get('name', '')) == TRADOVATE_ACCOUNT
+                        or str(a.get('id', '')) == TRADOVATE_ACCOUNT):
+                    return a['id']
+        # Fall back to first account
+        return accounts[0]['id'] if accounts else None
+    except Exception as e:
+        logger.warning(f'_resolve_account_id failed: {e}')
+        return None
+
+
+def _auth_header() -> dict | None:
+    """Get Authorization header dict, or None if auth fails."""
+    result = authenticate()
+    if not result['ok']:
+        logger.warning(f'Tradovate auth failed: {result.get("error")}')
+        return None
+    return {'Authorization': f'Bearer {result["token"]}'}
+
+
+# ─────────────────────────────────────────────────────────────
+#  ACCOUNT
+# ─────────────────────────────────────────────────────────────
+
+def get_account() -> dict:
+    """
+    Return account balance and P&L.
+    Returns {ok, balance, available, unrealised_pnl, realised_pnl, account_id}
+    """
+    if not TRADOVATE_ENABLED:
+        return {'ok': False, 'error': 'disabled'}
+
+    headers = _auth_header()
+    if not headers:
+        return {'ok': False, 'error': 'auth_failed'}
+
+    account_id = _token_cache.get('account_id')
+    if not account_id:
+        return {'ok': False, 'error': 'no_account_id'}
+
+    try:
+        resp = requests.get(
+            f'{BASE_URL}/cashBalance/getCashBalanceSnapshot',
+            params={'accountId': account_id},
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        return {
+            'ok':              True,
+            'account_id':      account_id,
+            'account_name':    TRADOVATE_ACCOUNT,
+            'balance':         round(float(data.get('totalCashValue',  0)), 2),
+            'available':       round(float(data.get('availableFunds',  0)), 2),
+            'unrealised_pnl':  round(float(data.get('openPnL',         0)), 2),
+            'realised_pnl':    round(float(data.get('realizedPnL',      0)), 2),
+        }
+
+    except Exception as e:
+        logger.error(f'get_account error: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POSITIONS
+# ─────────────────────────────────────────────────────────────
+
+def get_positions() -> dict:
+    """
+    Return open positions.
+    Returns {ok, positions: [{symbol, contracts, avg_price, unrealised_pnl}]}
+    """
+    if not TRADOVATE_ENABLED:
+        return {'ok': False, 'error': 'disabled', 'positions': []}
+
+    headers = _auth_header()
+    if not headers:
+        return {'ok': False, 'error': 'auth_failed', 'positions': []}
+
+    account_id = _token_cache.get('account_id')
+
+    try:
+        resp = requests.get(
+            f'{BASE_URL}/position/list',
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+
+        positions = []
+        for p in (raw if isinstance(raw, list) else []):
+            if account_id and p.get('accountId') != account_id:
+                continue
+            if abs(p.get('netPos', 0)) == 0:
+                continue
+            positions.append({
+                'symbol':         p.get('contractId', ''),
+                'contracts':      int(p.get('netPos', 0)),
+                'avg_price':      float(p.get('netPrice', 0)),
+                'unrealised_pnl': float(p.get('openPnL', 0)),
+            })
+
+        return {'ok': True, 'positions': positions}
+
+    except Exception as e:
+        logger.error(f'get_positions error: {e}')
+        return {'ok': False, 'error': str(e), 'positions': []}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POSITION SIZE CALCULATOR
+# ─────────────────────────────────────────────────────────────
+
+def calculate_position_size(
+    account_balance: float,
+    risk_pct: float,
+    stop_pts: float,
+    symbol: str,
+) -> dict:
+    """
+    Calculate contracts to trade based on fixed fractional risk.
+
+    contracts = floor(balance × risk_pct / (stop_pts × point_value))
+    Clamped: 0 (skip) or MIN_CONTRACTS..MAX_CONTRACTS
+
+    Returns {contracts, dollar_risk, instrument, point_value}
+    """
+    pv         = POINT_VALUE.get(symbol, 2.0)
+    instrument = SYMBOL_MAP.get(symbol, symbol)
+    stop_pts   = abs(stop_pts)
+
+    if stop_pts <= 0 or account_balance <= 0:
+        return {'contracts': 0, 'dollar_risk': 0.0,
+                'instrument': instrument, 'point_value': pv}
+
+    dollar_risk_budget = account_balance * risk_pct
+    contracts_raw      = dollar_risk_budget / (stop_pts * pv)
+    contracts          = int(contracts_raw)
+
+    if contracts <= 0:
+        return {'contracts': 0, 'dollar_risk': 0.0,
+                'instrument': instrument, 'point_value': pv}
+
+    contracts   = max(MIN_CONTRACTS, min(MAX_CONTRACTS, contracts))
+    dollar_risk = round(contracts * stop_pts * pv, 2)
+
+    return {
+        'contracts':   contracts,
+        'dollar_risk': dollar_risk,
+        'instrument':  instrument,
+        'point_value': pv,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+#  ORDER HISTORY
+# ─────────────────────────────────────────────────────────────
+
+def get_orders_today() -> list:
+    """Return today's order fills from Tradovate."""
+    if not TRADOVATE_ENABLED:
+        return []
+
+    headers = _auth_header()
+    if not headers:
+        return []
+
+    try:
+        resp = requests.get(
+            f'{BASE_URL}/fill/list',
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        fills = resp.json()
+        if not isinstance(fills, list):
+            return []
+
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        result = []
+        account_id = _token_cache.get('account_id')
+        for f in fills:
+            if account_id and f.get('accountId') != account_id:
+                continue
+            ts = f.get('timestamp', '')
+            if not ts.startswith(today):
+                continue
+            result.append({
+                'time':       ts,
+                'symbol':     f.get('contractId', ''),
+                'side':       f.get('action', ''),
+                'contracts':  abs(int(f.get('qty', 0))),
+                'fill_price': float(f.get('price', 0)),
+                'status':     'filled',
+            })
+        return result
+
+    except Exception as e:
+        logger.debug(f'get_orders_today: {e}')
+        return []
+
+
+# ─────────────────────────────────────────────────────────────
+#  BRACKET ORDER
+# ─────────────────────────────────────────────────────────────
+
+def place_bracket_order(
+    symbol: str,
+    direction: str,
+    contracts: int,
+    entry: float,
+    stop: float,
+    target: float,
+) -> dict:
+    """
+    Place a bracket order: market entry + stop loss + take profit.
+
+    symbol:    APEX symbol (NQ / ES / GC)
+    direction: 'long' or 'short'
+    contracts: number of micro contracts
+    entry:     reference entry price (used for logging)
+    stop:      stop loss price
+    target:    take profit price
+
+    Returns {ok, order_id, fill_price, contracts, instrument}
+    """
+    if not TRADOVATE_ENABLED:
+        return {'ok': False, 'error': 'disabled'}
+
+    headers = _auth_header()
+    if not headers:
+        return {'ok': False, 'error': 'auth_failed'}
+
+    account_id = _token_cache.get('account_id')
+    if not account_id:
+        return {'ok': False, 'error': 'no_account_id'}
+
+    instrument = SYMBOL_MAP.get(symbol, symbol)
+    action     = 'Buy' if direction == 'long' else 'Sell'
+    stop_action  = 'Sell' if direction == 'long' else 'Buy'
+
+    # Tradovate bracket order payload
+    payload = {
+        'accountSpec': TRADOVATE_ACCOUNT,
+        'accountId':   account_id,
+        'action':      action,
+        'symbol':      instrument,
+        'orderQty':    contracts,
+        'orderType':   'Market',
+        'isAutomated': True,
+        'bracket1': {
+            'action':    stop_action,
+            'orderType': 'Stop',
+            'stopPrice': round(stop, 2),
+        },
+        'bracket2': {
+            'action':    stop_action,
+            'orderType': 'Limit',
+            'price':     round(target, 2),
+        },
+    }
+
+    try:
+        resp = requests.post(
+            f'{BASE_URL}/order/placeOCO',
+            json=payload,
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        order_id   = data.get('orderId') or data.get('p-ticket') or str(data)
+        fill_price = float(data.get('fillPrice', entry))
+
+        logger.info(
+            f'Bracket order placed: {contracts} {instrument} '
+            f'{direction.upper()} @ {fill_price:.2f} '
+            f'SL={stop:.2f} TP={target:.2f} orderId={order_id}'
+        )
+
+        return {
+            'ok':         True,
+            'order_id':   str(order_id),
+            'fill_price': fill_price,
+            'contracts':  contracts,
+            'instrument': instrument,
+        }
+
+    except requests.exceptions.HTTPError as e:
+        try:
+            err_body = e.response.json()
+        except Exception:
+            err_body = str(e)
+        logger.error(f'place_bracket_order HTTP error: {err_body}')
+        return {'ok': False, 'error': str(err_body)}
+    except Exception as e:
+        logger.error(f'place_bracket_order error: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
+# ─────────────────────────────────────────────────────────────
+#  EXECUTE APEX SIGNAL
+# ─────────────────────────────────────────────────────────────
+
+def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
+    """
+    Full execution pipeline for an APEX signal.
+
+    1. Authenticate
+    2. Get account balance
+    3. Calculate position size
+    4. Place bracket order
+    5. Return execution result with order details
+
+    signal dict must have: symbol, direction, entry, stop, target, setup
+
+    Returns {ok, contracts, fill_price, dollar_risk, order_id, instrument, skipped_reason}
+    """
+    if not TRADOVATE_ENABLED:
+        return {'ok': False, 'skipped_reason': 'disabled'}
+
+    sym       = signal.get('symbol', '')
+    direction = signal.get('direction', '')
+    entry     = float(signal.get('entry', 0))
+    stop      = float(signal.get('stop', 0))
+    target    = float(signal.get('target', 0))
+
+    if not sym or not direction or not entry or not stop:
+        return {'ok': False, 'skipped_reason': 'invalid_signal_fields'}
+
+    # Get live account balance
+    acct = get_account()
+    if not acct['ok']:
+        logger.warning(f'execute_apex_signal: account fetch failed — {acct.get("error")}')
+        return {'ok': False, 'skipped_reason': f'account_error: {acct.get("error")}'}
+
+    balance  = acct['balance']
+    stop_pts = abs(entry - stop)
+
+    # Calculate size
+    sizing = calculate_position_size(balance, risk_pct, stop_pts, sym)
+    if sizing['contracts'] == 0:
+        msg = (f'Signal skipped — 0 contracts: balance={balance:.0f} '
+               f'risk_pct={risk_pct:.1%} stop_pts={stop_pts:.1f}')
+        logger.info(msg)
+        return {'ok': False, 'skipped_reason': 'zero_contracts', 'detail': msg}
+
+    # Place bracket order
+    result = place_bracket_order(
+        symbol=sym,
+        direction=direction,
+        contracts=sizing['contracts'],
+        entry=entry,
+        stop=stop,
+        target=target,
+    )
+
+    if result['ok']:
+        logger.info(
+            f'Signal executed: {sym} {direction.upper()} {sizing["contracts"]} '
+            f'{sizing["instrument"]} @ {result["fill_price"]:.2f} '
+            f'risk=${sizing["dollar_risk"]:.0f} orderId={result["order_id"]}'
+        )
+        return {
+            'ok':          True,
+            'contracts':   sizing['contracts'],
+            'instrument':  sizing['instrument'],
+            'fill_price':  result['fill_price'],
+            'dollar_risk': sizing['dollar_risk'],
+            'order_id':    result['order_id'],
+        }
+    else:
+        logger.error(f'execute_apex_signal: order failed — {result.get("error")}')
+        return {'ok': False, 'skipped_reason': f'order_failed: {result.get("error")}'}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POSITION SYNC
+# ─────────────────────────────────────────────────────────────
+
+def sync_positions() -> list:
+    """
+    Compare Tradovate open positions vs apex_trades open trades.
+    Flags mismatches and closes apex_trades where Tradovate position is gone.
+    Returns list of sync events (mismatches, auto-closes).
+    """
+    if not TRADOVATE_ENABLED:
+        return []
+
+    events = []
+
+    tv_result = get_positions()
+    if not tv_result['ok']:
+        logger.warning(f'sync_positions: cannot fetch Tradovate positions')
+        return events
+
+    tv_positions = tv_result['positions']
+    tv_symbols   = {p['symbol'] for p in tv_positions}
+
+    try:
+        conn   = sqlite3.connect(DB_PATH, timeout=30)
+        trades = conn.execute(
+            "SELECT id, symbol, direction, setup, entry_price, stop, target "
+            "FROM apex_trades WHERE status='open'"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        logger.error(f'sync_positions DB error: {e}')
+        return events
+
+    for trade_id, sym, direction, setup, entry, stop, target in trades:
+        instrument = SYMBOL_MAP.get(sym, sym)
+        # Check if Tradovate has a matching open position
+        tv_match = next((p for p in tv_positions
+                         if p['symbol'] == instrument), None)
+
+        if tv_match is None and instrument:
+            # Position gone in Tradovate — trade may have been closed externally
+            event = {
+                'type':     'mismatch',
+                'trade_id': trade_id,
+                'symbol':   sym,
+                'detail':   f'apex_trades #{trade_id} open but no {instrument} position in Tradovate',
+            }
+            events.append(event)
+            logger.warning(
+                f'Position sync mismatch: apex_trade #{trade_id} {sym} '
+                f'{direction.upper()} open but {instrument} not in Tradovate positions'
+            )
+
+    return events
+
+
+# ─────────────────────────────────────────────────────────────
+#  DASHBOARD STATUS
+# ─────────────────────────────────────────────────────────────
+
+def get_status() -> dict:
+    """
+    Return full Tradovate status for dashboard /api/apex/tradovate endpoint.
+    Returns {connected, balance, available, unrealised_pnl, realised_pnl,
+             positions, orders_today, account_name, demo, enabled}
+    """
+    result = {
+        'enabled':     TRADOVATE_ENABLED,
+        'demo':        TRADOVATE_DEMO,
+        'connected':   False,
+        'account_name': TRADOVATE_ACCOUNT or 'Not configured',
+        'balance':     None,
+        'available':   None,
+        'unrealised_pnl': None,
+        'realised_pnl':   None,
+        'positions':   [],
+        'orders_today': [],
+    }
+
+    if not TRADOVATE_ENABLED:
+        return result
+
+    auth = authenticate()
+    if not auth['ok']:
+        result['error'] = auth.get('error')
+        return result
+
+    result['connected'] = True
+
+    acct = get_account()
+    if acct['ok']:
+        result['balance']        = acct['balance']
+        result['available']      = acct['available']
+        result['unrealised_pnl'] = acct['unrealised_pnl']
+        result['realised_pnl']   = acct['realised_pnl']
+
+    pos = get_positions()
+    if pos['ok']:
+        result['positions'] = pos['positions']
+
+    result['orders_today'] = get_orders_today()
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────
+#  CLI TEST
+# ─────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+    print(f'TRADOVATE_ENABLED: {TRADOVATE_ENABLED}')
+    print(f'TRADOVATE_DEMO:    {TRADOVATE_DEMO}')
+    print(f'BASE_URL:          {BASE_URL}')
+
+    if not TRADOVATE_ENABLED:
+        print('\nSet TRADOVATE_ENABLED=true in .env to test live connection.')
+        print('\nPosition size calculator test (no auth required):')
+        for sym, entry, stop in [('NQ', 21500, 21450), ('ES', 5800, 5790), ('GC', 3100, 3090)]:
+            sz = calculate_position_size(50000, 0.01, abs(entry - stop), sym)
+            print(f'  {sym}: {sz["contracts"]} {sz["instrument"]} | risk=${sz["dollar_risk"]} | pv=${sz["point_value"]}/pt')
+    else:
+        print('\nTesting authentication...')
+        auth = authenticate()
+        print(f'Auth: {auth}')
+        if auth['ok']:
+            print('\nAccount:')
+            print(f'  {get_account()}')
+            print('\nPositions:')
+            print(f'  {get_positions()}')

@@ -54,10 +54,17 @@ def init_trades_table():
             exit_reason TEXT,
             pnl_r       REAL,
             status      TEXT DEFAULT 'open',
-            bars_held   INTEGER DEFAULT 0,
-            notes       TEXT
+            bars_held        INTEGER DEFAULT 0,
+            notes            TEXT,
+            broker_order_id  TEXT
         )
     ''')
+    # Add broker_order_id column if missing (migration for existing DBs)
+    try:
+        conn.execute('ALTER TABLE apex_trades ADD COLUMN broker_order_id TEXT')
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -81,8 +88,8 @@ def log_trade(signal: dict) -> int:
     c.execute('''
         INSERT INTO apex_trades
         (symbol, direction, setup, mode, entry_price, stop, target,
-         rr_planned, session, quality, entry_time, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+         rr_planned, session, quality, entry_time, status, broker_order_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
     ''', (
         signal.get('symbol'),
         signal.get('direction'),
@@ -95,6 +102,7 @@ def log_trade(signal: dict) -> int:
         signal.get('session', ''),
         signal.get('quality', ''),
         now,
+        signal.get('broker_order_id'),
     ))
     trade_id = c.lastrowid
     conn.commit()
@@ -140,7 +148,7 @@ def close_trade(trade_id: int, exit_price: float, reason: str):
 
     cols = ['id','symbol','direction','setup','mode','entry_price','stop',
             'target','rr_planned','session','quality','entry_time','exit_price',
-            'exit_time','exit_reason','pnl_r','status','bars_held','notes']
+            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
     t = dict(zip(cols, trade))
 
     entry  = float(t['entry_price'])
@@ -248,7 +256,7 @@ def monitor_trades():
 
     cols = ['id','symbol','direction','setup','mode','entry_price','stop',
             'target','rr_planned','session','quality','entry_time','exit_price',
-            'exit_time','exit_reason','pnl_r','status','bars_held','notes']
+            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
 
     now = datetime.now(timezone.utc)
 
@@ -366,7 +374,7 @@ def get_open_trades() -> list:
 
     cols = ['id','symbol','direction','setup','mode','entry_price','stop',
             'target','rr_planned','session','quality','entry_time','exit_price',
-            'exit_time','exit_reason','pnl_r','status','bars_held','notes']
+            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
 
     result = []
     for row in trades:

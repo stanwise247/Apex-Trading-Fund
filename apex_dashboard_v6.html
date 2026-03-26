@@ -940,19 +940,26 @@ function buildTradeCard(t) {
   const dir = (t.direction || t.side || '').toLowerCase();
   const setup = t.setup || '';
   const entry = t.entry_price || t.entry || 0;
-  const sl = t.stop_loss || t.sl || 0;
-  const tp = t.take_profit || t.tp || 0;
+  const sl = t.stop || t.stop_price || t.stop_loss || 0;
+  const tp = t.target || t.target_price || t.take_profit || 0;
   const current = t.current_price || t.last_price || entry;
-  const pnlR = t.pnl_r || 0;
-  const pnlDol = t.pnl_usd || t.pnl || 0;
+  const pnlR = t.current_pnl_r ?? t.pnl_r ?? 0;
+  const pnlDol = Math.round(pnlR * 100);  // 1R = $100 at 1% risk on $10k
   const slPts = sl ? Math.abs(entry - sl).toFixed(0) : 0;
   const tpPts = tp ? Math.abs(tp - entry).toFixed(0) : 0;
   const isPos = pnlR >= 0;
-  const barPct = Math.min(Math.abs(pnlR) / 3 * 50, 50);
+  // Progress bar: how far current price is from entry toward target (or stop)
+  const risk = sl ? Math.abs(entry - sl) : 1;
+  const rwd  = tp ? Math.abs(tp  - entry) : risk * 3;
+  const moved = Math.abs(current - entry);
+  const barPct = Math.min(moved / rwd * 100, 100);
+  const pnlSign = pnlR >= 0 ? '+' : '';
+  const dolSign = pnlDol >= 0 ? '+' : '';
   const now = new Date();
   const totalMin = now.getUTCHours() * 60 + now.getUTCMinutes();
   const nyClose = 19 * 60;
   const rem = totalMin < nyClose ? nyClose - totalMin : 0;
+  const curStr = current ? current.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
   return `<div class="trade-card">
     <div class="trade-badges">
       <span class="sym-badge ${sym}">${sym}</span>
@@ -960,12 +967,13 @@ function buildTradeCard(t) {
       ${setup ? `<span class="setup-badge">${setup}</span>` : ''}
     </div>
     <div class="trade-entry-price">${entry.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-    ${sl ? `<div class="trade-level sl">→ SL ${sl.toLocaleString()} (-${slPts}pts)</div>` : ''}
-    ${tp ? `<div class="trade-level tp">→ TP ${tp.toLocaleString()} (+${tpPts}pts)</div>` : ''}
+    <div style="font-size:11px;color:var(--text2);margin-bottom:4px">Now: <span style="color:var(--text)">${curStr}</span></div>
+    ${sl ? `<div class="trade-level sl">SL ${sl.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} (-${slPts}pts)</div>` : ''}
+    ${tp ? `<div class="trade-level tp">TP ${tp.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} (+${tpPts}pts)</div>` : ''}
     <div class="pnl-bar-wrap">
       <div class="pnl-bar-fill ${isPos ? 'pos' : 'neg'}" style="width:${barPct}%"></div>
     </div>
-    <div class="pnl-text ${isPos ? 'pos' : 'neg'}">${isPos ? '+' : ''}${pnlR.toFixed(2)}R / ${isPos ? '+' : ''}$${pnlDol.toFixed(0)}</div>
+    <div class="pnl-text ${isPos ? 'pos' : 'neg'}">${pnlSign}${pnlR.toFixed(2)}R / ${dolSign}$${Math.abs(pnlDol)}</div>
     <div class="trade-session">NY closes in ${Math.floor(rem/60)}h ${rem%60}m</div>
   </div>`;
 }

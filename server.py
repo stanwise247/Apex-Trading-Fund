@@ -1012,35 +1012,44 @@ def options(path):
 
 
 
-def send_session_open_alert(sess_name, sess_quality, vix, dt_ny):
+def _execute_via_tradovate(signal: dict, trade_id: int):
+    """
+    Fire-and-forget Tradovate execution after a signal is logged.
+    Only runs when TRADOVATE_ENABLED=true. Silently skips otherwise.
+    Updates broker_order_id on the apex_trades row if execution succeeds.
+    """
     try:
-        from telegram_alerts import send_telegram, load_telegram_config
-        import zoneinfo as _zi
-        token, chat_id = load_telegram_config()
-        if not token or not chat_id:
+        from tradovate import execute_apex_signal, TRADOVATE_ENABLED
+        if not TRADOVATE_ENABLED:
             return
-        mode     = 'Swing' if 'London' in sess_name else 'Scalp'
-        uk_time  = dt_ny.astimezone(_zi.ZoneInfo('Europe/London'))
-        time_str = uk_time.strftime('%H:%M')
-        day_str  = uk_time.strftime('%A')
-        vix_str  = f'{vix:.1f}' if vix else 'N/A'
-        vix_ok   = vix and vix <= 25
-        vix_emoji= '\u2705' if vix and vix <= 20 else ('\u26a0\ufe0f' if vix_ok else '\U0001f534')
-        msg = (
-            f'\U0001f50d <b>APEX Scanner Active</b>\n'
-            f'\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n'
-            f'\U0001f4c5 {day_str} \u00b7 {time_str} UK\n'
-            f'\U0001f4ca Session: <b>{sess_name}</b>\n'
-            f'\U0001f3af Mode: <b>{mode}</b>\n'
-            f'\u2b50 Quality: {sess_quality}/100\n'
-            f'{vix_emoji} VIX: {vix_str}\n'
-            f'\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n'
-            f'Scanning NQ + ES \u00b7 Setups scoring 70+...'
-        )
-        send_telegram(msg, token, chat_id)
-        logger.info(f'Session open alert sent: {sess_name}')
+        result = execute_apex_signal(signal)
+        if result['ok'] and trade_id:
+            try:
+                conn = sqlite3.connect(DB_PATH, timeout=10)
+                conn.execute(
+                    'UPDATE apex_trades SET broker_order_id=? WHERE id=?',
+                    (result['order_id'], trade_id)
+                )
+                conn.commit()
+                conn.close()
+            except Exception as _dbe:
+                logger.warning(f'broker_order_id update failed: {_dbe}')
+            # Send execution confirmation via Telegram
+            try:
+                from live_scanner import send_telegram
+                send_telegram(
+                    f'📋 <b>Order placed</b> — {signal.get("symbol")} {signal.get("direction","").upper()}\n'
+                    f'Contracts: {result["contracts"]} {result["instrument"]}\n'
+                    f'Fill: {result["fill_price"]:.2f} | Risk: ${result["dollar_risk"]:.0f}'
+                )
+            except Exception:
+                pass
+        elif not result['ok']:
+            logger.warning(
+                f'Tradovate execution skipped: {result.get("skipped_reason")} — {result.get("detail","")}'
+            )
     except Exception as e:
-        logger.warning(f'Session open alert failed: {e}')
+        logger.debug(f'_execute_via_tradovate error: {e}')
 
 
 def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
@@ -1223,7 +1232,8 @@ def background_scheduler():
                             continue
                         msg = format_fvg_alert(sig) + _risk_footer
                         send_telegram(msg)
-                        log_trade(sig)
+                        _fvg_tid = log_trade(sig)
+                        _execute_via_tradovate(sig, _fvg_tid)
                         logger.info(
                             f'FVG signal: NQ {sig["direction"].upper()} entry={sig["entry"]} '
                             f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
@@ -1268,7 +1278,7 @@ def background_scheduler():
                                else format_alert(result))
                         send_telegram(msg + _risk_footer)
                         tracker.mark_sent(result)
-                        log_trade({
+                        _sig_dict = {
                             'symbol':    result.symbol,
                             'direction': result.direction,
                             'setup':     result.setup,
@@ -1279,7 +1289,9 @@ def background_scheduler():
                             'rr':        result.rr,
                             'session':   getattr(result, 'session', 'NY Primary'),
                             'quality':   getattr(result, 'quality', 'primary'),
-                        })
+                        }
+                        _apex_tid = log_trade(_sig_dict)
+                        _execute_via_tradovate(_sig_dict, _apex_tid)
                         logger.info(
                             f'APEX signal: {result.symbol} {result.direction} {result.setup} '
                             f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
@@ -1328,7 +1340,8 @@ def background_scheduler():
                                 continue
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
-                            log_trade(sig)
+                            _f_tid = log_trade(sig)
+                            _execute_via_tradovate(sig, _f_tid)
                             logger.info(
                                 f'Setup F signal: {_sym} {sig["direction"].upper()} '
                                 f'conf={sig["confidence"]:.0%} regime={_regime.label}'
@@ -2005,6 +2018,46 @@ def apex_wyckoff():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/tradovate', methods=['GET'])
+def apex_tradovate():
+    """Return Tradovate account status, positions, and today's orders."""
+    try:
+        from tradovate import get_status
+        return jsonify(get_status())
+    except Exception as e:
+        logger.debug(f'Tradovate status error: {e}')
+        return jsonify({
+            'enabled':   False,
+            'connected': False,
+            'error':     str(e),
+            'positions': [],
+            'orders_today': [],
+        })
+
+
+@app.route('/api/apex/tradovate/order', methods=['POST'])
+def apex_tradovate_order():
+    """Place a manual market order via Tradovate (Execution tab)."""
+    try:
+        from tradovate import TRADOVATE_ENABLED, authenticate, _token_cache
+        from tradovate import place_bracket_order, get_account, calculate_position_size
+        if not TRADOVATE_ENABLED:
+            return jsonify({'ok': False, 'error': 'Tradovate disabled'})
+        data = request.get_json(force=True)
+        sym       = data.get('symbol', '').upper()
+        direction = data.get('direction', '').lower()
+        contracts = int(data.get('contracts', 1))
+        entry     = float(data.get('entry',  0))
+        stop      = float(data.get('stop',   0))
+        target    = float(data.get('target', 0))
+        if not sym or direction not in ('long', 'short') or contracts < 1:
+            return jsonify({'ok': False, 'error': 'Invalid params'})
+        result = place_bracket_order(sym, direction, contracts, entry, stop, target)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/apex/market', methods=['GET'])
 def apex_market():
     """Return current market structure per instrument."""
@@ -2116,10 +2169,22 @@ def apex_equity():
         today_pnl    = round(today_r * START * RISK, 2)
         total_return = round((balance - START) / START * 100, 2)
 
+        # Add unrealised P&L from open trades as a live endpoint on the curve
+        try:
+            from trade_tracker import get_open_trades
+            open_trades = get_open_trades()
+            unrealised_r = sum(t.get('current_pnl_r', 0) or 0 for t in open_trades)
+            live_balance = round(balance + unrealised_r * balance * RISK, 2)
+        except Exception:
+            live_balance = round(balance, 2)
+            unrealised_r = 0.0
+
         return jsonify({
             'ok':              True,
             'points':          points,
             'current_balance': round(balance, 2),
+            'live_balance':    live_balance,
+            'unrealised_r':    round(unrealised_r, 3),
             'max_drawdown':    max_dd,
             'today_r':         today_r,
             'today_pnl':       today_pnl,
