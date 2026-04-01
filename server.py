@@ -1883,6 +1883,23 @@ def _startup():
                     logger.info(f'  {_sym} data OK ({count} bars)')
             except Exception as e:
                 logger.warning(f'  {_sym} backfill check failed: ' + str(e))
+        # Train Setup F ML models after data is ready
+        _t.sleep(5)
+        try:
+            from setup_f_ml import train_model, load_or_train_model
+            for _sym in ['NQ', 'ES']:
+                try:
+                    logger.info(f'Setup F: Training {_sym} model...')
+                    acc = train_model(_sym)
+                    if acc > 0:
+                        load_or_train_model(_sym)   # warm the in-memory cache
+                        logger.info(f'Setup F: {_sym} model ready, accuracy={acc:.1%}')
+                    else:
+                        logger.warning(f'Setup F: {_sym} model training skipped (insufficient data)')
+                except Exception as _te:
+                    logger.warning(f'Setup F: {_sym} model training error: {_te}')
+        except Exception as e:
+            logger.warning(f'Setup F startup training failed: {e}')
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')

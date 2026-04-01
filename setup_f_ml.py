@@ -268,12 +268,9 @@ FEATURE_NAMES = [
 #  TRAINING
 # ─────────────────────────────────────────────────────────────
 
-def train_model(symbol: str, db_path: str = None) -> float:
+def train_model(symbol: str) -> float:
     """Train RF classifier on last 6 months of 5min bars. Save to pkl."""
     from sklearn.ensemble import RandomForestClassifier
-    if db_path:
-        global DB_PATH
-        DB_PATH = db_path
 
     logger.info(f'Training Setup F model for {symbol}...')
     start_hr, end_hr = SESSION_WINDOWS.get(symbol, (13, 19))
