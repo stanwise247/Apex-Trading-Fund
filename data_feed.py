@@ -224,8 +224,10 @@ def build_htf_from_5min(symbol: str) -> dict:
     conn.close()
 
     if df.empty:
+        logger.warning(f'build_htf_from_5min: no 5min bars for {symbol}')
         return {}
 
+    logger.info(f'build_htf_from_5min: {symbol} — {len(df)} 5min bars loaded')
     df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
     df.set_index('dt', inplace=True)
 
@@ -239,7 +241,9 @@ def build_htf_from_5min(symbol: str) -> dict:
                 'close':  'last',
                 'volume': 'sum',
             }).dropna()
-            agg['ts'] = agg.index.astype('int64') // 1_000_000_000
+            # Use .asi8 (nanoseconds since epoch) — works on tz-aware indexes in all pandas versions.
+            # astype('int64') raises TypeError on tz-aware DatetimeIndex in pandas 2.x.
+            agg['ts'] = agg.index.asi8 // 1_000_000_000
 
             bars = [
                 (int(row['ts']), round(float(row['open']),2),
@@ -247,12 +251,12 @@ def build_htf_from_5min(symbol: str) -> dict:
                  round(float(row['close']),2), float(row['volume']))
                 for _, row in agg.iterrows()
             ]
+            logger.info(f'build_htf_from_5min: {symbol} {tf} — {len(bars)} aggregated bars')
             inserted = store_bars(symbol, tf, bars)
             results[tf] = inserted
-            if inserted > 0:
-                logger.info(f'DataFeed: {symbol} {tf} built +{inserted} from 5min')
+            logger.info(f'DataFeed: {symbol} {tf} built — {inserted} new bars ({len(bars)} total)')
         except Exception as e:
-            logger.error(f'HTF build error {symbol} {tf}: {e}')
+            logger.error(f'HTF build error {symbol} {tf}: {e}', exc_info=True)
             results[tf] = 0
 
     return results
