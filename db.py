@@ -365,6 +365,18 @@ _PG_DDL = [
     'CREATE INDEX IF NOT EXISTS idx_swing_alert ON swing_alerted_signals (symbol, direction, setup, date)',
 ]
 
+# Separate migration steps run after DDL — dedup then add unique index.
+# ON CONFLICT (symbol,timeframe,ts) requires a UNIQUE INDEX to exist.
+# CREATE TABLE IF NOT EXISTS won't add the constraint to a pre-existing table.
+_PG_MIGRATIONS = [
+    # Remove any duplicate ohlcv rows (keep lowest id) before creating unique index
+    'DELETE FROM ohlcv WHERE id NOT IN '
+    '(SELECT MIN(id) FROM ohlcv GROUP BY symbol, timeframe, ts)',
+    # Unique index — required for ON CONFLICT (symbol,timeframe,ts) to work
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique '
+    'ON ohlcv (symbol, timeframe, ts)',
+]
+
 
 def init_schema():
     """Create all tables in PostgreSQL at startup. No-op for SQLite."""
@@ -377,8 +389,13 @@ def init_schema():
         cur = conn.cursor()
         for ddl in _PG_DDL:
             cur.execute(ddl)
+        for sql in _PG_MIGRATIONS:
+            try:
+                cur.execute(sql)
+            except Exception as mig_err:
+                logger.warning(f'Migration step skipped ({mig_err}): {sql[:60]}')
         conn.close()
-        logger.info('PostgreSQL schema initialised')
+        logger.info('PostgreSQL schema initialised (migrations applied)')
     except Exception as e:
         logger.error(f'init_schema failed: {e}')
         raise

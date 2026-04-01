@@ -2527,7 +2527,34 @@ APEX_SESSIONS = [
     {'name': 'NY Primary', 'syms': 'NQ/ES', 'start': 13, 'end': 19},
     {'name': 'GC Primary', 'syms': 'GC',    'start': 12, 'end': 17},
 ]
-_session_state = {}
+_session_state = {}  # in-memory cache; DB is authoritative across redeploys
+
+def _sess_fired(key: str) -> bool:
+    """Return True if this session alert already fired (checks DB to survive redeploys)."""
+    if _session_state.get(key):
+        return True
+    try:
+        conn = _db.connect()
+        cur = conn.execute('SELECT value FROM paper_account WHERE key=?', ('sess_' + key,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            _session_state[key] = True
+            return True
+    except Exception:
+        pass
+    return False
+
+def _sess_mark(key: str):
+    """Mark a session alert as fired in memory and DB."""
+    _session_state[key] = True
+    try:
+        conn = _db.connect()
+        _db.kv_upsert(conn, 'sess_' + key, '1')
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 def check_session_alerts():
     try:
@@ -2545,8 +2572,8 @@ def check_session_alerts():
         for sess in APEX_SESSIONS:
             key_open  = sess['name'] + '_open_'  + date_str
             key_close = sess['name'] + '_close_' + date_str
-            if hour == sess['start'] and not _session_state.get(key_open):
-                _session_state[key_open] = True
+            if hour == sess['start'] and not _sess_fired(key_open):
+                _sess_mark(key_open)
                 parts = [
                     chr(128276) + ' <b>' + sess['name'] + ' Session Open</b>',
                     sep,
@@ -2557,8 +2584,8 @@ def check_session_alerts():
                 ]
                 send_telegram(chr(10).join(parts))
                 logger.info('Session open alert: ' + sess['name'])
-            if hour == sess['end'] and not _session_state.get(key_close):
-                _session_state[key_close] = True
+            if hour == sess['end'] and not _sess_fired(key_close):
+                _sess_mark(key_close)
                 parts = [
                     chr(128277) + ' <b>' + sess['name'] + ' Session Closed</b>',
                     sep,
