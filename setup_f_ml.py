@@ -180,24 +180,18 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     # ── 2. htf_bias (4h SMA20) ─────────────────────────────────
     if not df_4h.empty:
         sma20_4h = df_4h['close'].rolling(20).mean()
-        # Forward-fill 4h values to 5min timestamps
-        bias_arr = np.full(n, np.nan)
-        ts_5m = df_5m['ts'].values
-        for i, ts_4h in enumerate(df_4h['ts'].values):
-            next_4h_ts = df_4h['ts'].iloc[i+1] if i+1 < len(df_4h) else None
-            if next_4h_ts is not None:
-                range_mask = (ts_5m >= ts_4h) & (ts_5m < next_4h_ts)
-            else:
-                range_mask = ts_5m >= ts_4h
-            if not range_mask.any():
-                continue
-            c4 = df_4h['close'].iloc[i]
-            s4 = sma20_4h.iloc[i]
-            if pd.notna(s4):
-                mid = s4 * 0.001
-                val = 1.0 if c4 > s4 + mid else (-1.0 if c4 < s4 - mid else 0.0)
-                bias_arr[range_mask] = val
-        feats[:, 1] = bias_arr
+        _4h_tmp = pd.DataFrame({'ts': df_4h['ts'].values,
+                                 'close4': df_4h['close'].values,
+                                 'sma20_4h': sma20_4h.values})
+        _5m_ts  = pd.DataFrame({'ts': df_5m['ts'].values})
+        merged  = pd.merge_asof(_5m_ts.sort_values('ts'),
+                                 _4h_tmp.sort_values('ts'),
+                                 on='ts', direction='backward')
+        mid     = merged['sma20_4h'] * 0.001
+        bias    = np.where(merged['sma20_4h'].isna(), np.nan,
+                  np.where(merged['close4'] > merged['sma20_4h'] + mid,  1.0,
+                  np.where(merged['close4'] < merged['sma20_4h'] - mid, -1.0, 0.0)))
+        feats[:, 1] = bias
 
     # ── 3. ema50_dist (5min EMA50, ATR14 normalised) ──────────
     ema50   = _ema(df_5m['close'], 50)
@@ -213,16 +207,13 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     # ── 6. vol_regime (1h rvol percentile) ────────────────────
     if not df_1h.empty:
         vr = _vol_regime(symbol, df_1h)
-        vr_arr = np.full(n, np.nan)
-        ts_5m_v = df_5m['ts'].values
-        for i, ts_1h in enumerate(df_1h['ts'].values):
-            next_ts = df_1h['ts'].iloc[i+1] if i+1 < len(df_1h) else None
-            if next_ts is not None:
-                mask = (ts_5m_v >= ts_1h) & (ts_5m_v < next_ts)
-            else:
-                mask = ts_5m_v >= ts_1h
-            vr_arr[mask] = float(vr.iloc[i]) if i < len(vr) else 0.0
-        feats[:, 5] = vr_arr
+        _1h_tmp = pd.DataFrame({'ts': df_1h['ts'].values,
+                                 'vr': vr.values})
+        _5m_ts2 = pd.DataFrame({'ts': df_5m['ts'].values})
+        merged_vr = pd.merge_asof(_5m_ts2.sort_values('ts'),
+                                   _1h_tmp.sort_values('ts'),
+                                   on='ts', direction='backward')
+        feats[:, 5] = merged_vr['vr'].fillna(0.0).values
 
     # ── 7. atr_ratio (ATR5 / ATR20) ───────────────────────────
     atr5  = _atr(df_5m, 5)
@@ -245,13 +236,14 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     # ── 11. hurst_regime ──────────────────────────────────────
     h_series = _get_hurst_series(symbol)
     if not h_series.empty:
-        h_arr = np.full(n, np.nan)
-        ts_5m_h = df_5m['ts'].values
-        for ts_h, h_val in h_series.items():
-            mask = ts_5m_h >= ts_h
-            if mask.any():
-                h_arr[mask] = 1.0 if h_val > 0.6 else 0.0
-        feats[:, 10] = h_arr
+        _h_tmp  = pd.DataFrame({'ts': list(h_series.index),
+                                 'hv': list(h_series.values)})
+        _5m_ts3 = pd.DataFrame({'ts': df_5m['ts'].values})
+        merged_h = pd.merge_asof(_5m_ts3.sort_values('ts'),
+                                  _h_tmp.sort_values('ts'),
+                                  on='ts', direction='backward')
+        feats[:, 10] = np.where(merged_h['hv'].isna(), 0.0,
+                                np.where(merged_h['hv'] > 0.6, 1.0, 0.0))
     else:
         feats[:, 10] = 0.0
 
