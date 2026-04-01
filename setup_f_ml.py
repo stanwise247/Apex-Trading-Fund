@@ -32,17 +32,26 @@ _model_cache = {}   # symbol -> (loaded_at, model)
 # ─────────────────────────────────────────────────────────────
 
 def _load_ohlcv(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
+    """Load OHLCV bars via cursor (bypasses pd.read_sql_query param issues with psycopg2)."""
+    _COLS = ['ts', 'open', 'high', 'low', 'close', 'volume']
     conn = _db.connect()
-    df = _db.read_sql(
-        'SELECT ts, open, high, low, close, volume FROM ohlcv '
-        'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
-        conn, params=(symbol, timeframe, limit)
-    )
-    conn.close()
-    if df.empty:
-        return df
+    try:
+        cur = conn.execute(
+            'SELECT ts, open, high, low, close, volume FROM ohlcv '
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
+            (symbol, timeframe, limit)
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return pd.DataFrame(columns=_COLS)
+    df = pd.DataFrame(rows, columns=_COLS)
+    for col in _COLS:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.iloc[::-1].reset_index(drop=True)
     df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+    logger.debug(f'_load_ohlcv {symbol} {timeframe}: {len(df)} bars (limit={limit})')
     return df
 
 
