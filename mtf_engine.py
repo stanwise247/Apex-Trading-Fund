@@ -24,7 +24,6 @@ Run: python3 mtf_engine.py --symbol NQ
      python3 mtf_engine.py --symbol NQ --backtest --balance 1000 --risk 2
 """
 
-import sqlite3
 import json
 import logging
 import argparse
@@ -35,11 +34,10 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+import db as _db
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger('APEX.MTF')
-
-DB_PATH = 'apex_market.db'
 
 # Timeframe hierarchy — higher index = higher timeframe
 TF_HIERARCHY = ['1min', '5min', '15min', '1hour', '4hour', '1day', '1week']
@@ -58,8 +56,8 @@ SLIPPAGE_PTS = {'1min': 1, '5min': 1, '15min': 2, '1hour': 2,
 # =============================================================
 
 def load_tf(symbol, timeframe, limit=2000):
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)

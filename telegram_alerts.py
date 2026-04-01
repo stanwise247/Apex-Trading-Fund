@@ -20,16 +20,14 @@ Setup:
 
 import json
 import logging
-import sqlite3
 import time
 import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime, timezone
+import db as _db
 
 logger = logging.getLogger('APEX.telegram')
-
-DB_PATH = 'apex_market.db'
 
 
 # =============================================================
@@ -307,7 +305,7 @@ def send_setup_alert(setup, force=False):
         _sent_alerts[alert_key] = now
         # Log to database
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db.connect()
             conn.execute('''INSERT OR IGNORE INTO scan_log
                 (ts, symbol, pattern_name, score, direction, entry, stop, target1, target2, regime, notes)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)''',

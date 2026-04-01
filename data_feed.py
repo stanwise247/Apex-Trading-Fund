@@ -55,7 +55,7 @@ def store_bars(symbol: str, timeframe: str, bars: list) -> int:
             # server.py:store_ohlcv uses INSERT OR IGNORE — two deliberate strategies.
             _db_upsert(conn, symbol, timeframe, ts, o, h, l, close, vol)
         except Exception as e:
-            logger.debug(f'Insert error {symbol} {timeframe}: {e}')
+            logger.warning(f'Insert error {symbol} {timeframe}: {e}')
     conn.commit()
     count_after = conn.execute(
         'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
@@ -153,6 +153,63 @@ def fetch_recent_bars(symbol: str, timeframe: str,
 
     except Exception as e:
         logger.error(f'Fetch error {symbol} {timeframe}: {e}')
+        return []
+
+
+def fetch_bars_range(symbol: str, timeframe: str,
+                     start: datetime, end: datetime) -> list:
+    """Fetch bars for an explicit date range. Used for chunked historical backfill."""
+    key = get_api_key()
+    if not key:
+        logger.error('No Databento API key')
+        return []
+    db_symbol = INSTRUMENTS.get(symbol)
+    if not db_symbol:
+        return []
+    if timeframe in ('1hour', '4hour'):
+        return []
+    schema_map = {
+        '1min':  ('ohlcv-1m', 1),
+        '5min':  ('ohlcv-1m', 5),
+        '15min': ('ohlcv-1m', 15),
+        '1day':  ('ohlcv-1d', 1),
+    }
+    schema, agg = schema_map.get(timeframe, ('ohlcv-1m', 5))
+    try:
+        client = db.Historical(key)
+        data   = client.timeseries.get_range(
+            dataset  = 'GLBX.MDP3',
+            symbols  = [db_symbol],
+            schema   = schema,
+            start    = start,
+            end      = end,
+            stype_in = 'continuous',
+        )
+        df = data.to_df()
+        if df.empty:
+            return []
+        df.index = pd.to_datetime(df.index, utc=True)
+        if agg > 1:
+            df = df.resample(f"{agg}min").agg({
+                "open":   "first",
+                "high":   "max",
+                "low":    "min",
+                "close":  "last",
+                "volume": "sum",
+            }).dropna()
+        result = []
+        for ts, row in df.iterrows():
+            result.append((
+                int(ts.timestamp()),
+                round(float(row["open"]),  2),
+                round(float(row["high"]),  2),
+                round(float(row["low"]),   2),
+                round(float(row["close"]), 2),
+                float(row.get("volume", 0)),
+            ))
+        return result
+    except Exception as e:
+        logger.error(f'fetch_bars_range error {symbol} {timeframe}: {e}')
         return []
 
 

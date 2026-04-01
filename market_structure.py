@@ -5,15 +5,14 @@ Session 1 rebuild — clean, verified, real data.
 v2 — instrument-specific swing lookbacks.
 """
 
-import sqlite3
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 from zoneinfo import ZoneInfo
+import db as _db
 
-DB_PATH = 'apex_market.db'
-NY_TZ   = ZoneInfo('America/New_York')
+NY_TZ = ZoneInfo('America/New_York')
 
 # Instrument-specific settings
 # Lookback = bars each side required to confirm a swing
@@ -28,8 +27,8 @@ DEFAULT_SETTINGS = {'lookback': 8, 'limit': 2000}
 
 
 def load_bars(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)

@@ -1897,7 +1897,7 @@ def _startup():
                         f'fetching 6 months of history in monthly chunks...'
                     )
                     try:
-                        from data_feed import fetch_recent_bars, store_bars
+                        from data_feed import fetch_bars_range, store_bars
                         from datetime import date
                         import calendar
                         total_stored = 0
@@ -1909,15 +1909,12 @@ def _startup():
                             try:
                                 days_in_month = calendar.monthrange(cur_year, cur_month)[1]
                                 chunk_start = datetime(cur_year, cur_month, 1, tzinfo=timezone.utc)
-                                chunk_end   = datetime(cur_year, cur_month, days_in_month,
-                                                       23, 59, tzinfo=timezone.utc)
-                                hours = int((chunk_end - chunk_start).total_seconds() / 3600) + 1
-                                bars = fetch_recent_bars(_sym, '5min', lookback_hours=hours)
-                                # Filter to just this month's bars
-                                ts_start = int(chunk_start.timestamp())
-                                ts_end   = int(chunk_end.timestamp())
-                                bars_month = [b for b in bars if ts_start <= b[0] <= ts_end]
-                                stored = store_bars(_sym, '5min', bars_month)
+                                chunk_end   = min(
+                                    datetime(cur_year, cur_month, days_in_month, 23, 59, tzinfo=timezone.utc),
+                                    now_dt
+                                )
+                                bars = fetch_bars_range(_sym, '5min', chunk_start, chunk_end)
+                                stored = store_bars(_sym, '5min', bars)
                                 total_stored += stored
                                 logger.info(f'Backfill: {_sym} 5min {month_label}... done ({stored} bars)')
                             except Exception as _me:

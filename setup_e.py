@@ -24,7 +24,6 @@ Exit:
 Min gap: 12 bars (60 min) between trades.
 """
 
-import sqlite3
 import logging
 import pandas as pd
 import numpy as np
@@ -32,9 +31,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
+import db as _db
 
-logger  = logging.getLogger('APEX.SetupE')
-DB_PATH = 'apex_market.db'
+logger = logging.getLogger('APEX.SetupE')
 
 NY_TZ = ZoneInfo('America/New_York')
 
@@ -102,8 +101,8 @@ class ESetupResult:
 # ─────────────────────────────────────────────────────────────
 
 def _load_bars(symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)

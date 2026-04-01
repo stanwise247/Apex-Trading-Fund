@@ -25,16 +25,15 @@ concurrent trades.
 """
 
 import logging
-import sqlite3
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List, Any
+import db as _db
 
 logger = logging.getLogger('APEX.Router')
 NY_TZ  = ZoneInfo('America/New_York')
-DB_PATH = 'apex_market.db'
 
 
 # =============================================================
@@ -56,10 +55,10 @@ def load_dataframes(symbol: str, limits: Dict[str, int] = None) -> Dict[str, Opt
 
     dfs = {}
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db.connect()
         for tf, limit in limits.items():
             try:
-                df = pd.read_sql_query(
+                df = _db.read_sql(
                     'SELECT ts,open,high,low,close,volume FROM ohlcv '
                     'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
                     conn, params=(symbol, tf, limit)
@@ -85,7 +84,7 @@ def load_dataframes(symbol: str, limits: Dict[str, int] = None) -> Dict[str, Opt
 def get_latest_vix() -> Optional[float]:
     """Get latest VIX close from database"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db.connect()
         row  = conn.execute(
             "SELECT close FROM ohlcv WHERE symbol='VIX' AND timeframe='1day' "
             "ORDER BY ts DESC LIMIT 1"

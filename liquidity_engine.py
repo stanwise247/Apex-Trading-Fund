@@ -10,7 +10,6 @@ Run directly to verify on real data:
   python3 liquidity_engine.py
 """
 
-import sqlite3
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
@@ -18,8 +17,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 from market_structure import load_bars, find_swings, detect_structure, compute_bias
 
-DB_PATH = 'apex_market.db'
-NY_TZ   = ZoneInfo('America/New_York')
+NY_TZ = ZoneInfo('America/New_York')
 
 
 # ─────────────────────────────────────────────────────────────
