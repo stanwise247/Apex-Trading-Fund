@@ -34,23 +34,14 @@ _model_cache = {}   # symbol -> (loaded_at, model)
 def _load_ohlcv(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
     """Load OHLCV bars via cursor (bypasses pd.read_sql_query param issues with psycopg2)."""
     _COLS = ['ts', 'open', 'high', 'low', 'close', 'volume']
-    sql    = ('SELECT ts, open, high, low, close, volume FROM ohlcv '
-              'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?')
-    params = (symbol, timeframe, limit)
-    logger.info(f'DEBUG _load_ohlcv: symbol={symbol} tf={timeframe} limit={limit} IS_POSTGRES={_db.IS_POSTGRES}')
     conn = _db.connect()
     try:
-        # Raw COUNT to verify rows exist before the main query
-        count_cur = conn.execute(
-            'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
-            (symbol, timeframe)
+        cur = conn.execute(
+            'SELECT ts, open, high, low, close, volume FROM ohlcv '
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
+            (symbol, timeframe, limit)
         )
-        total = count_cur.fetchone()[0]
-        logger.info(f'DEBUG _load_ohlcv: total rows in DB for {symbol}/{timeframe} = {total}')
-
-        cur = conn.execute(sql, params)
         rows = cur.fetchall()
-        logger.info(f'DEBUG _load_ohlcv: row count from SELECT = {len(rows)}')
     finally:
         conn.close()
     if not rows:
@@ -60,7 +51,6 @@ def _load_ohlcv(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.iloc[::-1].reset_index(drop=True)
     df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
-    logger.info(f'DEBUG _load_ohlcv: returning {len(df)} bars for {symbol}/{timeframe}')
     return df
 
 
@@ -168,48 +158,34 @@ def _consecutive(closes: pd.Series) -> pd.Series:
     return result
 
 
-def _vol_regime(symbol: str, df_1h: pd.DataFrame) -> pd.Series:
-    """+1 high vol, -1 low vol, 0 normal. Based on 20-bar rolling std of 1h log returns."""
-    if df_1h.empty:
-        return pd.Series(dtype=float)
-    log_ret = np.log(df_1h['close'] / df_1h['close'].shift(1))
-    rvol    = log_ret.rolling(20).std()
-    p25     = rvol.quantile(0.25)
-    p75     = rvol.quantile(0.75)
-    regime  = pd.Series(0, index=df_1h.index, dtype=float)
-    regime[rvol > p75] = 1.0
-    regime[rvol < p25] = -1.0
-    return regime
-
-
 def calculate_features(symbol: str, df_5m: pd.DataFrame,
-                        df_4h: pd.DataFrame, df_1h: pd.DataFrame) -> np.ndarray:
+                        df_4h: pd.DataFrame = None, df_1h: pd.DataFrame = None) -> np.ndarray:
     """
-    Build feature matrix from OHLCV DataFrames.
+    Build feature matrix entirely from df_5m — no HTF DB dependency.
     Returns array shape (n_bars, 11) aligned to df_5m.
     Requires df_5m to have columns: ts, open, high, low, close, volume, dt
+    df_4h and df_1h params kept for API compatibility but ignored.
     """
     n = len(df_5m)
     feats = np.full((n, 11), np.nan)
 
+    # df_5m must have a DatetimeIndex for resample — use dt column as index temporarily
+    df_idx = df_5m.set_index('dt')
+
     # ── 1. consecutive ─────────────────────────────────────────
     feats[:, 0] = _consecutive(df_5m['close']).values
 
-    # ── 2. htf_bias (4h SMA20) ─────────────────────────────────
-    if not df_4h.empty:
-        sma20_4h = df_4h['close'].rolling(20).mean()
-        _4h_tmp = pd.DataFrame({'ts': df_4h['ts'].values,
-                                 'close4': df_4h['close'].values,
-                                 'sma20_4h': sma20_4h.values})
-        _5m_ts  = pd.DataFrame({'ts': df_5m['ts'].values})
-        merged  = pd.merge_asof(_5m_ts.sort_values('ts'),
-                                 _4h_tmp.sort_values('ts'),
-                                 on='ts', direction='backward')
-        mid     = merged['sma20_4h'] * 0.001
-        bias    = np.where(merged['sma20_4h'].isna(), np.nan,
-                  np.where(merged['close4'] > merged['sma20_4h'] + mid,  1.0,
-                  np.where(merged['close4'] < merged['sma20_4h'] - mid, -1.0, 0.0)))
-        feats[:, 1] = bias
+    # ── 2. htf_bias — resample 5min → 4h in memory, SMA20, map back ──
+    df_4h_mem = df_idx['close'].resample('4h').last().dropna().to_frame('close')
+    df_4h_mem['sma20'] = df_4h_mem['close'].rolling(20).mean()
+    df_4h_mem['ts']    = df_4h_mem.index.asi8 // 1_000_000_000
+    _5m_ts = pd.DataFrame({'ts': df_5m['ts'].values})
+    merged = pd.merge_asof(_5m_ts, df_4h_mem[['ts','close','sma20']].sort_values('ts'),
+                            on='ts', direction='backward')
+    mid  = merged['sma20'] * 0.001
+    feats[:, 1] = np.where(merged['sma20'].isna(), np.nan,
+                  np.where(merged['close'] > merged['sma20'] + mid,  1.0,
+                  np.where(merged['close'] < merged['sma20'] - mid, -1.0, 0.0)))
 
     # ── 3. ema50_dist (5min EMA50, ATR14 normalised) ──────────
     ema50   = _ema(df_5m['close'], 50)
@@ -222,16 +198,19 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     # ── 5. hour ────────────────────────────────────────────────
     feats[:, 4] = df_5m['dt'].dt.hour.values.astype(float)
 
-    # ── 6. vol_regime (1h rvol percentile) ────────────────────
-    if not df_1h.empty:
-        vr = _vol_regime(symbol, df_1h)
-        _1h_tmp = pd.DataFrame({'ts': df_1h['ts'].values,
-                                 'vr': vr.values})
-        _5m_ts2 = pd.DataFrame({'ts': df_5m['ts'].values})
-        merged_vr = pd.merge_asof(_5m_ts2.sort_values('ts'),
-                                   _1h_tmp.sort_values('ts'),
-                                   on='ts', direction='backward')
-        feats[:, 5] = merged_vr['vr'].fillna(0.0).values
+    # ── 6. vol_regime — resample 5min → 1h in memory, rolling std ──
+    df_1h_mem = df_idx['close'].resample('1h').last().dropna().to_frame('close')
+    log_ret   = np.log(df_1h_mem['close'] / df_1h_mem['close'].shift(1))
+    rvol      = log_ret.rolling(20).std()
+    p25, p75  = rvol.quantile(0.25), rvol.quantile(0.75)
+    vr        = pd.Series(0.0, index=df_1h_mem.index)
+    vr[rvol > p75] = 1.0
+    vr[rvol < p25] = -1.0
+    df_1h_mem['vr'] = vr
+    df_1h_mem['ts'] = df_1h_mem.index.asi8 // 1_000_000_000
+    merged_vr = pd.merge_asof(_5m_ts, df_1h_mem[['ts','vr']].sort_values('ts'),
+                               on='ts', direction='backward')
+    feats[:, 5] = merged_vr['vr'].fillna(0.0).values
 
     # ── 7. atr_ratio (ATR5 / ATR20) ───────────────────────────
     atr5  = _atr(df_5m, 5)
@@ -251,14 +230,19 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     vol_ma = df_5m['volume'].rolling(20).mean()
     feats[:, 9] = (df_5m['volume'] / (vol_ma + 1e-9)).values
 
-    # ── 11. hurst_regime ──────────────────────────────────────
-    h_series = _get_hurst_series(symbol)
-    if not h_series.empty:
-        _h_tmp  = pd.DataFrame({'ts': list(h_series.index),
-                                 'hv': list(h_series.values)})
-        _5m_ts3 = pd.DataFrame({'ts': df_5m['ts'].values})
-        merged_h = pd.merge_asof(_5m_ts3.sort_values('ts'),
-                                  _h_tmp.sort_values('ts'),
+    # ── 11. hurst_regime — rolling Hurst on 1h log returns from 5min ──
+    # Reuse df_1h_mem log returns already computed above
+    lr_vals = log_ret.dropna().values
+    window  = min(500, len(lr_vals))
+    if window >= 50:
+        h_vals = []
+        for i in range(window, len(lr_vals) + 1):
+            h_vals.append(_hurst_rs(lr_vals[i-window:i]))
+        # Map each hurst value back to the corresponding 1h bar ts
+        valid_1h = df_1h_mem.iloc[log_ret.isna().sum() + window - 1:]
+        h_ts = valid_1h.index.asi8[:len(h_vals)] // 1_000_000_000
+        h_df = pd.DataFrame({'ts': h_ts, 'hv': h_vals})
+        merged_h = pd.merge_asof(_5m_ts, h_df.sort_values('ts'),
                                   on='ts', direction='backward')
         feats[:, 10] = np.where(merged_h['hv'].isna(), 0.0,
                                 np.where(merged_h['hv'] > 0.6, 1.0, 0.0))
@@ -285,18 +269,14 @@ def train_model(symbol: str) -> float:
     logger.info(f'Training Setup F model for {symbol}...')
     start_hr, end_hr = SESSION_WINDOWS.get(symbol, (13, 19))
 
-    # Load data
-    logger.info(f'DEBUG train_model: about to call _load_ohlcv for {symbol}')
+    # Load 5min bars only — HTF features derived in-memory from these
     df_5m = _load_ohlcv(symbol, '5min', limit=25000)
-    logger.info(f'DEBUG train_model: {symbol} NQ 4hour query about to run')
-    df_4h = _load_ohlcv(symbol, '4hour', limit=2000)
-    df_1h = _load_ohlcv(symbol, '1hour', limit=5000)
 
     if df_5m.empty or len(df_5m) < 500:
         logger.warning(f'Insufficient 5min data for {symbol}: {len(df_5m)} bars')
         return 0.0
 
-    logger.info(f'  {symbol}: {len(df_5m)} 5min bars, {len(df_4h)} 4h bars, {len(df_1h)} 1h bars loaded')
+    logger.info(f'  {symbol}: {len(df_5m)} 5min bars loaded (HTF computed in-memory)')
 
     # Session filter
     six_months_ago = int((datetime.now(timezone.utc) - timedelta(days=180)).timestamp())
@@ -310,8 +290,8 @@ def train_model(symbol: str) -> float:
         logger.warning(f'Insufficient session bars for {symbol} after filter: {len(df_5m)} (need 100)')
         return 0.0
 
-    # Build features
-    X = calculate_features(symbol, df_5m, df_4h, df_1h)
+    # Build features entirely from df_5m (no HTF DB dependency)
+    X = calculate_features(symbol, df_5m)
 
     # Target: forward 12-bar return direction
     fwd = df_5m['close'].shift(-12)
@@ -321,13 +301,12 @@ def train_model(symbol: str) -> float:
     valid = ~(np.isnan(X).any(axis=1) | np.isnan(y.astype(float)))
     X, y = X[valid], y[valid]
 
-    # Log per-feature NaN counts to diagnose missing HTF data
     if len(X) < 100:
-        nan_counts = np.isnan(calculate_features(symbol, df_5m, df_4h, df_1h)).sum(axis=0)
+        nan_counts = np.isnan(calculate_features(symbol, df_5m)).sum(axis=0)
         for i, (name, nans) in enumerate(zip(FEATURE_NAMES, nan_counts)):
             if nans > 0:
                 logger.warning(f'  Feature "{name}": {nans}/{len(df_5m)} NaN values')
-        logger.warning(f'Too few valid rows for {symbol}: {len(X)} (4h empty={df_4h.empty}, 1h empty={df_1h.empty})')
+        logger.warning(f'Too few valid rows for {symbol}: {len(X)}')
         return 0.0
 
     # Train
