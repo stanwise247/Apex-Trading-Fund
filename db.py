@@ -24,6 +24,8 @@ Other helpers:
 import os
 import re
 import logging
+import warnings
+warnings.filterwarnings('ignore', message='.*SQLAlchemy.*')
 
 logger = logging.getLogger('APEX.DB')
 

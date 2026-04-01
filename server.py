@@ -1894,10 +1894,50 @@ def _startup():
                 if count_5m < 10000:
                     logger.info(
                         f'Setup F: {_sym} only has {count_5m} 5min bars — '
-                        f'running full historical backfill for training data (this takes ~5 min)...'
+                        f'fetching 6 months of history in monthly chunks...'
                     )
-                    backfill_history(_sym, years=2)
-                    logger.info(f'Setup F: {_sym} historical backfill complete')
+                    try:
+                        from data_feed import fetch_recent_bars, store_bars
+                        from datetime import date
+                        import calendar
+                        total_stored = 0
+                        # Sep 2024 → current month, one month at a time
+                        cur_year, cur_month = 2024, 9
+                        now_dt = datetime.now(timezone.utc)
+                        while (cur_year, cur_month) <= (now_dt.year, now_dt.month):
+                            month_label = date(cur_year, cur_month, 1).strftime('%b %Y')
+                            try:
+                                days_in_month = calendar.monthrange(cur_year, cur_month)[1]
+                                chunk_start = datetime(cur_year, cur_month, 1, tzinfo=timezone.utc)
+                                chunk_end   = datetime(cur_year, cur_month, days_in_month,
+                                                       23, 59, tzinfo=timezone.utc)
+                                hours = int((chunk_end - chunk_start).total_seconds() / 3600) + 1
+                                bars = fetch_recent_bars(_sym, '5min', lookback_hours=hours)
+                                # Filter to just this month's bars
+                                ts_start = int(chunk_start.timestamp())
+                                ts_end   = int(chunk_end.timestamp())
+                                bars_month = [b for b in bars if ts_start <= b[0] <= ts_end]
+                                stored = store_bars(_sym, '5min', bars_month)
+                                total_stored += stored
+                                logger.info(f'Backfill: {_sym} 5min {month_label}... done ({stored} bars)')
+                            except Exception as _me:
+                                logger.warning(f'Backfill: {_sym} 5min {month_label} failed: {_me}')
+                            # advance month
+                            if cur_month == 12:
+                                cur_year += 1
+                                cur_month = 1
+                            else:
+                                cur_month += 1
+                            _t.sleep(2)
+                        conn = _db.connect()
+                        final_count = conn.execute(
+                            "SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe='5min'",
+                            (_sym,)
+                        ).fetchone()[0]
+                        conn.close()
+                        logger.info(f'Backfill complete: {_sym} 5min — {final_count} total bars stored')
+                    except Exception as _be:
+                        logger.warning(f'Setup F chunked backfill {_sym}: {_be}')
                 else:
                     logger.info(f'Setup F: {_sym} 5min data sufficient ({count_5m} bars)')
             except Exception as e:
