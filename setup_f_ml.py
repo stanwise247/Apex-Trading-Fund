@@ -415,9 +415,9 @@ def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
     # Predict
     prob = float(model.predict_proba(X_last)[0, 1])
 
-    if prob > 0.65:
+    if prob > 0.58:
         direction = 'long'
-    elif prob < 0.35:
+    elif prob < 0.42:
         direction = 'short'
     else:
         return None  # No edge
