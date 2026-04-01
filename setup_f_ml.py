@@ -281,14 +281,18 @@ def train_model(symbol: str) -> float:
     df_1h = _load_ohlcv(symbol, '1hour', limit=5000)
 
     if df_5m.empty or len(df_5m) < 500:
-        logger.warning(f'Insufficient 5min data for {symbol}')
+        logger.warning(f'Insufficient 5min data for {symbol}: {len(df_5m)} bars')
         return 0.0
+
+    logger.info(f'  {symbol}: {len(df_5m)} 5min bars, {len(df_4h)} 4h bars, {len(df_1h)} 1h bars loaded')
 
     # Session filter
     six_months_ago = int((datetime.now(timezone.utc) - timedelta(days=180)).timestamp())
     df_5m = df_5m[df_5m['ts'] >= six_months_ago].copy()
     df_5m = df_5m[df_5m['dt'].dt.hour.between(start_hr, end_hr - 1)].copy()
     df_5m = df_5m.reset_index(drop=True)
+
+    logger.info(f'  {symbol}: {len(df_5m)} session bars after filter (last 6 months, {start_hr}-{end_hr} UTC)')
 
     if len(df_5m) < 100:
         logger.warning(f'Insufficient session bars for {symbol} after filter: {len(df_5m)} (need 100)')
@@ -305,8 +309,13 @@ def train_model(symbol: str) -> float:
     valid = ~(np.isnan(X).any(axis=1) | np.isnan(y.astype(float)))
     X, y = X[valid], y[valid]
 
+    # Log per-feature NaN counts to diagnose missing HTF data
     if len(X) < 100:
-        logger.warning(f'Too few valid rows for {symbol}: {len(X)}')
+        nan_counts = np.isnan(calculate_features(symbol, df_5m, df_4h, df_1h)).sum(axis=0)
+        for i, (name, nans) in enumerate(zip(FEATURE_NAMES, nan_counts)):
+            if nans > 0:
+                logger.warning(f'  Feature "{name}": {nans}/{len(df_5m)} NaN values')
+        logger.warning(f'Too few valid rows for {symbol}: {len(X)} (4h empty={df_4h.empty}, 1h empty={df_1h.empty})')
         return 0.0
 
     # Train

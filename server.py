@@ -1939,6 +1939,17 @@ def _startup():
                     logger.info(f'Setup F: {_sym} 5min data sufficient ({count_5m} bars)')
             except Exception as e:
                 logger.warning(f'Setup F backfill check {_sym}: {e}')
+        # Build 1h/4h aggregates from 5min bars — required by Setup F feature engineering
+        try:
+            from data_feed import build_htf_from_5min
+            for _sym in ['NQ', 'ES']:
+                try:
+                    htf = build_htf_from_5min(_sym)
+                    logger.info(f'Setup F: {_sym} HTF built — {htf}')
+                except Exception as _he:
+                    logger.warning(f'Setup F: {_sym} HTF build error: {_he}')
+        except Exception as e:
+            logger.warning(f'Setup F HTF build failed: {e}')
         # Train Setup F ML models after data is ready
         _t.sleep(5)
         try:
