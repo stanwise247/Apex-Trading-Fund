@@ -34,14 +34,23 @@ _model_cache = {}   # symbol -> (loaded_at, model)
 def _load_ohlcv(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
     """Load OHLCV bars via cursor (bypasses pd.read_sql_query param issues with psycopg2)."""
     _COLS = ['ts', 'open', 'high', 'low', 'close', 'volume']
+    sql    = ('SELECT ts, open, high, low, close, volume FROM ohlcv '
+              'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?')
+    params = (symbol, timeframe, limit)
+    logger.info(f'DEBUG _load_ohlcv: symbol={symbol} tf={timeframe} limit={limit} IS_POSTGRES={_db.IS_POSTGRES}')
     conn = _db.connect()
     try:
-        cur = conn.execute(
-            'SELECT ts, open, high, low, close, volume FROM ohlcv '
-            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
-            (symbol, timeframe, limit)
+        # Raw COUNT to verify rows exist before the main query
+        count_cur = conn.execute(
+            'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
+            (symbol, timeframe)
         )
+        total = count_cur.fetchone()[0]
+        logger.info(f'DEBUG _load_ohlcv: total rows in DB for {symbol}/{timeframe} = {total}')
+
+        cur = conn.execute(sql, params)
         rows = cur.fetchall()
+        logger.info(f'DEBUG _load_ohlcv: row count from SELECT = {len(rows)}')
     finally:
         conn.close()
     if not rows:
@@ -51,7 +60,7 @@ def _load_ohlcv(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.iloc[::-1].reset_index(drop=True)
     df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
-    logger.debug(f'_load_ohlcv {symbol} {timeframe}: {len(df)} bars (limit={limit})')
+    logger.info(f'DEBUG _load_ohlcv: returning {len(df)} bars for {symbol}/{timeframe}')
     return df
 
 
@@ -277,7 +286,9 @@ def train_model(symbol: str) -> float:
     start_hr, end_hr = SESSION_WINDOWS.get(symbol, (13, 19))
 
     # Load data
+    logger.info(f'DEBUG train_model: about to call _load_ohlcv for {symbol}')
     df_5m = _load_ohlcv(symbol, '5min', limit=25000)
+    logger.info(f'DEBUG train_model: {symbol} NQ 4hour query about to run')
     df_4h = _load_ohlcv(symbol, '4hour', limit=2000)
     df_1h = _load_ohlcv(symbol, '1hour', limit=5000)
 
