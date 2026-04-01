@@ -161,16 +161,19 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .fvg-zone{font-family:var(--mono);font-size:9px;color:var(--text3);flex:1;text-align:right}
 .fvg-score-lbl{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--amber)}
 /* ML confidence bars */
-.ml-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border)}
+.ml-row{display:flex;align-items:center;gap:8px;padding:10px 12px 6px;border-bottom:1px solid var(--border)}
 .ml-row:last-child{border-bottom:none}
 .ml-sym{font-family:var(--mono);font-size:12px;font-weight:700;width:34px}
 .ml-dir-badge{font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 6px;border-radius:2px;width:60px;text-align:center}
 .ml-dir-badge.long{color:var(--green);background:rgba(0,229,160,.1)}
 .ml-dir-badge.short{color:var(--red);background:rgba(255,61,90,.1)}
 .ml-dir-badge.neutral{color:var(--text2);background:var(--bg4)}
-.ml-conf-bar{flex:1;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden}
-.ml-conf-fill{height:100%;border-radius:2px}
-.ml-pct{font-family:var(--mono);font-size:9px;color:var(--text2);width:36px;text-align:right}
+.ml-bar-wrap{flex:1;position:relative;padding-top:14px}
+.ml-conf-bar{height:6px;background:var(--bg4);border-radius:2px;overflow:hidden;position:relative}
+.ml-conf-fill{height:100%;border-radius:2px;transition:width .4s}
+.ml-tick{position:absolute;top:-14px;bottom:-4px;width:1px;background:rgba(255,255,255,0.35);pointer-events:none}
+.ml-tick-lbl{position:absolute;top:-13px;font-family:var(--mono);font-size:7px;color:var(--text2);transform:translateX(-50%)}
+.ml-pct{font-family:var(--mono);font-size:10px;font-weight:700;width:42px;text-align:right}
 /* Wyckoff */
 .wy-row{display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:10px}
 .wy-row:last-child{border-bottom:none}
@@ -413,7 +416,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
   </div>
   <!-- Setup F — ML -->
   <div class="setup-pane" id="sp-F">
-    <div class="scan-meta" id="sm-F">Random Forest ML — P&gt;0.65 LONG · P&lt;0.35 SHORT · OOS Sharpe 9.38</div>
+    <div class="scan-meta" id="sm-F">Random Forest ML — Signal: P&gt;0.58 LONG · P&lt;0.42 SHORT · OOS Sharpe 18-20 (3.4k signals)</div>
     <div class="scan-layout">
       <div id="sc-F"></div>
       <div id="fvg-side-F"></div>
@@ -1036,23 +1039,43 @@ function buildScanCard(r,allForSetup){
   return h+'</div>';
 }
 
+function mlConfBar(prob, longT, shortT){
+  const pct=(prob*100).toFixed(1);
+  const ltPct=(longT*100).toFixed(0);
+  const stPct=(shortT*100).toFixed(0);
+  let barClr, dir;
+  if(prob>longT){  barClr='var(--green)'; dir='long';    }
+  else if(prob<shortT){ barClr='var(--red)';   dir='short';   }
+  else{                  barClr='var(--amber)'; dir='neutral'; }
+  return `<div class="ml-bar-wrap">
+    <span class="ml-tick-lbl" style="left:${stPct}%">${stPct}</span>
+    <span class="ml-tick-lbl" style="left:${ltPct}%">${ltPct}</span>
+    <div class="ml-conf-bar">
+      <div class="ml-conf-fill" style="width:${(prob*100).toFixed(1)}%;background:${barClr}"></div>
+      <div class="ml-tick" style="left:${stPct}%"></div>
+      <div class="ml-tick" style="left:${ltPct}%"></div>
+    </div>
+  </div>`;
+}
 function renderSetupF(preds){
   if(!preds||!preds.length){
     $('sc-F').innerHTML='<div class="empty-msg">No ML predictions</div>'; return;
   }
-  let h='<div style="padding:12px 0">';
+  let h='<div style="padding:4px 0 8px">';
+  h+=`<div style="padding:4px 12px 10px;font-family:var(--mono);font-size:8px;color:var(--text2)">Signal: &gt;58% LONG &nbsp;|&nbsp; &lt;42% SHORT</div>`;
   for(const p of preds){
     const prob=+(p.probability||p.confidence||0.5);
-    const dir=prob>0.65?'long':prob<0.35?'short':'neutral';
-    const conf=dir==='neutral'?0:Math.abs(prob-0.5)*2;
-    const barClr=dir==='long'?'var(--green)':dir==='short'?'var(--red)':'var(--text2)';
+    const longT=+(p.long_threshold||0.58);
+    const shortT=+(p.short_threshold||0.42);
+    const dir=prob>longT?'long':prob<shortT?'short':'neutral';
     const fire=dir!=='neutral';
-    h+=`<div class="ml-row ${fire?'':''}">
-      <span class="ml-sym">${p.symbol}</span>
+    const paper=p.paper_only?'<span style="font-family:var(--mono);font-size:7px;color:var(--amber);margin-left:4px">PAPER</span>':'';
+    h+=`<div class="ml-row">
+      <span class="ml-sym">${p.symbol}${paper}</span>
       <span class="ml-dir-badge ${dir}">${dir.toUpperCase()}</span>
-      <div class="ml-conf-bar"><div class="ml-conf-fill" style="width:${Math.round(conf*100)}%;background:${barClr}"></div></div>
-      <span class="ml-pct">${Math.round(prob*100)}%</span>
-      <div style="font-family:var(--mono);font-size:8px;color:var(--text2);margin-left:6px">${fire?'🔔 SIGNAL':'—'}</div>
+      ${mlConfBar(prob,longT,shortT)}
+      <span class="ml-pct" style="color:${dir==='long'?'var(--green)':dir==='short'?'var(--red)':'var(--text2)'}">${(prob*100).toFixed(1)}%</span>
+      <div style="font-family:var(--mono);font-size:8px;color:${fire?'var(--green)':'var(--text2)'};margin-left:4px;width:14px">${fire?'●':'—'}</div>
     </div>`;
   }
   h+='</div>';
@@ -1061,16 +1084,18 @@ function renderSetupF(preds){
 
 function renderMlPred(preds){
   if(!preds||!preds.length){ $('mlPredBody').innerHTML='<div class="empty-msg">No predictions</div>'; return; }
-  let h='';
+  let h='<div style="padding:2px 0 6px;font-family:var(--mono);font-size:8px;color:var(--text2);padding:4px 12px 8px">Signal: &gt;58% LONG &nbsp;|&nbsp; &lt;42% SHORT</div>';
   for(const p of preds){
     const prob=+(p.probability||p.confidence||0.5);
-    const dir=prob>0.65?'long':prob<0.35?'short':'neutral';
-    const conf=dir==='neutral'?0:Math.abs(prob-0.5)*2;
-    const barClr=dir==='long'?'var(--green)':dir==='short'?'var(--red)':'var(--text2)';
-    h+=`<div class="ml-row"><span class="ml-sym">${p.symbol}</span>
+    const longT=+(p.long_threshold||0.58);
+    const shortT=+(p.short_threshold||0.42);
+    const dir=prob>longT?'long':prob<shortT?'short':'neutral';
+    h+=`<div class="ml-row">
+      <span class="ml-sym">${p.symbol}</span>
       <span class="ml-dir-badge ${dir}">${dir.toUpperCase()}</span>
-      <div class="ml-conf-bar"><div class="ml-conf-fill" style="width:${Math.round(conf*100)}%;background:${barClr}"></div></div>
-      <span class="ml-pct">${Math.round(prob*100)}%</span></div>`;
+      ${mlConfBar(prob,longT,shortT)}
+      <span class="ml-pct" style="color:${dir==='long'?'var(--green)':dir==='short'?'var(--red)':'var(--text2)'}">${(prob*100).toFixed(1)}%</span>
+    </div>`;
   }
   $('mlPredBody').innerHTML=h;
 }

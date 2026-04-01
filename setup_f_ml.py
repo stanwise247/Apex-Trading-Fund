@@ -570,9 +570,9 @@ def get_current_prediction(symbol: str) -> dict:
             return {'symbol': symbol, 'ok': False, 'error': 'NaN in features'}
 
         prob = float(model.predict_proba(X_last)[0, 1])
-        if prob > 0.65:
+        if prob > 0.58:
             signal_state = 'SIGNAL_LONG'
-        elif prob < 0.35:
+        elif prob < 0.42:
             signal_state = 'SIGNAL_SHORT'
         elif prob > 0.50:
             signal_state = 'WATCHING_LONG'
@@ -600,13 +600,15 @@ def get_current_prediction(symbol: str) -> dict:
                 pass
 
         return {
-            'symbol':       symbol,
-            'ok':           True,
-            'probability':  round(prob, 4),
-            'signal_state': signal_state,
-            'top_features': top_feats,
-            'trained_at':   trained_at,
-            'paper_only':   symbol == 'GC',
+            'symbol':         symbol,
+            'ok':             True,
+            'probability':    round(prob, 4),
+            'signal_state':   signal_state,
+            'long_threshold': 0.58,
+            'short_threshold': 0.42,
+            'top_features':   top_feats,
+            'trained_at':     trained_at,
+            'paper_only':     symbol == 'GC',
         }
     except Exception as e:
         return {'symbol': symbol, 'ok': False, 'error': str(e)}
