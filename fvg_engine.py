@@ -5,14 +5,13 @@ Fair Value Gap detection and scanning.
 Setup D — 15min FVG + 4hour bias + 1min entry trigger.
 """
 
-import sqlite3
 import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
+import db as _db
 
-logger  = logging.getLogger('APEX.FVG')
-DB_PATH = 'apex_market.db'
+logger = logging.getLogger('APEX.FVG')
 
 FVG_PARAMS = {
     'min_fvg_atr':        0.7,   # raised from 0.3 — sub-0.7 ATR FVGs have 44% WR, no edge
@@ -30,8 +29,8 @@ FVG_PARAMS = {
 
 
 def load_bars(symbol, timeframe, limit=500):
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    df   = pd.read_sql_query(
+    conn = _db.connect()
+    df   = _db.read_sql(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)
@@ -56,7 +55,7 @@ def calc_atr(df, period=14):
 # Track FVG zones already alerted — persisted in DB so alerts survive process restarts
 
 def _init_fvg_alerted_table():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS fvg_alerted_zones (
             symbol     TEXT NOT NULL,
@@ -71,7 +70,7 @@ def _init_fvg_alerted_table():
 def _is_fvg_already_alerted(symbol, fvg_formed_at):
     try:
         _init_fvg_alerted_table()
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         row  = conn.execute(
             'SELECT 1 FROM fvg_alerted_zones WHERE symbol=? AND formed_at=?',
             (symbol, str(fvg_formed_at))
@@ -87,7 +86,7 @@ def _is_fvg_already_alerted(symbol, fvg_formed_at):
 def _mark_fvg_alerted(symbol, fvg_formed_at):
     try:
         _init_fvg_alerted_table()
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         conn.execute(
             'INSERT OR IGNORE INTO fvg_alerted_zones (symbol, formed_at, alerted_at) VALUES (?, ?, ?)',
             (symbol, str(fvg_formed_at), datetime.now(timezone.utc).isoformat())
@@ -167,7 +166,7 @@ def get_htf_bias(symbol):
 def get_session_trade_count(symbol, session_start_hour):
     """Count FVG trades already taken in current session."""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         now  = datetime.now(timezone.utc)
         session_start = now.replace(
             hour=session_start_hour, minute=0, second=0, microsecond=0

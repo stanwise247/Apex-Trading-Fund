@@ -8,10 +8,10 @@ import os
 import re
 import json
 import time
-import sqlite3
 import logging
 import threading
 import requests
+import db as _db
 from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -299,8 +299,8 @@ def fetch_bars(symbol, tf_label, years=3):
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.execute('PRAGMA journal_mode=WAL')   # allow concurrent reads during writes
+    _db.init_schema()   # create all tables in PostgreSQL (no-op for SQLite)
+    conn = _db.connect()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS ohlcv (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -322,7 +322,7 @@ def init_db():
         outcome_rr REAL, regime TEXT, notes TEXT)''')
     conn.commit()
     conn.close()
-    logger.info('Database initialised: ' + DB_PATH)
+    logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
     _migrate_htf_prices()
 
 
@@ -334,7 +334,7 @@ def _migrate_htf_prices():
     are touched, which is impossible for NQ/ES/GC at correct prices.
     """
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         total = 0
         for sym in ('NQ', 'ES'):
             for tf in ('1hour', '4hour'):
@@ -368,7 +368,7 @@ def _migrate_htf_prices():
 def store_ohlcv(symbol, timeframe, bars):
     if not bars:
         return 0
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     c = conn.cursor()
     stored = 0
     for bar in bars:
@@ -389,7 +389,7 @@ def store_ohlcv(symbol, timeframe, bars):
 
 
 def get_ohlcv(symbol, timeframe, limit=500):
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     c = conn.cursor()
     c.execute(
         'SELECT ts,open,high,low,close,volume FROM ohlcv WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
@@ -401,7 +401,7 @@ def get_ohlcv(symbol, timeframe, limit=500):
 
 
 def get_db_stats():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     c = conn.cursor()
     c.execute('SELECT symbol,timeframe,COUNT(*),MIN(ts),MAX(ts) FROM ohlcv GROUP BY symbol,timeframe')
     rows = c.fetchall()
@@ -1024,7 +1024,7 @@ def db_backfill():
 
 @app.route('/api/patterns')
 def patterns():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     c    = conn.cursor()
     c.execute('SELECT * FROM patterns WHERE active=1 ORDER BY edge_score DESC')
     cols = [d[0] for d in c.description]
@@ -1037,7 +1037,7 @@ def patterns():
 @app.route('/api/signals')
 def scan_log():
     limit = int(request.args.get('limit', 50))
-    conn  = sqlite3.connect(DB_PATH, timeout=30)
+    conn  = _db.connect()
     c     = conn.cursor()
     c.execute('SELECT * FROM scan_log ORDER BY ts DESC LIMIT ?', (limit,))
     cols = [d[0] for d in c.description]
@@ -1065,7 +1065,7 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
         result = execute_apex_signal(signal)
         if result['ok'] and trade_id:
             try:
-                conn = sqlite3.connect(DB_PATH, timeout=10)
+                conn = _db.connect()
                 conn.execute(
                     'UPDATE apex_trades SET broker_order_id=? WHERE id=?',
                     (result['order_id'], trade_id)
@@ -1097,7 +1097,7 @@ def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
     Used to block FVG and Setup E signals that conflict with an existing position."""
     try:
         opp = 'short' if direction == 'long' else 'long'
-        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn = _db.connect()
         row = conn.execute(
             "SELECT id FROM apex_trades "
             "WHERE symbol=? AND direction=? AND setup NOT LIKE 'FVG%' AND status='open' LIMIT 1",
@@ -1154,7 +1154,7 @@ def background_scheduler():
         if now - last_macro_log > 14400:
             try:
                 m    = fetch_macro_live()
-                conn = sqlite3.connect(DB_PATH, timeout=30)
+                conn = _db.connect()
                 c    = conn.cursor()
                 c.execute(
                     'INSERT INTO macro_log (ts,date,vix,tnx,irx,dxy,gold,oil,regime,notes) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -1195,8 +1195,7 @@ def background_scheduler():
                     from zoneinfo import ZoneInfo
                     NY = ZoneInfo('America/New_York')
                     init_trades_table()
-                    import sqlite3
-                    conn = sqlite3.connect(DB_PATH, timeout=30)
+                    conn = _db.connect()
                     today = str(_now.date())
                     trades = conn.execute(
                         'SELECT symbol, direction, setup, pnl_r, exit_reason FROM apex_trades '
@@ -1770,7 +1769,7 @@ def paper_reset():
         set_account_value('starting_balance', balance)
         set_account_value('peak_balance', balance)
         set_account_value('total_trades', 0)
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         conn.execute("UPDATE paper_positions SET status='closed' WHERE status='open'")
         conn.commit()
         conn.close()
@@ -1871,8 +1870,7 @@ def _startup():
         _db_syms = [s for s, info in INSTRUMENTS.items() if info.get('databento')]
         for _sym in _db_syms:
             try:
-                import sqlite3 as _sq
-                conn = _sq.connect(DB_PATH, timeout=30)
+                conn = _db.connect()
                 count = conn.execute(
                     'SELECT COUNT(*) FROM ohlcv WHERE symbol=?', (_sym,)
                 ).fetchone()[0]
@@ -2148,7 +2146,7 @@ def apex_candles(symbol, timeframe='5m'):
     req_limit = request.args.get('limit', None, type=int)
     limit = req_limit if req_limit and 1 <= req_limit <= 2000 else default_limit
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         rows = conn.execute(
             'SELECT ts, open, high, low, close, volume FROM ohlcv '
             'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
@@ -2171,7 +2169,7 @@ def apex_equity():
     try:
         from trade_tracker import init_trades_table
         init_trades_table()
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         trades = conn.execute(
             'SELECT entry_time, exit_time, pnl_r FROM apex_trades '
             'WHERE status=? AND pnl_r IS NOT NULL ORDER BY exit_time ASC',
@@ -2199,7 +2197,7 @@ def apex_equity():
 
         # Today's P&L — needed by dashboard sub-row
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        conn2 = sqlite3.connect(DB_PATH, timeout=30)
+        conn2 = _db.connect()
         today_rows = conn2.execute(
             'SELECT pnl_r FROM apex_trades WHERE status=? AND entry_time LIKE ?',
             ('closed', today + '%')
@@ -2260,7 +2258,7 @@ def apex_trades_seed():
          'GC Primary','primary',  '2026-03-19T13:00:00+00:00','2026-03-19T14:45:00+00:00',  3010.0,  4.0, 'target'),
     ]
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         inserted = 0
         for row in SEED:
             (sym, dr, setup, mode, entry, stop, tgt, rr, sess, qual,
@@ -2271,7 +2269,7 @@ def apex_trades_seed():
                 calc_pnl = round((ex_p - entry) / risk if dr == 'long' else (entry - ex_p) / risk, 3)
             else:
                 calc_pnl = pnl
-            conn.execute(
+            cur = conn.execute(
                 'INSERT OR IGNORE INTO apex_trades '
                 '(symbol,direction,setup,mode,entry_price,stop,target,rr_planned,'
                 ' session,quality,entry_time,exit_price,exit_time,exit_reason,pnl_r,status,bars_held,notes) '
@@ -2279,7 +2277,7 @@ def apex_trades_seed():
                 (sym, dr, setup, mode, entry, stop, tgt, rr,
                  sess, qual, ent_t, ex_p, ex_t, reason, calc_pnl, 'closed', 0, 'seeded')
             )
-            inserted += conn.execute('SELECT changes()').fetchone()[0]
+            inserted += cur.rowcount
         conn.commit()
         conn.close()
         logger.info(f'Seed trades inserted: {inserted}')
@@ -2295,9 +2293,9 @@ def apex_trades_reset():
     try:
         from trade_tracker import init_trades_table
         init_trades_table()
-        conn = sqlite3.connect(DB_PATH, timeout=30)
-        conn.execute("DELETE FROM apex_trades WHERE notes='seeded'")
-        deleted = conn.execute('SELECT changes()').fetchone()[0]
+        conn = _db.connect()
+        cur = conn.execute("DELETE FROM apex_trades WHERE notes='seeded'")
+        deleted = cur.rowcount
         conn.commit()
         conn.close()
         logger.info(f'Seed trades deleted: {deleted}')
@@ -2313,7 +2311,7 @@ def apex_journal():
     try:
         from trade_tracker import init_trades_table
         init_trades_table()
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         rows = conn.execute(
             'SELECT id,symbol,direction,setup,mode,entry_price,stop,target,rr_planned,'
             '       session,quality,entry_time,exit_price,exit_time,exit_reason,pnl_r,bars_held,notes '

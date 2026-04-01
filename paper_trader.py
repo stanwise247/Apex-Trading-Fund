@@ -11,16 +11,15 @@ Simulates a real trading account with:
   - Persisted to SQLite so survives server restarts
 """
 
-import sqlite3
 import json
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from typing import Optional
+import db as _db
 
 logger = logging.getLogger('APEX.paper')
 
-DB_PATH     = 'apex_market.db'
 POINT_VALUE = 20.0   # $ per NQ point per contract
 COMMISSION  = 5.0    # $ per round trip
 
@@ -29,7 +28,7 @@ COMMISSION  = 5.0    # $ per round trip
 # =============================================================
 
 def init_paper_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     c = conn.cursor()
 
     c.execute('''CREATE TABLE IF NOT EXISTS paper_account (
@@ -97,7 +96,7 @@ def init_paper_db():
 
 
 def get_account_value(key):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     c = conn.cursor()
     c.execute('SELECT value FROM paper_account WHERE key=?', (key,))
     row = c.fetchone()
@@ -106,9 +105,8 @@ def get_account_value(key):
 
 
 def set_account_value(key, value):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute('INSERT OR REPLACE INTO paper_account (key, value) VALUES (?,?)',
-                 (key, str(value)))
+    conn = _db.connect()
+    _db.kv_upsert(conn, key, str(value))
     conn.commit()
     conn.close()
 
@@ -124,7 +122,7 @@ def get_account_state():
     risk_pct = float(get_account_value('risk_pct') or 2.0)
     max_pos  = int(get_account_value('max_positions') or 3)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     c = conn.cursor()
 
     # Open positions
@@ -219,9 +217,8 @@ def open_position(symbol, direction, entry_price, stop, target1, target2,
     contracts, risk_usd = calculate_position_size(balance, risk_pct, entry_price, stop)
     ts = int(datetime.now(timezone.utc).timestamp())
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''INSERT INTO paper_positions
+    conn = _db.connect()
+    pos_id = _db.insert_returning_id(conn, '''INSERT INTO paper_positions
         (symbol, direction, entry_price, current_price, stop, target1, target2,
          contracts, contracts_remaining, status, setup_name, setup_score,
          entry_ts, pnl_pts, pnl_usd, notes, alert_id)
@@ -230,7 +227,6 @@ def open_position(symbol, direction, entry_price, stop, target1, target2,
          contracts, contracts, 'open', setup_name, setup_score,
          ts, 0, 0, notes, alert_id)
     )
-    pos_id = c.lastrowid
     conn.commit()
     conn.close()
 
@@ -260,7 +256,7 @@ def open_position(symbol, direction, entry_price, stop, target1, target2,
 
 def update_position_price(position_id, current_price):
     """Update unrealised P&L for an open position"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     c = conn.cursor()
     c.execute('SELECT * FROM paper_positions WHERE id=? AND status="open"', (position_id,))
     cols = [d[0] for d in c.description]
@@ -295,7 +291,7 @@ def check_exit_triggers(pos, current_price, conn=None):
     """Check if stop or target has been hit"""
     close_conn = conn is None
     if close_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db.connect()
 
     direction = pos['direction']
     stop  = float(pos['stop'])
@@ -342,7 +338,7 @@ def take_partial(position_id, exit_price, conn=None):
     """
     close_conn = conn is None
     if close_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db.connect()
 
     c = conn.cursor()
     c.execute('SELECT * FROM paper_positions WHERE id=?', (position_id,))
@@ -413,7 +409,7 @@ def take_partial(position_id, exit_price, conn=None):
 
 def close_position(position_id, exit_price, reason='manual'):
     """Close an open position"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     close_position_db(position_id, exit_price, reason, conn)
     conn.close()
 

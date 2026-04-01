@@ -5,19 +5,18 @@ Logging only — no alerts. Confirm at n=30 with OOS Sharpe >= 4.0.
 OOS backtest: Sharpe=4.14, n=24 (needs 6 more months).
 """
 
-import sqlite3
 import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
+import db as _db
 
 logger  = logging.getLogger('APEX.Wyckoff')
-DB_PATH = 'apex_market.db'
 
 
 def _init_wyckoff_table():
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         conn.execute('''
             CREATE TABLE IF NOT EXISTS wyckoff_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,8 +38,8 @@ def _init_wyckoff_table():
 
 
 def _load_bars(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)
@@ -64,7 +63,7 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def _get_4h_bias(symbol: str) -> str:
     """Returns 'bearish', 'bullish', or 'neutral' based on 4h SMA20."""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         rows = conn.execute(
             'SELECT close FROM ohlcv WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 25',
             (symbol, '4hour')
@@ -151,7 +150,7 @@ def detect_upthrust(symbol: str, df_15m: pd.DataFrame) -> list:
 
 def _already_logged(symbol: str, date: str) -> bool:
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         row  = conn.execute(
             'SELECT id FROM wyckoff_log WHERE symbol=? AND date=?',
             (symbol, date)
@@ -164,7 +163,7 @@ def _already_logged(symbol: str, date: str) -> bool:
 
 def _log_event(event: dict):
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         conn.execute(
             'INSERT INTO wyckoff_log (symbol, date, entry_price, stop, target, detected_at) '
             'VALUES (?,?,?,?,?,?)',
@@ -214,7 +213,7 @@ def get_wyckoff_stats() -> dict:
     """Return stats for dashboard."""
     _init_wyckoff_table()
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         rows = conn.execute(
             'SELECT symbol, date, entry_price, stop, target, detected_at, resolved, pnl_r '
             'FROM wyckoff_log ORDER BY detected_at DESC'

@@ -9,7 +9,6 @@ Two modes:
 Instruments: NQ, ES, GC
 """
 
-import sqlite3
 import logging
 import json
 import os
@@ -17,9 +16,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
 import databento as db
+from db import connect as _db_connect, IS_POSTGRES, read_sql as _db_read_sql, upsert_ohlcv as _db_upsert
 
-logger  = logging.getLogger('APEX.DataFeed')
-DB_PATH = 'apex_market.db'
+logger = logging.getLogger('APEX.DataFeed')
 
 INSTRUMENTS = {
     'NQ': 'NQ.c.0',
@@ -41,33 +40,24 @@ def get_api_key() -> str:
 
 
 def store_bars(symbol: str, timeframe: str, bars: list) -> int:
-    """Store bars in SQLite. Returns number of new bars inserted."""
+    """Store bars in DB. Returns number of new/updated bars inserted."""
     if not bars:
         return 0
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    c    = conn.cursor()
-    count_before = c.execute(
+    conn = _db_connect()
+    count_before = conn.execute(
         'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
         (symbol, timeframe)
     ).fetchone()[0]
     for bar in bars:
         ts, o, h, l, close, vol = bar
         try:
-            # INSERT OR REPLACE intentionally overwrites stale bars with fresh Databento data.
+            # upsert_ohlcv intentionally overwrites stale bars with fresh Databento data.
             # server.py:store_ohlcv uses INSERT OR IGNORE — two deliberate strategies.
-            c.execute(
-                'INSERT OR REPLACE INTO ohlcv '
-                '(symbol, timeframe, ts, open, high, low, close, volume) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (symbol, timeframe, int(ts),
-                 round(float(o), 2), round(float(h), 2),
-                 round(float(l), 2), round(float(close), 2),
-                 float(vol))
-            )
+            _db_upsert(conn, symbol, timeframe, ts, o, h, l, close, vol)
         except Exception as e:
             logger.debug(f'Insert error {symbol} {timeframe}: {e}')
     conn.commit()
-    count_after = c.execute(
+    count_after = conn.execute(
         'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
         (symbol, timeframe)
     ).fetchone()[0]
@@ -168,8 +158,8 @@ def fetch_recent_bars(symbol: str, timeframe: str,
 
 def build_htf_from_5min(symbol: str) -> dict:
     """Build 1hour and 4hour bars by aggregating 5min bars already in DB."""
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    df   = pd.read_sql_query(
+    conn = _db_connect()
+    df   = _db_read_sql(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts ASC',
         conn, params=(symbol, '5min')
@@ -252,8 +242,8 @@ def refresh_all(include_htf: bool = False,
 def get_latest_bar(symbol: str, timeframe: str = '5min') -> dict:
     """Return the most recent bar for a symbol."""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
-        df   = pd.read_sql_query(
+        conn = _db_connect()
+        df   = _db_read_sql(
             'SELECT ts, open, high, low, close, volume FROM ohlcv '
             'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 1',
             conn, params=(symbol, timeframe)
@@ -305,10 +295,10 @@ if __name__ == '__main__':
                 print(f'  {sym} {tf}: +{count} new bars')
 
     print('\nLatest bars in DB:')
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db_connect()
     for sym in ('NQ', 'ES', 'GC'):
         for tf in ('5min', '15min', '1hour', '4hour'):
-            df = pd.read_sql_query(
+            df = _db_read_sql(
                 'SELECT MAX(ts) FROM ohlcv WHERE symbol=? AND timeframe=?',
                 conn, params=(sym, tf)
             )

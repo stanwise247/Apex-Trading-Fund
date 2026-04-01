@@ -12,7 +12,6 @@ Run directly to see current state + backtest impact:
   python3 risk_manager.py
 """
 
-import sqlite3
 import json
 import logging
 import time
@@ -21,8 +20,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 import pandas as pd
 import numpy as np
-
-DB_PATH = 'apex_market.db'
+import db as _db
 
 logger = logging.getLogger('APEX.Risk')
 
@@ -67,8 +65,8 @@ REGIME_MULT = {
 # ─────────────────────────────────────────────────────────────
 
 def _load_bars(symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)
@@ -81,9 +79,9 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
 
 
 def _load_bars_from(symbol: str, timeframe: str, start: str) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     ts0 = int(pd.Timestamp(start, tz='UTC').timestamp())
-    df = pd.read_sql_query(
+    df = _db.read_sql(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
         conn, params=(symbol, timeframe, ts0)
@@ -376,7 +374,7 @@ class DailyRiskMonitor:
         """Sum of closed trade R today (UTC date)."""
         today = date.today().isoformat()
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = _db.connect()
             rows = conn.execute(
                 """SELECT pnl_r FROM apex_trades
                    WHERE DATE(entry_time) = ? AND status = 'closed'""",
@@ -424,7 +422,7 @@ class DrawdownTracker:
 
     def _load_closed_trades(self) -> list:
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = _db.connect()
             rows = conn.execute(
                 """SELECT entry_time, pnl_r FROM apex_trades
                    WHERE status = 'closed' AND pnl_r IS NOT NULL
@@ -619,12 +617,12 @@ def run_backtest_impact():
                                    'symbol': 'NQ', 'direction': t.get('direction','long')})
 
     # Setup E inline
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     ts0 = int(pd.Timestamp('2024-09-01', tz='UTC').timestamp())
-    df5 = pd.read_sql_query('SELECT ts,open,high,low,close FROM ohlcv WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
-                             conn, params=['NQ','5min',ts0])
-    df4h = pd.read_sql_query('SELECT ts,open,high,low,close FROM ohlcv WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
-                              conn, params=['NQ','4hour',ts0])
+    df5 = _db.read_sql('SELECT ts,open,high,low,close FROM ohlcv WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
+                        conn, params=['NQ','5min',ts0])
+    df4h = _db.read_sql('SELECT ts,open,high,low,close FROM ohlcv WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
+                         conn, params=['NQ','4hour',ts0])
     conn.close()
     for df in [df5, df4h]:
         df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True); df.set_index('dt', inplace=True)

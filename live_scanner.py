@@ -10,13 +10,13 @@ Run:
   python3 live_scanner.py
 """
 
-import sqlite3
 import logging
 import time
 import json
 import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+import db as _db
 from setup_engine import check_setup
 from setup_e import check_setup_e, format_alert as format_alert_e
 
@@ -29,7 +29,6 @@ logger = logging.getLogger('APEX.Scanner')
 NY_TZ = ZoneInfo('America/New_York')
 UTC   = ZoneInfo('UTC')
 
-DB_PATH    = 'apex_market.db'
 INSTRUMENTS = ['NQ', 'ES', 'GC']
 MODES       = ['swing']
 SCAN_EVERY  = 60
@@ -114,7 +113,7 @@ def has_opposite_swing_trade(symbol: str, direction: str) -> bool:
     Used to block FVG and Setup E signals that conflict with an existing position."""
     try:
         opp = 'short' if direction == 'long' else 'long'
-        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn = _db.connect()
         row = conn.execute(
             "SELECT id FROM apex_trades "
             "WHERE symbol=? AND direction=? AND setup NOT LIKE 'FVG%' AND status='open' LIMIT 1",
@@ -129,7 +128,7 @@ def has_opposite_swing_trade(symbol: str, direction: str) -> bool:
 def init_swing_dedup_table():
     """Create swing_alerted_signals table for DB-backed dedup (matches fvg_alerted_zones pattern)."""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         conn.execute('''
             CREATE TABLE IF NOT EXISTS swing_alerted_signals (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,7 +150,7 @@ def is_swing_signal_new(symbol: str, direction: str, setup: str, dt: datetime = 
     """Return True if this signal has NOT been alerted today (DB-backed check)."""
     date_str = (dt or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         row = conn.execute(
             'SELECT id FROM swing_alerted_signals WHERE symbol=? AND direction=? AND setup=? AND date=?',
             (symbol, direction, setup, date_str)
@@ -168,7 +167,7 @@ def record_swing_signal(symbol: str, direction: str, setup: str, dt: datetime = 
     date_str = (dt or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
     now_str  = datetime.now(timezone.utc).isoformat()
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         conn.execute(
             'INSERT INTO swing_alerted_signals (symbol, direction, setup, date, created_at) VALUES (?,?,?,?,?)',
             (symbol, direction, setup, date_str, now_str)

@@ -9,13 +9,12 @@ Retrain: monthly, rolling 6-month window
 import os
 import pickle
 import logging
-import sqlite3
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+import db as _db
 
 logger  = logging.getLogger('APEX.SetupF')
-DB_PATH = 'apex_market.db'
 
 SESSION_WINDOWS = {
     'NQ': (13, 19),
@@ -33,8 +32,8 @@ _model_cache = {}   # symbol -> (loaded_at, model)
 # ─────────────────────────────────────────────────────────────
 
 def _load_ohlcv(symbol: str, timeframe: str, limit: int = 2000) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)
@@ -517,7 +516,7 @@ def check_model_degradation(symbol: str) -> bool:
     Triggers retrain warning.
     """
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         rows = conn.execute(
             "SELECT direction, pnl_r FROM apex_trades "
             "WHERE symbol=? AND setup='F_rf_ml' AND status='closed' "

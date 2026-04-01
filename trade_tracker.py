@@ -8,15 +8,14 @@ Monitor: called every 5 minutes from server.py scheduler
 Exit alerts: stop hit | target hit | session end | max bars
 """
 
-import sqlite3
 import logging
 import json
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+import db as _db
 
-logger  = logging.getLogger('APEX.TradeTracker')
-DB_PATH = 'apex_market.db'
+logger = logging.getLogger('APEX.TradeTracker')
 NY_TZ   = ZoneInfo('America/New_York')
 UTC     = ZoneInfo('UTC')
 
@@ -34,7 +33,7 @@ MAX_BARS = {
 
 def init_trades_table():
     """Create trades table if it doesn't exist."""
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = _db.connect()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS apex_trades (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,12 +58,13 @@ def init_trades_table():
             broker_order_id  TEXT
         )
     ''')
-    # Add broker_order_id column if missing (migration for existing DBs)
-    try:
-        conn.execute('ALTER TABLE apex_trades ADD COLUMN broker_order_id TEXT')
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
+    # Add broker_order_id column if missing (migration for existing SQLite DBs)
+    if not _db.IS_POSTGRES:
+        try:
+            conn.execute('ALTER TABLE apex_trades ADD COLUMN broker_order_id TEXT')
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -81,11 +81,10 @@ def log_trade(signal: dict) -> int:
                       stop, target, rr, session, quality
     """
     init_trades_table()
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    c    = conn.cursor()
+    conn = _db.connect()
     now  = datetime.now(timezone.utc).isoformat()
 
-    c.execute('''
+    trade_id = _db.insert_returning_id(conn, '''
         INSERT INTO apex_trades
         (symbol, direction, setup, mode, entry_price, stop, target,
          rr_planned, session, quality, entry_time, status, broker_order_id)
@@ -104,7 +103,6 @@ def log_trade(signal: dict) -> int:
         now,
         signal.get('broker_order_id'),
     ))
-    trade_id = c.lastrowid
     conn.commit()
     conn.close()
     logger.info(f'Trade logged: #{trade_id} {signal.get("symbol")} {signal.get("direction").upper()}')
@@ -118,7 +116,7 @@ def log_trade(signal: dict) -> int:
 def get_current_price(symbol: str, timeframe: str = '5min') -> float:
     """Get the most recent close price from the database."""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn = _db.connect()
         df_row = conn.execute(
             'SELECT close FROM ohlcv WHERE symbol=? AND timeframe=? '
             'ORDER BY ts DESC LIMIT 1',
@@ -137,7 +135,7 @@ def get_current_price(symbol: str, timeframe: str = '5min') -> float:
 
 def close_trade(trade_id: int, exit_price: float, reason: str):
     """Close a trade and calculate P&L."""
-    conn   = sqlite3.connect(DB_PATH)
+    conn   = _db.connect()
     trade  = conn.execute(
         'SELECT * FROM apex_trades WHERE id=?', (trade_id,)
     ).fetchone()
@@ -245,7 +243,7 @@ def monitor_trades():
     Called every 5 minutes from server.py scheduler.
     """
     init_trades_table()
-    conn   = sqlite3.connect(DB_PATH)
+    conn   = _db.connect()
     trades = conn.execute(
         'SELECT * FROM apex_trades WHERE status=?', ('open',)
     ).fetchall()
@@ -333,7 +331,7 @@ def monitor_trades():
 def get_stats() -> dict:
     """Return summary stats for dashboard."""
     init_trades_table()
-    conn   = sqlite3.connect(DB_PATH)
+    conn   = _db.connect()
     closed = conn.execute(
         'SELECT pnl_r FROM apex_trades WHERE status=?', ('closed',)
     ).fetchall()
@@ -365,7 +363,7 @@ def get_stats() -> dict:
 def get_open_trades() -> list:
     """Return all open trades with current P&L."""
     init_trades_table()
-    conn   = sqlite3.connect(DB_PATH)
+    conn   = _db.connect()
     trades = conn.execute(
         'SELECT * FROM apex_trades WHERE status=? ORDER BY entry_time DESC',
         ('open',)
