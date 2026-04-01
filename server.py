@@ -1883,6 +1883,25 @@ def _startup():
                     logger.info(f'  {_sym} data OK ({count} bars)')
             except Exception as e:
                 logger.warning(f'  {_sym} backfill check failed: ' + str(e))
+        # Ensure sufficient 5min history for Setup F training (needs ~10000 bars / 6 months)
+        for _sym in ['NQ', 'ES']:
+            try:
+                conn = _db.connect()
+                count_5m = conn.execute(
+                    "SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe='5min'", (_sym,)
+                ).fetchone()[0]
+                conn.close()
+                if count_5m < 10000:
+                    logger.info(
+                        f'Setup F: {_sym} only has {count_5m} 5min bars — '
+                        f'running full historical backfill for training data (this takes ~5 min)...'
+                    )
+                    backfill_history(_sym, years=2)
+                    logger.info(f'Setup F: {_sym} historical backfill complete')
+                else:
+                    logger.info(f'Setup F: {_sym} 5min data sufficient ({count_5m} bars)')
+            except Exception as e:
+                logger.warning(f'Setup F backfill check {_sym}: {e}')
         # Train Setup F ML models after data is ready
         _t.sleep(5)
         try:

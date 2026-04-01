@@ -290,8 +290,8 @@ def train_model(symbol: str) -> float:
     df_5m = df_5m[df_5m['dt'].dt.hour.between(start_hr, end_hr - 1)].copy()
     df_5m = df_5m.reset_index(drop=True)
 
-    if len(df_5m) < 200:
-        logger.warning(f'Insufficient session bars for {symbol} after filter: {len(df_5m)}')
+    if len(df_5m) < 100:
+        logger.warning(f'Insufficient session bars for {symbol} after filter: {len(df_5m)} (need 100)')
         return 0.0
 
     # Build features
