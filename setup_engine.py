@@ -34,6 +34,16 @@ from liquidity_engine import (
 UTC   = ZoneInfo('UTC')
 NY_TZ = ZoneInfo('America/New_York')
 
+
+def _load_htf(symbol: str, tf: str, limit_htf: int) -> pd.DataFrame:
+    """Load 5min bars and resample to tf in-memory — bypasses broken HTF DB rows."""
+    mult = 48 if tf == '4hour' else 12   # 5min bars per HTF bar
+    df5  = load_bars(symbol, '5min', limit=limit_htf * mult)
+    rule = '4h' if tf == '4hour' else '1h'
+    return df5.resample(rule).agg(
+        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+    ).dropna()
+
 # ─────────────────────────────────────────────────────────────
 #  SESSION WINDOWS (UTC hours)
 # ─────────────────────────────────────────────────────────────
@@ -100,7 +110,7 @@ class SetupResult:
 # ─────────────────────────────────────────────────────────────
 
 def gate1_htf_bias(symbol: str, direction: str) -> GateResult:
-    df = load_bars(symbol, '4hour', limit=200)
+    df = _load_htf(symbol, '4hour', 200)
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
     bias, strength = compute_bias(events)
@@ -126,7 +136,7 @@ def gate1_htf_bias(symbol: str, direction: str) -> GateResult:
 # ─────────────────────────────────────────────────────────────
 
 def gate2_structure(symbol: str, direction: str) -> GateResult:
-    df = load_bars(symbol, '1hour', limit=500)
+    df = _load_htf(symbol, '1hour', 500)
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
 
@@ -158,7 +168,7 @@ def gate3_poi(symbol: str, direction: str) -> tuple[GateResult, str, object]:
     Returns (GateResult, setup_type, poi_object)
     setup_type: 'A_sweep_ob' | 'B_choch_breaker' | 'C_bos_ob'
     """
-    df = load_bars(symbol, '1hour', limit=500)
+    df = _load_htf(symbol, '1hour', 500)
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
     obs       = find_order_blocks(df, sh, sl, events)
@@ -226,7 +236,7 @@ def gate3_poi_setup_a(symbol: str, direction: str) -> tuple:
     + active OB within 1 ATR of current price.
     Returns (GateResult, setup_type, poi_object)
     """
-    df = load_bars(symbol, '1hour', limit=500)
+    df = _load_htf(symbol, '1hour', 500)
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
     obs       = find_order_blocks(df, sh, sl, events)
@@ -299,7 +309,7 @@ def gate4_session(symbol: str, dt: datetime = None) -> tuple[GateResult, str]:
 def gate5_entry_trigger(symbol: str, direction: str, poi) -> GateResult:
     df  = load_bars(symbol, '15min', limit=100)
     # ATR from 1hour to match backtest (backtester.py passes atr_1h to check_entry_trigger_15m)
-    df_1h = load_bars(symbol, '1hour', limit=50)
+    df_1h = _load_htf(symbol, '1hour', 50)
     atr   = calc_atr(df_1h).iloc[-1]
 
     if poi is None:
@@ -394,7 +404,7 @@ def calc_trade_levels(symbol: str, direction: str, poi, mode: str = 'swing',
     Stop:  beyond POI by 0.5 ATR
     Target: RR based on mode (scalp=2.5, swing=4.0)
     """
-    df      = load_bars(symbol, '1hour', limit=50)
+    df      = _load_htf(symbol, '1hour', 50)
     atr_val = float(calc_atr(df).iloc[-1])
     rr_map  = {'scalp': 2.5, 'swing': 4.0}
     rr      = rr_map.get(mode, 3.0)
@@ -557,7 +567,7 @@ def check_setup_a(symbol: str, direction: str, mode: str = 'swing',
 
 
 def gate3_poi_setup_c(symbol, direction):
-    df = load_bars(symbol, '1hour', limit=500)
+    df = _load_htf(symbol, '1hour', 500)
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
     obs       = find_order_blocks(df, sh, sl, events)
@@ -597,7 +607,7 @@ def check_setup_c(symbol, direction, mode='swing', dt=None):
     if not g2.passed:
         return SetupResult(symbol, direction, 'none', False, gates, None, None, None, None, '', '', None)
     # Check event type directly from events list — do not parse g2.detail string
-    _df_1h = load_bars(symbol, '1hour', limit=500)
+    _df_1h = _load_htf(symbol, '1hour', 500)
     _sh, _sl = find_swings(_df_1h, lookback=5)
     _events, _ = detect_structure(_df_1h, _sh, _sl)
     _last_event = _events[-1] if _events else None
