@@ -11,8 +11,8 @@ Run with: python3 scanner.py --symbol NQ
 Or import and call scan_now(symbol) from server.py
 """
 
-import sqlite3
 import json
+import db as _db
 import logging
 import time
 import argparse
@@ -32,8 +32,8 @@ DB_PATH = 'apex_market.db'
 # ─────────────────────────────────────────────
 
 def load_recent_bars(symbol, timeframe, limit=250):
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts,open,high,low,close,volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT ?',
         conn, params=(symbol, timeframe, limit)
@@ -264,7 +264,7 @@ def detect_open_fvgs(df, lookback=50, min_gap_pct=0.15):
 
 def load_validated_patterns(symbol):
     """Load patterns with positive expectancy from the database"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     c = conn.cursor()
     c.execute(
         'SELECT * FROM patterns WHERE symbol=? AND active=1 AND expectancy > 0 ORDER BY edge_score DESC',
@@ -538,7 +538,7 @@ def scan_for_setups(symbol, timeframe='1day'):
 
         # Log to scan_log table
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db.connect()
             conn.execute(
                 'INSERT INTO scan_log (ts,symbol,pattern_name,score,direction,entry,stop,target1,target2,regime,notes) '
                 'VALUES (?,?,?,?,?,?,?,?,?,?,?)',

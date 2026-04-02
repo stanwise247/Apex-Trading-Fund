@@ -23,8 +23,8 @@ Account: configured via TRADOVATE_ACCOUNT in .env
 import os
 import time
 import logging
-import sqlite3
 import requests
+import db as _db
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -565,7 +565,7 @@ def sync_positions() -> list:
     tv_symbols   = {p['symbol'] for p in tv_positions}
 
     try:
-        conn   = sqlite3.connect(DB_PATH, timeout=30)
+        conn   = _db.connect()
         trades = conn.execute(
             "SELECT id, symbol, direction, setup, entry_price, stop, target "
             "FROM apex_trades WHERE status='open'"

@@ -20,8 +20,8 @@ Tests:
 Run with: python3 patterns.py --symbol NQ --timeframe 1day
 """
 
-import sqlite3
 import json
+import db as _db
 import argparse
 import logging
 from datetime import datetime, timezone
@@ -39,8 +39,8 @@ DB_PATH = 'apex_market.db'
 # ─────────────────────────────────────────────
 
 def load_ohlcv(symbol, timeframe, min_bars=100):
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
+    conn = _db.connect()
+    df = _db.read_sql(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
         'WHERE symbol=? AND timeframe=? ORDER BY ts ASC',
         conn, params=(symbol, timeframe)
@@ -57,9 +57,11 @@ def load_ohlcv(symbol, timeframe, min_bars=100):
 
 
 def save_pattern(pattern):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db.connect()
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO patterns
+    # DELETE + INSERT works for both SQLite and PostgreSQL (INSERT OR REPLACE is SQLite-only)
+    c.execute('DELETE FROM patterns WHERE name=?', (pattern['name'],))
+    c.execute('''INSERT INTO patterns
         (name, symbol, conditions, occurrences, wins, losses,
          avg_rr, expectancy, best_regime, edge_score, last_updated, active)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (
@@ -79,7 +81,7 @@ def save_all_patterns(patterns):
     # Clear existing patterns for this symbol first
     if patterns:
         sym = patterns[0]['symbol']
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db.connect()
         conn.execute('DELETE FROM patterns WHERE symbol=?', (sym,))
         conn.commit()
         conn.close()

@@ -1967,6 +1967,35 @@ def _startup():
                     logger.warning(f'Setup F: {_sym} model training error: {_te}')
         except Exception as e:
             logger.warning(f'Setup F startup training failed: {e}')
+
+        # ── APEX READY verification log ──────────────────────────
+        try:
+            from setup_f_ml import _load_ohlcv, calculate_features, FEATURE_NAMES
+            import numpy as _np
+            _bias_labels = {1.0: 'BULLISH', -1.0: 'BEARISH', 0.0: 'NEUTRAL'}
+            _bias_parts = []
+            for _sym in ['NQ', 'ES', 'GC']:
+                try:
+                    _df = _load_ohlcv(_sym, '5min', limit=2000)
+                    if not _df.empty:
+                        _X = calculate_features(_sym, _df)
+                        _bias = _bias_labels.get(float(_X[-1, 1]), 'NEUTRAL')
+                    else:
+                        _bias = 'NO DATA'
+                    _bias_parts.append(f'{_sym} bias={_bias}')
+                except Exception:
+                    _bias_parts.append(f'{_sym} bias=ERROR')
+            _f_parts = []
+            for _sym in ['NQ', 'ES']:
+                import os as _os
+                _pkl = f'apex_rf_{_sym}.pkl'
+                _f_parts.append(f'SetupF {_sym}={"loaded" if _os.path.exists(_pkl) else "MISSING"}')
+            logger.info(
+                'APEX READY — ' + ' | '.join(_bias_parts) + ' | ' + ' | '.join(_f_parts)
+            )
+        except Exception as _re:
+            logger.warning(f'APEX READY check failed: {_re}')
+
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')

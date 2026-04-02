@@ -145,13 +145,16 @@ def detect_fvgs(df, atr, min_atr_mult=0.3, lookback=96):
 
 
 def get_htf_bias(symbol):
-    """Get 4hour bias using EMA."""
+    """Get 4hour bias using EMA. Resamples 5min bars in-memory — no broken HTF DB rows."""
     try:
-        df = load_bars(symbol, '4hour', limit=50)
-        if len(df) < 20:
+        df_5m = load_bars(symbol, '5min', limit=2000)
+        if df_5m.empty or len(df_5m) < 20:
             return 'neutral'
-        ema        = df['close'].ewm(span=20).mean()
-        last_close = float(df['close'].iloc[-1])
+        df_4h = df_5m['close'].resample('4h').last().dropna().to_frame('close')
+        if len(df_4h) < 20:
+            return 'neutral'
+        ema        = df_4h['close'].ewm(span=20).mean()
+        last_close = float(df_4h['close'].iloc[-1])
         last_ema   = float(ema.iloc[-1])
         if last_close > last_ema * 1.001:
             return 'bullish'

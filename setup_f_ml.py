@@ -387,10 +387,8 @@ def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
         logger.warning(f'No model available for {symbol}')
         return None
 
-    # Load bars
-    df_5m = _load_ohlcv(symbol, '5min', limit=300)
-    df_4h = _load_ohlcv(symbol, '4hour', limit=200)
-    df_1h = _load_ohlcv(symbol, '1hour', limit=800)
+    # Load 5min bars only — HTF features computed in-memory by calculate_features()
+    df_5m = _load_ohlcv(symbol, '5min', limit=500)
 
     if df_5m.empty or len(df_5m) < 60:
         return None
@@ -401,8 +399,8 @@ def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
     if df_5m.empty:
         return None
 
-    # Build features for last bar
-    X_all = calculate_features(symbol, df_5m, df_4h, df_1h)
+    # Build features for last bar (HTF resampled in-memory — no DB reads)
+    X_all = calculate_features(symbol, df_5m)
     X_last = X_all[-1:].copy()
 
     if np.isnan(X_last).any():

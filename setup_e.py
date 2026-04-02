@@ -129,10 +129,16 @@ def gate1_session(dt: datetime) -> EGateResult:
 
 
 def gate2_htf_bias(symbol: str, direction: str) -> tuple:
-    """Returns (EGateResult, bias_str)"""
-    df = _load_bars(symbol, '4hour', limit=100)
-    ema20       = df['close'].ewm(span=BIAS_EMA, adjust=False).mean()
-    last_close  = float(df['close'].iloc[-1])
+    """Returns (EGateResult, bias_str). Resamples 5min bars in-memory — no broken HTF DB rows."""
+    df_5m = _load_bars(symbol, '5min', limit=1500)
+    if df_5m.empty:
+        return (EGateResult(False, 2, 'HTF Bias', 'No 5min data'), 'neutral')
+    df_4h = df_5m['close'].resample('4h').last().dropna().to_frame('close')
+    if len(df_4h) < BIAS_EMA:
+        return (EGateResult(False, 2, 'HTF Bias',
+                            f'Insufficient 4h bars for EMA{BIAS_EMA} ({len(df_4h)})'), 'neutral')
+    ema20       = df_4h['close'].ewm(span=BIAS_EMA, adjust=False).mean()
+    last_close  = float(df_4h['close'].iloc[-1])
     last_ema    = float(ema20.iloc[-1])
 
     if last_close > last_ema * (1 + BIAS_THRESH):
