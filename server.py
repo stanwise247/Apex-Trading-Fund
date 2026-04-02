@@ -2214,11 +2214,19 @@ def apex_market():
     """Return current market structure per instrument."""
     from market_structure import load_bars, find_swings, detect_structure, compute_bias
     from zoneinfo import ZoneInfo
+    import pandas as _pd
     NY = ZoneInfo('America/New_York')
     results = {}
     for sym in ('NQ', 'ES', 'GC'):
         try:
-            df = load_bars(sym, '1hour', limit=200)
+            # Load 5min bars and resample to 1hour in-memory — avoids broken HTF DB rows on PostgreSQL
+            df_5m = load_bars(sym, '5min', limit=3000)
+            df = df_5m[['open','high','low','close','volume']].resample('1h').agg({
+                'open': 'first', 'high': 'max', 'low': 'min',
+                'close': 'last', 'volume': 'sum',
+            }).dropna()
+            if len(df) < 3:
+                raise ValueError(f'Insufficient 1h bars after resample ({len(df)})')
             sh, sl = find_swings(df, lookback=5)
             events, _ = detect_structure(df, sh, sl)
             bias, strength = compute_bias(events)

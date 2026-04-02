@@ -545,19 +545,13 @@ def get_current_prediction(symbol: str) -> dict:
         if model is None:
             return {'symbol': symbol, 'ok': False, 'error': 'No model'}
 
-        start_hr, end_hr = SESSION_WINDOWS.get(symbol, (13, 19))
-        df_5m = _load_ohlcv(symbol, '5min', limit=200)
-        df_4h = _load_ohlcv(symbol, '4hour', limit=100)
-        df_1h = _load_ohlcv(symbol, '1hour', limit=600)
+        # Need 2000 bars so 4h resample produces 30+ bars for SMA20 (20 × 48 = 960 5min minimum)
+        df_5m = _load_ohlcv(symbol, '5min', limit=2000)
 
         if df_5m.empty:
             return {'symbol': symbol, 'ok': False, 'error': 'No data'}
 
-        df_sess = df_5m[df_5m['dt'].dt.hour.between(start_hr, end_hr - 1)].copy().reset_index(drop=True)
-        if df_sess.empty:
-            df_sess = df_5m.tail(60).copy().reset_index(drop=True)
-
-        X_all  = calculate_features(symbol, df_sess, df_4h, df_1h)
+        X_all  = calculate_features(symbol, df_5m)
         X_last = X_all[-1:]
 
         if np.isnan(X_last).any():
