@@ -278,27 +278,30 @@ def train_model(symbol: str) -> float:
 
     logger.info(f'  {symbol}: {len(df_5m)} 5min bars loaded (HTF computed in-memory)')
 
-    # Session filter
+    # 6-month window — keep full contiguous df for feature calculation
     six_months_ago = int((datetime.now(timezone.utc) - timedelta(days=180)).timestamp())
-    df_5m = df_5m[df_5m['ts'] >= six_months_ago].copy()
-    df_5m = df_5m[df_5m['dt'].dt.hour.between(start_hr, end_hr - 1)].copy()
-    df_5m = df_5m.reset_index(drop=True)
+    df_5m = df_5m[df_5m['ts'] >= six_months_ago].copy().reset_index(drop=True)
 
-    logger.info(f'  {symbol}: {len(df_5m)} session bars after filter (last 6 months, {start_hr}-{end_hr} UTC)')
+    # Session mask computed here but NOT applied to df yet — applying it before
+    # calculate_features() produces non-contiguous bars that break the 4h resample
+    # (HTF features become 100% NaN → model trains on near-zero rows → prob=0.500 exactly)
+    session_mask = df_5m['dt'].dt.hour.between(start_hr, end_hr - 1).values
 
-    if len(df_5m) < 100:
-        logger.warning(f'Insufficient session bars for {symbol} after filter: {len(df_5m)} (need 100)')
+    logger.info(f'  {symbol}: {len(df_5m)} bars in last 6 months, {session_mask.sum()} session bars ({start_hr}-{end_hr} UTC)')
+
+    if session_mask.sum() < 100:
+        logger.warning(f'Insufficient session bars for {symbol}: {session_mask.sum()} (need 100)')
         return 0.0
 
-    # Build features entirely from df_5m (no HTF DB dependency)
+    # Build features on full contiguous df — HTF resample needs unbroken 5min series
     X = calculate_features(symbol, df_5m)
 
     # Target: forward 12-bar return direction
     fwd = df_5m['close'].shift(-12)
     y   = (fwd > df_5m['close']).astype(int).values
 
-    # Drop rows with NaN in features or target
-    valid = ~(np.isnan(X).any(axis=1) | np.isnan(y.astype(float)))
+    # Drop NaN rows AND restrict to session hours
+    valid = ~(np.isnan(X).any(axis=1) | np.isnan(y.astype(float))) & session_mask
     X, y = X[valid], y[valid]
 
     if len(X) < 100:

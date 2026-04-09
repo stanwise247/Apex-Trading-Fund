@@ -110,7 +110,7 @@ class SetupResult:
 # ─────────────────────────────────────────────────────────────
 
 def gate1_htf_bias(symbol: str, direction: str) -> GateResult:
-    df = _load_htf(symbol, '4hour', 200)
+    df = _load_htf(symbol, '4hour', 500)
     sh, sl    = find_swings(df, lookback=5)
     events, _ = detect_structure(df, sh, sl)
     bias, strength = compute_bias(events)
