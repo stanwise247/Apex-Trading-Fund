@@ -1092,6 +1092,27 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
         logger.debug(f'_execute_via_tradovate error: {e}')
 
 
+def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
+    """
+    Return True if apex_trades already has an open trade for this symbol/direction/setup.
+    DB-backed dedup — survives redeploys, auto-unblocks when trade closes.
+    Prevents duplicate signals firing every 60s when in-memory SignalTracker resets.
+    """
+    try:
+        conn = _db.connect()
+        row  = conn.execute(
+            "SELECT id FROM apex_trades WHERE symbol=? AND direction=? AND setup=? AND status='open' LIMIT 1",
+            (symbol, direction, setup)
+        ).fetchone()
+        conn.close()
+        if row:
+            logger.debug(f'Signal dedup: {symbol} {direction} {setup} — trade #{row[0]} already open')
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
     """Return True if an open swing trade (A/B/C) exists on symbol in the OPPOSITE direction.
     Used to block FVG and Setup E signals that conflict with an existing position."""
@@ -1311,6 +1332,12 @@ def background_scheduler():
                                 f'opposite swing trade open on {result.symbol}'
                             )
                             continue
+                    # DB dedup — skip if open trade already exists for this signal
+                    if _is_signal_already_active(
+                        result.symbol, result.direction,
+                        getattr(result, 'setup', '')
+                    ):
+                        continue
                     if tracker.is_new(result):
                         msg = (format_alert_e(result)
                                if getattr(result, 'setup', '') == 'E_ema50_pullback'
@@ -1376,6 +1403,8 @@ def background_scheduler():
                                     f'Setup F {_sym} {sig["direction"]} suppressed — '
                                     f'opposite swing trade open'
                                 )
+                                continue
+                            if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
                                 continue
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
@@ -1444,17 +1473,18 @@ def background_scheduler():
                         sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
                         if sig_es:
                             if not _has_opposite_swing_trade('ES', sig_es['direction']):
-                                msg = format_h_alert(sig_es) + _risk_footer
-                                send_telegram(msg)
-                                try:
-                                    _h_tid = log_trade(sig_es)
-                                    if not _h_tid:
-                                        logger.error('Setup H ES: log_trade() returned None — trade NOT logged')
-                                    else:
-                                        logger.info(f'Setup H ES: trade #{_h_tid} logged to apex_trades')
-                                except Exception as _lte:
-                                    logger.error(f'Setup H ES: log_trade() FAILED — trade lost: {_lte}', exc_info=True)
-                                logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
+                                if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
+                                    msg = format_h_alert(sig_es) + _risk_footer
+                                    send_telegram(msg)
+                                    try:
+                                        _h_tid = log_trade(sig_es)
+                                        if not _h_tid:
+                                            logger.error('Setup H ES: log_trade() returned None — trade NOT logged')
+                                        else:
+                                            logger.info(f'Setup H ES: trade #{_h_tid} logged to apex_trades')
+                                    except Exception as _lte:
+                                        logger.error(f'Setup H ES: log_trade() FAILED — trade lost: {_lte}', exc_info=True)
+                                    logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
                             else:
                                 logger.info('Setup H ES suppressed — opposite swing trade open')
                     else:
