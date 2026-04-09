@@ -275,20 +275,20 @@ def monitor_trades():
         exit_reason = None
         exit_price  = price
 
-        # Check stop
-        if direction == 'long'  and price <= stop:
+        # Check stop — close must fully breach (strict), never bar high/low
+        if direction == 'long'  and price < stop:
             exit_reason = 'stop'
             exit_price  = stop
-        elif direction == 'short' and price >= stop:
+        elif direction == 'short' and price > stop:
             exit_reason = 'stop'
             exit_price  = stop
 
-        # Check target
+        # Check target — close must fully breach (strict), never bar high/low
         if exit_reason is None:
-            if direction == 'long'  and price >= target:
+            if direction == 'long'  and price > target:
                 exit_reason = 'target'
                 exit_price  = target
-            elif direction == 'short' and price <= target:
+            elif direction == 'short' and price < target:
                 exit_reason = 'target'
                 exit_price  = target
 

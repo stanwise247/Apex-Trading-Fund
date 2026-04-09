@@ -387,27 +387,24 @@ def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
         logger.warning(f'No model available for {symbol}')
         return None
 
-    # Load 5min bars only — HTF features computed in-memory by calculate_features()
-    df_5m = _load_ohlcv(symbol, '5min', limit=500)
+    # Load 5min bars — 2000 bars needed for HTF resample (SMA20 on 4h requires 20 4h bars)
+    df_5m = _load_ohlcv(symbol, '5min', limit=2000)
 
     if df_5m.empty or len(df_5m) < 60:
         return None
 
-    # Session filter on 5min bars
-    df_5m = df_5m[df_5m['dt'].dt.hour.between(start_hr, end_hr - 1)].copy()
-    df_5m = df_5m.reset_index(drop=True)
-    if df_5m.empty:
-        return None
-
-    # Build features for last bar (HTF resampled in-memory — no DB reads)
+    # Build features on full contiguous df — session filter must NOT be applied here
+    # (non-contiguous bars break 4h resample → 100% NaN → silent return None)
     X_all = calculate_features(symbol, df_5m)
     X_last = X_all[-1:].copy()
 
     if np.isnan(X_last).any():
+        logger.warning(f'Setup F {symbol}: NaN in features — skipping')
         return None
 
     # Predict
     prob = float(model.predict_proba(X_last)[0, 1])
+    logger.info(f'Setup F {symbol} scan: prob={prob:.3f} threshold=0.58')
 
     if prob > 0.58:
         direction = 'long'
