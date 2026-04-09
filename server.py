@@ -1379,8 +1379,24 @@ def background_scheduler():
                                 continue
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
-                            _f_tid = log_trade(sig)
-                            _execute_via_tradovate(sig, _f_tid)
+                            # Log trade — explicit ERROR if this fails so it is never silent
+                            try:
+                                _f_tid = log_trade(sig)
+                                if not _f_tid:
+                                    logger.error(
+                                        f'Setup F {_sym}: log_trade() returned None '
+                                        f'— trade NOT logged to apex_trades'
+                                    )
+                                else:
+                                    logger.info(f'Setup F {_sym}: trade #{_f_tid} logged to apex_trades')
+                            except Exception as _lte:
+                                logger.error(
+                                    f'Setup F {_sym}: log_trade() FAILED — trade lost: {_lte}',
+                                    exc_info=True
+                                )
+                                _f_tid = None
+                            if _f_tid:
+                                _execute_via_tradovate(sig, _f_tid)
                             logger.info(
                                 f'Setup F signal: {_sym} {sig["direction"].upper()} '
                                 f'conf={sig["confidence"]:.0%} regime={_regime.label}'
@@ -1400,6 +1416,61 @@ def background_scheduler():
                 scan_and_log_wyckoff()
             except Exception as e:
                 logger.debug(f'Wyckoff tracker error: {e}')
+
+        # ── Setup H — VWAP 2σ Reversal (every 5 min) ─────────────
+        if not hasattr(background_scheduler, '_last_setup_h'):
+            background_scheduler._last_setup_h = 0
+        if now - background_scheduler._last_setup_h >= 300:
+            background_scheduler._last_setup_h = now
+            try:
+                from setup_h_vwap import scan_setup_h, format_h_alert, log_h_paper
+                from live_scanner import send_telegram
+                from trade_tracker import log_trade
+                from datetime import datetime, timezone
+                _now_utc = datetime.now(timezone.utc)
+                if not hasattr(background_scheduler, '_risk_gate'):
+                    from risk_manager import RiskGate
+                    background_scheduler._risk_gate = RiskGate()
+                _rg = background_scheduler._risk_gate
+                _regime  = _rg.regime.get_regime()
+                _dd_mult = _rg.dd.get_risk_multiplier()
+                _risk_footer = (
+                    f'\n⚙️ <i>Regime: {_regime.label} | '
+                    f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
+                )
+                # ES — live signals
+                try:
+                    if not _rg.daily.is_daily_limit_hit():
+                        sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
+                        if sig_es:
+                            if not _has_opposite_swing_trade('ES', sig_es['direction']):
+                                msg = format_h_alert(sig_es) + _risk_footer
+                                send_telegram(msg)
+                                try:
+                                    _h_tid = log_trade(sig_es)
+                                    if not _h_tid:
+                                        logger.error('Setup H ES: log_trade() returned None — trade NOT logged')
+                                    else:
+                                        logger.info(f'Setup H ES: trade #{_h_tid} logged to apex_trades')
+                                except Exception as _lte:
+                                    logger.error(f'Setup H ES: log_trade() FAILED — trade lost: {_lte}', exc_info=True)
+                                logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
+                            else:
+                                logger.info('Setup H ES suppressed — opposite swing trade open')
+                    else:
+                        logger.info('Setup H ES: daily limit hit — suppressed')
+                except Exception as _he:
+                    logger.warning(f'Setup H ES error: {_he}')
+                # NQ — paper tracking only
+                try:
+                    sig_nq = scan_setup_h('NQ', _now_utc, paper_only=True)
+                    if sig_nq:
+                        log_h_paper(sig_nq)
+                        logger.info(f'Setup H NQ paper: {sig_nq["direction"].upper()} @ {sig_nq["entry"]:.2f}')
+                except Exception as _hnq:
+                    logger.warning(f'Setup H NQ paper error: {_hnq}')
+            except Exception as e:
+                logger.warning(f'Setup H scanner error: {e}')
 
         time.sleep(60)
 
@@ -2101,11 +2172,21 @@ def apex_scan():
     except Exception as e:
         logger.debug(f'Setup F prediction error: {e}')
 
+    # Setup H — VWAP band state for ES and NQ (dashboard display)
+    setup_h_data = []
+    try:
+        from setup_h_vwap import get_h_state
+        for _sym in ('ES', 'NQ'):
+            setup_h_data.append(get_h_state(_sym))
+    except Exception as e:
+        logger.debug(f'Setup H state error: {e}')
+
     return jsonify({
         'ok':                  True,
         'results':             results,
         'fvg_signals':         fvg_signals,
         'setup_f_predictions': setup_f_predictions,
+        'setup_h_data':        setup_h_data,
         'time':                now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')
     })
 

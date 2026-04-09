@@ -355,7 +355,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
     </div>
   </div>
 
-  <div class="grid2">
+  <div class="grid3">
     <div class="card">
       <div class="card-hd"><span class="card-title">FVG Watch — NQ</span><button class="card-act" onclick="loadFvg()">↺</button></div>
       <div id="fvgMiniBody"><div class="empty-msg">Loading…</div></div>
@@ -363,6 +363,13 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
     <div class="card">
       <div class="card-hd"><span class="card-title">Setup F — ML Predictions</span></div>
       <div id="mlPredBody"><div class="empty-msg">Loading…</div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd">
+        <span class="card-title">Setup H — VWAP Reversal</span>
+        <span style="font-family:var(--mono);font-size:8px;color:var(--text2)">Sharpe 6.03 · 76.5% WR</span>
+      </div>
+      <div id="hVwapBody"><div class="empty-msg">Loading…</div></div>
     </div>
   </div>
 </div>
@@ -384,6 +391,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
     <button class="setup-tab" data-setup="E" onclick="switchSetup('E')">E — EMA50</button>
     <button class="setup-tab" data-setup="F" onclick="switchSetup('F')">F — ML</button>
     <button class="setup-tab" data-setup="G" onclick="switchSetup('G')">G — Wyckoff</button>
+    <button class="setup-tab" data-setup="H" onclick="switchSetup('H')">H — VWAP</button>
   </div>
 
   <!-- Setup B -->
@@ -428,6 +436,11 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
     <div style="padding:0 13px 13px">
       <div class="card" id="sc-G"><div class="empty-msg">Loading…</div></div>
     </div>
+  </div>
+  <!-- Setup H — VWAP 2σ Reversal -->
+  <div class="setup-pane" id="sp-H">
+    <div class="scan-meta" id="sm-H">VWAP 2σ Band Reversal — ES live · NQ paper · OOS Sharpe 6.03 · WR 76.5% · 268 trades</div>
+    <div style="padding:0 13px 13px" id="sc-H"><div class="empty-msg">Loading…</div></div>
   </div>
 </div>
 
@@ -608,7 +621,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 // ── STATE ──
 const S = {
   eqPoints:[],eqRange:'ALL',
-  scanData:{results:[],fvg_signals:[],setup_f_predictions:[]},
+  scanData:{results:[],fvg_signals:[],setup_f_predictions:[],setup_h_data:[]},
   scanLoaded:false,
   journalData:[],
   journalSort:{col:'entry_time',asc:false},
@@ -1005,6 +1018,9 @@ function renderAllSetups(d,fvgZones){
 
   // Setup G — Wyckoff
   loadWyckoff();
+
+  // Setup H — VWAP
+  renderSetupH(d.setup_h_data||[]);
 }
 
 function buildScanCard(r,allForSetup){
@@ -1080,6 +1096,71 @@ function renderSetupF(preds){
   }
   h+='</div>';
   $('sc-F').innerHTML=h;
+}
+
+function renderSetupH(data){
+  if(!data||!data.length){
+    const e='<div class="empty-msg">No VWAP data</div>';
+    const sc=$('sc-H'); if(sc) sc.innerHTML=e;
+    const hb=$('hVwapBody'); if(hb) hb.innerHTML=e;
+    return;
+  }
+  function stateColor(s){
+    if(s==='ABOVE_UPPER') return 'var(--red)';
+    if(s==='BELOW_LOWER') return 'var(--green)';
+    if(s==='WATCHING')    return 'var(--cyan)';
+    return 'var(--text2)';
+  }
+  function biasColor(b){ return b==='bullish'?'var(--green)':b==='bearish'?'var(--red)':'var(--text2)'; }
+
+  let hCard='', hScan='<div style="padding:4px 0 8px">';
+  for(const d of data){
+    const live=d.symbol==='ES';
+    const paper=live?'':'<span style="font-family:var(--mono);font-size:7px;color:var(--amber);margin-left:4px">PAPER</span>';
+    const sc=d.signal_state||'NO_EDGE';
+    const scCol=stateColor(sc);
+    const price=d.price!=null?f2(d.price):'—';
+    const vwap=d.vwap!=null?f2(d.vwap):'—';
+    const upper=d.upper_band!=null?f2(d.upper_band):'—';
+    const lower=d.lower_band!=null?f2(d.lower_band):'—';
+    const du=d.dist_upper_atr!=null?d.dist_upper_atr.toFixed(2)+'σ':'—';
+    const dl=d.dist_lower_atr!=null?d.dist_lower_atr.toFixed(2)+'σ':'—';
+    const bias=d.htf_bias||'neutral';
+
+    // Overview mini card row
+    hCard+=`<div style="padding:6px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:6px">
+      <span style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)">${d.symbol}${paper}</span>
+      <span style="font-family:var(--mono);font-size:9px;color:${scCol}">${sc}</span>
+      <div style="text-align:right">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text)">VWAP ${vwap}</div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text2)">+2σ ${upper} &nbsp; -2σ ${lower}</div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text3)">↑ ${du} from upper &nbsp; ↓ ${dl} from lower</div>
+        <div style="font-family:var(--mono);font-size:8px;color:${biasColor(bias)}">1h ${bias.toUpperCase()}</div>
+      </div>
+    </div>`;
+
+    // Scanner tab row
+    hScan+=`<div style="padding:10px 13px;border:1px solid var(--border);border-radius:5px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">${d.symbol}${paper}</span>
+        <span style="font-family:var(--mono);font-size:10px;font-weight:700;color:${scCol}">${sc}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2)">Price<span style="float:right;color:var(--text)">${price}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2)">Session VWAP<span style="float:right;color:var(--cyan)">${vwap}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--red)">+2σ Upper<span style="float:right">${upper}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--green)">-2σ Lower<span style="float:right">${lower}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2)">Dist to upper<span style="float:right;color:var(--text)">${du}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2)">Dist to lower<span style="float:right;color:var(--text)">${dl}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2)">1h Bias<span style="float:right;color:${biasColor(bias)}">${bias.toUpperCase()}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text2)">Session bars<span style="float:right;color:var(--text)">${d.session_bars||0}</span></div>
+      </div>
+    </div>`;
+  }
+  hScan+='</div>';
+
+  const hbEl=$('hVwapBody'); if(hbEl) hbEl.innerHTML=hCard||'<div class="empty-msg">No data</div>';
+  const scEl=$('sc-H');      if(scEl) scEl.innerHTML=hScan;
 }
 
 function renderMlPred(preds){
@@ -1387,7 +1468,7 @@ async function init(){
   loadRisk();
   loadFvg();
   // Prefetch scan silently for ML predictions in Overview
-  fetch('/api/apex/scan').then(r=>r.json()).then(d=>{if(d.ok){S.scanData=d;renderMlPred(d.setup_f_predictions||[]);}}).catch(()=>{});
+  fetch('/api/apex/scan').then(r=>r.json()).then(d=>{if(d.ok){S.scanData=d;renderMlPred(d.setup_f_predictions||[]);renderSetupH(d.setup_h_data||[]);}}).catch(()=>{});
 }
 
 setInterval(refreshCycle, 60000);
