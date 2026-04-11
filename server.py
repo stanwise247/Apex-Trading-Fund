@@ -1092,12 +1092,37 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
         logger.debug(f'_execute_via_tradovate error: {e}')
 
 
+# Module-level in-memory dedup set — survives DB write failures, resets on redeploy.
+# Keys: "{symbol}_{direction}_{setup}"
+_active_signals: set = set()
+
+
 def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
     """
-    Return True if apex_trades already has an open trade for this symbol/direction/setup.
-    DB-backed dedup — survives redeploys, auto-unblocks when trade closes.
-    Prevents duplicate signals firing every 60s when in-memory SignalTracker resets.
+    Return True if this signal is already active.
+    Checks in-memory set FIRST (fast, handles DB-write-failure window),
+    then DB (persistent, survives redeploys).
+    In-memory set auto-cleans when trade closes in DB.
     """
+    key = f'{symbol}_{direction}_{setup}'
+    # Fast path: in-memory set
+    if key in _active_signals:
+        # Auto-cleanup: if DB shows trade closed, remove from set
+        try:
+            conn = _db.connect()
+            row  = conn.execute(
+                "SELECT id FROM apex_trades WHERE symbol=? AND direction=? AND setup=? AND status='open' LIMIT 1",
+                (symbol, direction, setup)
+            ).fetchone()
+            conn.close()
+            if not row:
+                _active_signals.discard(key)
+                return False
+        except Exception:
+            pass  # DB check failed — trust the in-memory set
+        logger.debug(f'Signal dedup (mem): {symbol} {direction} {setup}')
+        return True
+    # DB check (persistent, survives redeploys)
     try:
         conn = _db.connect()
         row  = conn.execute(
@@ -1106,7 +1131,7 @@ def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
         ).fetchone()
         conn.close()
         if row:
-            logger.debug(f'Signal dedup: {symbol} {direction} {setup} — trade #{row[0]} already open')
+            logger.debug(f'Signal dedup (db): {symbol} {direction} {setup} — trade #{row[0]} already open')
             return True
         return False
     except Exception:
@@ -1343,6 +1368,7 @@ def background_scheduler():
                                if getattr(result, 'setup', '') == 'E_ema50_pullback'
                                else format_alert(result))
                         send_telegram(msg + _risk_footer)
+                        _active_signals.add(f'{result.symbol}_{result.direction}_{getattr(result, "setup", "")}')
                         tracker.mark_sent(result)
                         _sig_dict = {
                             'symbol':    result.symbol,
@@ -1408,6 +1434,7 @@ def background_scheduler():
                                 continue
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
+                            _active_signals.add(f'{_sym}_{sig["direction"]}_{sig["setup"]}')
                             # Log trade — explicit ERROR if this fails so it is never silent
                             try:
                                 _f_tid = log_trade(sig)
@@ -1476,6 +1503,7 @@ def background_scheduler():
                                 if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
                                     msg = format_h_alert(sig_es) + _risk_footer
                                     send_telegram(msg)
+                                    _active_signals.add(f'ES_{sig_es["direction"]}_{sig_es["setup"]}')
                                     try:
                                         _h_tid = log_trade(sig_es)
                                         if not _h_tid:

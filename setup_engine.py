@@ -111,13 +111,22 @@ class SetupResult:
 
 def gate1_htf_bias(symbol: str, direction: str) -> GateResult:
     df = _load_htf(symbol, '4hour', 500)
-    sh, sl    = find_swings(df, lookback=5)
-    events, _ = detect_structure(df, sh, sl)
-    bias, strength = compute_bias(events)
+    if len(df) < 21:
+        return GateResult(False, 1, 'HTF Bias',
+                          f'4hour bias=NEUTRAL — insufficient bars ({len(df)})')
+    ema20      = df['close'].ewm(span=20, adjust=False).mean()
+    last_close = float(df['close'].iloc[-1])
+    last_ema   = float(ema20.iloc[-1])
+    if last_close > last_ema * 1.001:
+        bias = 'bullish'
+    elif last_close < last_ema * 0.999:
+        bias = 'bearish'
+    else:
+        bias = 'neutral'
 
     if bias == 'neutral':
         return GateResult(False, 1, 'HTF Bias',
-                          f'4hour bias=NEUTRAL — no trade')
+                          f'4hour bias=NEUTRAL (close={last_close:.2f} EMA20={last_ema:.2f})')
 
     if direction == 'long' and bias != 'bullish':
         return GateResult(False, 1, 'HTF Bias',
@@ -128,7 +137,7 @@ def gate1_htf_bias(symbol: str, direction: str) -> GateResult:
                           f'4hour bias={bias.upper()} — no short')
 
     return GateResult(True, 1, 'HTF Bias',
-                      f'4hour bias={bias.upper()} strength={strength}')
+                      f'4hour bias={bias.upper()} (close={last_close:.2f} EMA20={last_ema:.2f})')
 
 
 # ─────────────────────────────────────────────────────────────

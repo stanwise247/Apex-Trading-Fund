@@ -297,7 +297,7 @@ def get_h_state(symbol: str = 'ES') -> dict:
 
         sess_mask = (df['date'] == today) & (df['dt'].dt.hour >= SESSION_START_UTC)
         sess_idx  = df.index[sess_mask].tolist()
-        in_session = (SESSION_START_UTC <= dt.hour < SESSION_END_UTC)
+        in_session = (dt.weekday() < 5) and (SESSION_START_UTC <= dt.hour < SESSION_END_UTC)
 
         if len(sess_idx) < 2:
             return {

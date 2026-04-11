@@ -954,7 +954,8 @@ async function loadScan(){
     S.scanData=d;
     $('scanTimeLabel').textContent='Last scan: '+(d.time||new Date().toISOString().slice(0,16));
     renderMlPred(d.setup_f_predictions||[]);
-    const fvgZones=await loadFvg();
+    let fvgZones=[];
+    try{ fvgZones=await loadFvg(); }catch(e){ console.warn('FVG load failed:',e); }
     renderAllSetups(d,fvgZones);
   }catch(e){
     document.querySelectorAll('.scan-cards').forEach(el=>el.innerHTML='<div class="empty-msg">Scan error</div>');
