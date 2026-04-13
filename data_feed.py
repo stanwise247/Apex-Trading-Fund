@@ -97,6 +97,7 @@ def fetch_recent_bars(symbol: str, timeframe: str,
     schema, agg = schema_map.get(timeframe, ('ohlcv-1m', 5))
 
     # Get schema-specific available end from Databento
+    # Fallback is now - 5min (not 30min) so stale data is not fetched on metadata timeout
     try:
         client_meta = db.Historical(key)
         r = client_meta.metadata.get_dataset_range(dataset='GLBX.MDP3')
@@ -104,7 +105,7 @@ def fetch_recent_bars(symbol: str, timeframe: str,
         avail_end = pd.Timestamp(schema_end_str.rstrip('Z')).tz_localize('UTC')
         end = (avail_end - timedelta(minutes=2)).to_pydatetime()
     except Exception:
-        end = datetime.now(timezone.utc) - timedelta(minutes=30)
+        end = datetime.now(timezone.utc) - timedelta(minutes=5)
     start = end - timedelta(hours=lookback_hours)
 
     try:
@@ -152,7 +153,7 @@ def fetch_recent_bars(symbol: str, timeframe: str,
         return result
 
     except Exception as e:
-        logger.error(f'Fetch error {symbol} {timeframe}: {e}')
+        logger.warning(f'DataFeed fetch failed {symbol} {timeframe}: {e}')
         return []
 
 
@@ -264,18 +265,23 @@ def build_htf_from_5min(symbol: str) -> dict:
 
 def refresh_symbol(symbol: str, timeframes: list = None,
                    lookback_hours: int = 48) -> dict:
-    """Refresh one symbol across timeframes."""
+    """Refresh one symbol across timeframes. Each timeframe is isolated —
+    a failure on 15min does not block 5min or other timeframes."""
     if timeframes is None:
         timeframes = ['5min', '15min']
     results = {}
     for tf in timeframes:
-        bars     = fetch_recent_bars(symbol, tf, lookback_hours)
-        inserted = store_bars(symbol, tf, bars)
-        results[tf] = inserted
-        if inserted > 0:
-            logger.info(f'DataFeed: {symbol} {tf} +{inserted} new bars')
-        else:
-            logger.debug(f'DataFeed: {symbol} {tf} up to date')
+        try:
+            bars     = fetch_recent_bars(symbol, tf, lookback_hours)
+            inserted = store_bars(symbol, tf, bars)
+            results[tf] = inserted
+            if inserted > 0:
+                logger.info(f'DataFeed: {symbol} {tf} +{inserted} new bars')
+            else:
+                logger.debug(f'DataFeed: {symbol} {tf} up to date')
+        except Exception as e:
+            logger.warning(f'DataFeed: {symbol} {tf} refresh failed — {e}')
+            results[tf] = 0
     return results
 
 

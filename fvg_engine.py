@@ -281,7 +281,8 @@ def scan_fvg(symbol, dt=None):
     # Load 15min bars for FVG detection
     df_15m  = load_bars(symbol, '15min', limit=200)
 
-    # Staleness check — 15min data must be within 30 minutes of now
+    # Staleness check — 15min bar being 15-18min old is normal (bar closes every 15min).
+    # Warn if older than 20min (data feed issue), skip scan only if older than 30min.
     if not df_15m.empty:
         last_15m_time = df_15m.index[-1]
         if last_15m_time.tzinfo is None:
@@ -290,6 +291,8 @@ def scan_fvg(symbol, dt=None):
         if age_15m > 30:
             logger.warning(f'FVG scan skipped — 15min data {round(age_15m)}min stale (last bar {last_15m_time.strftime("%H:%M")} UTC)')
             return signals
+        elif age_15m > 20:
+            logger.warning(f'FVG: 15min data {round(age_15m)}min old — feed may be delayed (last bar {last_15m_time.strftime("%H:%M")} UTC)')
 
     atr_15m = calc_atr(df_15m, 14)
     fvgs    = detect_fvgs(df_15m, atr_15m,
@@ -306,13 +309,13 @@ def scan_fvg(symbol, dt=None):
     if df_1m.empty:
         return signals
 
-    # Staleness check — last bar must be within 15 minutes of now
+    # Staleness check — 1min data must be within 20 minutes of now
     last_bar_time = df_1m.index[-1]
     if last_bar_time.tzinfo is None:
         last_bar_time = last_bar_time.tz_localize('UTC')
     age_minutes = (dt.replace(tzinfo=timezone.utc) - last_bar_time).total_seconds() / 60
-    if age_minutes > 15:
-        logger.warning(f'FVG scan skipped — data {round(age_minutes)}min stale (last bar {last_bar_time.strftime("%H:%M")} UTC)')
+    if age_minutes > 20:
+        logger.warning(f'FVG scan skipped — 1min data {round(age_minutes)}min stale (last bar {last_bar_time.strftime("%H:%M")} UTC)')
         return signals
 
     # Current bar
