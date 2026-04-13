@@ -1100,26 +1100,12 @@ _active_signals: set = set()
 def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
     """
     Return True if this signal is already active.
-    Checks in-memory set FIRST (fast, handles DB-write-failure window),
-    then DB (persistent, survives redeploys).
-    In-memory set auto-cleans when trade closes in DB.
+    Checks in-memory set FIRST — never auto-clears it (only explicit reconciliation clears it).
+    DB check is secondary: used for restart recovery (re-populates set from DB).
     """
     key = f'{symbol}_{direction}_{setup}'
-    # Fast path: in-memory set
+    # Fast path: in-memory set — if key is here, signal is active (trust it)
     if key in _active_signals:
-        # Auto-cleanup: if DB shows trade closed, remove from set
-        try:
-            conn = _db.connect()
-            row  = conn.execute(
-                "SELECT id FROM apex_trades WHERE symbol=? AND direction=? AND setup=? AND status='open' LIMIT 1",
-                (symbol, direction, setup)
-            ).fetchone()
-            conn.close()
-            if not row:
-                _active_signals.discard(key)
-                return False
-        except Exception:
-            pass  # DB check failed — trust the in-memory set
         logger.debug(f'Signal dedup (mem): {symbol} {direction} {setup}')
         return True
     # DB check (persistent, survives redeploys)
@@ -1131,6 +1117,7 @@ def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
         ).fetchone()
         conn.close()
         if row:
+            _active_signals.add(key)  # re-populate set from DB after redeploy
             logger.debug(f'Signal dedup (db): {symbol} {direction} {setup} — trade #{row[0]} already open')
             return True
         return False
@@ -1222,6 +1209,37 @@ def background_scheduler():
             monitor_trades()
         except Exception as e:
             logger.debug(f'Trade monitor error: {e}')
+
+        # ── _active_signals reconciliation (runs every cycle) ────
+        # Clear F_* keys whose trade has closed or was never logged.
+        # This is the ONLY place F keys are removed from _active_signals.
+        try:
+            _f_keys_done = set()
+            for _fk in list(_active_signals):
+                if not _fk.startswith('F_'):
+                    continue
+                # key format: "F_{symbol}_{direction}"
+                _fk_parts = _fk[2:].split('_', 1)  # ['NQ', 'long']
+                if len(_fk_parts) != 2:
+                    continue
+                _fk_sym, _fk_dir = _fk_parts
+                try:
+                    _fc = _db.connect()
+                    _fr = _fc.execute(
+                        "SELECT id FROM apex_trades WHERE symbol=? AND direction=? "
+                        "AND setup='F_rf_ml' AND status='open' LIMIT 1",
+                        (_fk_sym, _fk_dir)
+                    ).fetchone()
+                    _fc.close()
+                    if not _fr:
+                        _f_keys_done.add(_fk)
+                except Exception:
+                    pass
+            if _f_keys_done:
+                _active_signals -= _f_keys_done
+                logger.info(f'_active_signals: cleared closed F keys: {_f_keys_done}')
+        except Exception as _re:
+            logger.debug(f'_active_signals reconcile error: {_re}')
 
         # ── APEX Session Alerts ──────────────────────────────────
         try:
@@ -1430,24 +1448,33 @@ def background_scheduler():
                                     f'opposite swing trade open'
                                 )
                                 continue
+                            # F-specific dedup key — checked BEFORE any alert fires
+                            _f_key = f'F_{_sym}_{sig["direction"]}'
+                            if _f_key in _active_signals:
+                                logger.debug(f'Setup F {_sym}: dedup blocked (key={_f_key})')
+                                continue
+                            # Secondary DB check (catches restarts where set is empty)
                             if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
                                 continue
+                            # ADD TO SET IMMEDIATELY — before telegram, before log_trade
+                            # If log_trade fails, signal stays blocked until trade closes
+                            _active_signals.add(_f_key)
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
-                            _active_signals.add(f'{_sym}_{sig["direction"]}_{sig["setup"]}')
                             # Log trade — explicit ERROR if this fails so it is never silent
                             try:
                                 _f_tid = log_trade(sig)
                                 if not _f_tid:
                                     logger.error(
                                         f'Setup F {_sym}: log_trade() returned None '
-                                        f'— trade NOT logged to apex_trades'
+                                        f'— trade NOT in DB but signal deduped via _active_signals key={_f_key}'
                                     )
                                 else:
                                     logger.info(f'Setup F {_sym}: trade #{_f_tid} logged to apex_trades')
                             except Exception as _lte:
                                 logger.error(
-                                    f'Setup F {_sym}: log_trade() FAILED — trade lost: {_lte}',
+                                    f'Setup F {_sym}: log_trade() FAILED: {_lte} '
+                                    f'— signal still deduped via key={_f_key}',
                                     exc_info=True
                                 )
                                 _f_tid = None
