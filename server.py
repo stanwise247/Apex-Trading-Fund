@@ -1250,7 +1250,6 @@ def background_scheduler():
 
         # ── APEX Daily P&L Summary — fires at 19:00 UTC ──────────
         try:
-            from datetime import datetime, timezone
             _now = datetime.now(timezone.utc)
             if _now.hour == 19 and _now.minute < 5:
                 if not hasattr(background_scheduler, '_daily_summary_date') or                    background_scheduler._daily_summary_date != str(_now.date()):
@@ -1308,7 +1307,6 @@ def background_scheduler():
             from fvg_engine import scan_fvg, format_fvg_alert, FVG_PARAMS
             from live_scanner import send_telegram
             from trade_tracker import log_trade
-            from datetime import datetime, timezone
             now_utc = datetime.now(timezone.utc)
             _fvg_windows = FVG_PARAMS.get('session_windows', {}).get('NQ', [{'start': 13, 'end': 19}])
             _in_fvg_session = any(w['start'] <= now_utc.hour < w['end'] for w in _fvg_windows)
@@ -1426,7 +1424,6 @@ def background_scheduler():
                 from setup_f_ml import scan_setup_f, format_f_alert, check_model_degradation
                 from live_scanner import send_telegram
                 from trade_tracker import log_trade
-                from datetime import datetime, timezone
                 _now_utc = datetime.now(timezone.utc)
                 if not hasattr(background_scheduler, '_risk_gate'):
                     from risk_manager import RiskGate
@@ -1499,7 +1496,6 @@ def background_scheduler():
                 from setup_h_vwap import scan_setup_h, format_h_alert, log_h_paper
                 from live_scanner import send_telegram
                 from trade_tracker import log_trade
-                from datetime import datetime, timezone
                 _now_utc = datetime.now(timezone.utc)
                 if not hasattr(background_scheduler, '_risk_gate'):
                     from risk_manager import RiskGate
