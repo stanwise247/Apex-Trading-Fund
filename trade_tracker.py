@@ -249,6 +249,8 @@ def monitor_trades():
     ).fetchall()
     conn.close()
 
+    logger.info(f'monitor_trades: checking {len(trades)} open trades')
+
     if not trades:
         return
 
@@ -270,7 +272,10 @@ def monitor_trades():
         is_fvg = t.get('setup', '').startswith('FVG')
         price = get_current_price(sym, timeframe='1min' if is_fvg else '5min')
         if price is None:
+            logger.warning(f'monitor_trades: {sym} — could not get current price, skipping')
             continue
+
+        logger.info(f'monitor_trades: {sym} #{t["id"]} {direction} current={price} stop={stop} target={target}')
 
         exit_reason = None
         exit_price  = price
@@ -319,8 +324,9 @@ def monitor_trades():
             if closed:
                 send_exit_alert(closed)
                 logger.info(
-                    f'Trade #{t["id"]} {sym} {direction} closed: '
-                    f'{exit_reason} @ {exit_price:.2f} | {closed["pnl_r"]:+.2f}R'
+                    f'monitor_trades: EXIT #{t["id"]} {sym} {direction} [{t["setup"]}] '
+                    f'reason={exit_reason} entry={entry:.2f} exit={exit_price:.2f} '
+                    f'pnl={closed["pnl_r"]:+.2f}R'
                 )
 
 
