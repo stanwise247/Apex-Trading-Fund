@@ -1096,6 +1096,11 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
 # Keys: "{symbol}_{direction}_{setup}"
 _active_signals: set = set()
 
+# Per-day dedup dict — primary signal gate for ALL setups.
+# Key: f"{symbol}_{setup}_{direction}_{utc_date}" — expires naturally at midnight UTC.
+# Marked BEFORE send_telegram so even if log_trade fails, signal stays blocked all day.
+_fired_today: dict = {}
+
 
 def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
     """
@@ -1125,6 +1130,21 @@ def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
         return False
 
 
+def _check_and_mark_fired(symbol: str, setup: str, direction: str) -> bool:
+    """
+    Primary signal dedup — returns True (already fired today, skip) or
+    False (new signal — marks as fired immediately so caller can send telegram).
+    Key includes UTC date so dict auto-expires at midnight.
+    Marked BEFORE send_telegram: if log_trade fails, signal stays blocked all day.
+    """
+    key = f'{symbol}_{setup}_{direction}_{datetime.now(timezone.utc).date()}'
+    if key in _fired_today:
+        logger.debug(f'Dedup: {key} already fired today')
+        return True
+    _fired_today[key] = True
+    return False
+
+
 def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
     """Return True if an open swing trade (A/B/C) exists on symbol in the OPPOSITE direction.
     Used to block FVG and Setup E signals that conflict with an existing position."""
@@ -1148,6 +1168,15 @@ def background_scheduler():
     last_session_alerted = {}
     while True:
         now = time.time()
+
+        # ── Clear _fired_today at midnight UTC ────────────────────
+        _today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        if not hasattr(background_scheduler, '_fired_today_date') or \
+                background_scheduler._fired_today_date != _today_utc:
+            _fired_today.clear()
+            background_scheduler._fired_today_date = _today_utc
+            logger.info(f'_fired_today reset for new day: {_today_utc}')
+
         if now - last_daily > 86400:
             logger.info('Running daily data update...')
             for sym in INSTRUMENTS:
@@ -1210,36 +1239,8 @@ def background_scheduler():
         except Exception as e:
             logger.debug(f'Trade monitor error: {e}')
 
-        # ── _active_signals reconciliation (runs every cycle) ────
-        # Clear F_* keys whose trade has closed or was never logged.
-        # This is the ONLY place F keys are removed from _active_signals.
-        try:
-            _f_keys_done = set()
-            for _fk in list(_active_signals):
-                if not _fk.startswith('F_'):
-                    continue
-                # key format: "F_{symbol}_{direction}"
-                _fk_parts = _fk[2:].split('_', 1)  # ['NQ', 'long']
-                if len(_fk_parts) != 2:
-                    continue
-                _fk_sym, _fk_dir = _fk_parts
-                try:
-                    _fc = _db.connect()
-                    _fr = _fc.execute(
-                        "SELECT id FROM apex_trades WHERE symbol=? AND direction=? "
-                        "AND setup='F_rf_ml' AND status='open' LIMIT 1",
-                        (_fk_sym, _fk_dir)
-                    ).fetchone()
-                    _fc.close()
-                    if not _fr:
-                        _f_keys_done.add(_fk)
-                except Exception:
-                    pass
-            if _f_keys_done:
-                _active_signals -= _f_keys_done
-                logger.info(f'_active_signals: cleared closed F keys: {_f_keys_done}')
-        except Exception as _re:
-            logger.debug(f'_active_signals reconcile error: {_re}')
+        # _active_signals reconciliation removed — replaced by _fired_today dedup.
+        # _fired_today expires automatically at midnight; no per-cycle DB reconciliation needed.
 
         # ── APEX Session Alerts ──────────────────────────────────
         try:
@@ -1333,9 +1334,17 @@ def background_scheduler():
                                 f'opposite swing trade open on {sig["symbol"]}'
                             )
                             continue
+                        if _check_and_mark_fired(sig['symbol'], sig.get('setup', 'FVG'), sig['direction']):
+                            continue
+                        if _is_signal_already_active(sig['symbol'], sig['direction'], sig.get('setup', 'FVG')):
+                            continue
                         msg = format_fvg_alert(sig) + _risk_footer
                         send_telegram(msg)
                         _fvg_tid = log_trade(sig)
+                        if not _fvg_tid:
+                            logger.error(f'CRITICAL: log_trade() returned None for FVG NQ {sig["direction"]} — trade NOT logged')
+                        else:
+                            logger.info(f'Trade logged: id={_fvg_tid} NQ {sig["direction"]} {sig.get("setup","FVG")}')
                         _execute_via_tradovate(sig, _fvg_tid)
                         logger.info(
                             f'FVG signal: NQ {sig["direction"].upper()} entry={sig["entry"]} '
@@ -1367,49 +1376,46 @@ def background_scheduler():
                 )
                 signals = run_scan()
                 for result in signals:
-                    # Correlation filter: suppress FVG/Setup E if opposite swing trade open
-                    if getattr(result, 'setup', '') == 'E_ema50_pullback':
-                        if _has_opposite_swing_trade(result.symbol, result.direction):
-                            logger.info(
-                                f'Setup E {result.direction} suppressed — '
-                                f'opposite swing trade open on {result.symbol}'
-                            )
+                    _sym   = result.symbol
+                    _dirn  = result.direction
+                    _setup = getattr(result, 'setup', '')
+                    # Correlation filter: suppress Setup E if opposite swing trade open
+                    if _setup == 'E_ema50_pullback':
+                        if _has_opposite_swing_trade(_sym, _dirn):
+                            logger.info(f'Setup E {_dirn} suppressed — opposite swing trade open on {_sym}')
                             continue
-                    # DB dedup — skip if open trade already exists for this signal
-                    if _is_signal_already_active(
-                        result.symbol, result.direction,
-                        getattr(result, 'setup', '')
-                    ):
+                    # Unified dedup: mark fired BEFORE telegram
+                    if _check_and_mark_fired(_sym, _setup, _dirn):
                         continue
-                    if tracker.is_new(result):
-                        msg = (format_alert_e(result)
-                               if getattr(result, 'setup', '') == 'E_ema50_pullback'
-                               else format_alert(result))
-                        send_telegram(msg + _risk_footer)
-                        _active_signals.add(f'{result.symbol}_{result.direction}_{getattr(result, "setup", "")}')
-                        tracker.mark_sent(result)
-                        _sig_dict = {
-                            'symbol':    result.symbol,
-                            'direction': result.direction,
-                            'setup':     result.setup,
-                            'mode':      'swing',
-                            'entry':     result.entry,
-                            'stop':      result.stop,
-                            'target':    result.target,
-                            'rr':        result.rr,
-                            'session':   getattr(result, 'session', 'NY Primary'),
-                            'quality':   getattr(result, 'quality', 'primary'),
-                        }
-                        _apex_tid = log_trade(_sig_dict)
-                        _execute_via_tradovate(_sig_dict, _apex_tid)
-                        logger.info(
-                            f'APEX signal: {result.symbol} {result.direction} {result.setup} '
-                            f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
-                        )
+                    if _is_signal_already_active(_sym, _dirn, _setup):
+                        continue
+                    msg = (format_alert_e(result) if _setup == 'E_ema50_pullback'
+                           else format_alert(result))
+                    send_telegram(msg + _risk_footer)
+                    tracker.mark_sent(result)
+                    _sig_dict = {
+                        'symbol':    _sym,
+                        'direction': _dirn,
+                        'setup':     _setup,
+                        'mode':      'swing',
+                        'entry':     result.entry,
+                        'stop':      result.stop,
+                        'target':    result.target,
+                        'rr':        result.rr,
+                        'session':   getattr(result, 'session', 'NY Primary'),
+                        'quality':   getattr(result, 'quality', 'primary'),
+                    }
+                    _apex_tid = log_trade(_sig_dict)
+                    if not _apex_tid:
+                        logger.error(f'CRITICAL: log_trade() returned None for {_sym} {_dirn} {_setup} — trade NOT logged')
+                    else:
+                        logger.info(f'Trade logged: id={_apex_tid} {_sym} {_dirn} {_setup}')
+                    _execute_via_tradovate(_sig_dict, _apex_tid)
+                    logger.info(f'APEX signal: {_sym} {_dirn} {_setup} regime={_regime.label} dd_mult={_dd_mult:.2f}×')
                 if not signals:
                     logger.debug('APEX scan: no signals')
         except Exception as e:
-            logger.debug(f'APEX scanner error: {e}')
+            logger.warning(f'APEX scanner error: {e}', exc_info=True)
 
         # ── Setup F — Random Forest ML (every 5 min) ─────────────
         if not hasattr(background_scheduler, '_last_setup_f'):
@@ -1443,47 +1449,31 @@ def background_scheduler():
                         sig = scan_setup_f(_sym, _now_utc)
                         if sig:
                             if _has_opposite_swing_trade(_sym, sig['direction']):
-                                logger.info(
-                                    f'Setup F {_sym} {sig["direction"]} suppressed — '
-                                    f'opposite swing trade open'
-                                )
+                                logger.info(f'Setup F {_sym} {sig["direction"]} suppressed — opposite swing trade open')
                                 continue
-                            # F-specific dedup key — checked BEFORE any alert fires
-                            _f_key = f'F_{_sym}_{sig["direction"]}'
-                            if _f_key in _active_signals:
-                                logger.debug(f'Setup F {_sym}: dedup blocked (key={_f_key})')
+                            # Unified dedup: mark fired BEFORE telegram
+                            # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
+                            if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
                                 continue
-                            # Secondary DB check (catches restarts where set is empty)
                             if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
                                 continue
-                            # ADD TO SET IMMEDIATELY — before telegram, before log_trade
-                            # If log_trade fails, signal stays blocked until trade closes
-                            _active_signals.add(_f_key)
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
-                            # Log trade — explicit ERROR if this fails so it is never silent
                             try:
                                 _f_tid = log_trade(sig)
                                 if not _f_tid:
                                     logger.error(
-                                        f'Setup F {_sym}: log_trade() returned None '
-                                        f'— trade NOT in DB but signal deduped via _active_signals key={_f_key}'
+                                        f'CRITICAL: log_trade() returned None for Setup F {_sym} {sig["direction"]} '
+                                        f'— trade NOT in DB (signal blocked all day via _fired_today)'
                                     )
                                 else:
-                                    logger.info(f'Setup F {_sym}: trade #{_f_tid} logged to apex_trades')
+                                    logger.info(f'Trade logged: id={_f_tid} {_sym} {sig["direction"]} {sig["setup"]}')
                             except Exception as _lte:
-                                logger.error(
-                                    f'Setup F {_sym}: log_trade() FAILED: {_lte} '
-                                    f'— signal still deduped via key={_f_key}',
-                                    exc_info=True
-                                )
+                                logger.error(f'CRITICAL: log_trade() FAILED for Setup F {_sym}: {_lte}', exc_info=True)
                                 _f_tid = None
                             if _f_tid:
                                 _execute_via_tradovate(sig, _f_tid)
-                            logger.info(
-                                f'Setup F signal: {_sym} {sig["direction"].upper()} '
-                                f'conf={sig["confidence"]:.0%} regime={_regime.label}'
-                            )
+                            logger.info(f'Setup F signal: {_sym} {sig["direction"].upper()} conf={sig["confidence"]:.0%} regime={_regime.label}')
                     except Exception as _fe:
                         logger.warning(f'Setup F {_sym} error: {_fe}')
             except Exception as e:
@@ -1527,19 +1517,22 @@ def background_scheduler():
                         sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
                         if sig_es:
                             if not _has_opposite_swing_trade('ES', sig_es['direction']):
-                                if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
-                                    msg = format_h_alert(sig_es) + _risk_footer
-                                    send_telegram(msg)
-                                    _active_signals.add(f'ES_{sig_es["direction"]}_{sig_es["setup"]}')
-                                    try:
-                                        _h_tid = log_trade(sig_es)
-                                        if not _h_tid:
-                                            logger.error('Setup H ES: log_trade() returned None — trade NOT logged')
-                                        else:
-                                            logger.info(f'Setup H ES: trade #{_h_tid} logged to apex_trades')
-                                    except Exception as _lte:
-                                        logger.error(f'Setup H ES: log_trade() FAILED — trade lost: {_lte}', exc_info=True)
-                                    logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
+                                if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
+                                    if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
+                                        msg = format_h_alert(sig_es) + _risk_footer
+                                        send_telegram(msg)
+                                        try:
+                                            _h_tid = log_trade(sig_es)
+                                            if not _h_tid:
+                                                logger.error('CRITICAL: log_trade() returned None for Setup H ES — trade NOT logged')
+                                            else:
+                                                logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
+                                        except Exception as _lte:
+                                            logger.error(f'CRITICAL: log_trade() FAILED for Setup H ES: {_lte}', exc_info=True)
+                                            _h_tid = None
+                                        if _h_tid:
+                                            _execute_via_tradovate(sig_es, _h_tid)
+                                        logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
                             else:
                                 logger.info('Setup H ES suppressed — opposite swing trade open')
                     else:
