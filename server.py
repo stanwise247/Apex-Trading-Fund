@@ -1186,32 +1186,40 @@ def background_scheduler():
                     logger.warning('Daily update failed ' + sym + ': ' + str(e))
             last_daily = now
 
-        # ── APEX Data Feed — refresh every 5 minutes ─────────────
+        # ── APEX Data Feed ────────────────────────────────────────
         if not hasattr(background_scheduler, '_last_feed'):
-            background_scheduler._last_feed    = 0
-            background_scheduler._last_htf     = 0
-            background_scheduler._last_nq_1min = 0
-        # NQ 1min refresh — every 60 seconds for FVG scanner
-        if now - background_scheduler._last_nq_1min > 60:
+            background_scheduler._last_feed         = 0
+            background_scheduler._last_htf          = 0
+            background_scheduler._last_1min_refresh = 0
+
+        # 1min refresh — NQ, ES, GC every 60s during session (13:00-19:00 UTC)
+        _now_utc_hr = datetime.now(timezone.utc).hour
+        _in_session = 13 <= _now_utc_hr < 19
+        if _in_session and now - background_scheduler._last_1min_refresh > 60:
             try:
                 from data_feed import refresh_symbol
-                refresh_symbol('NQ', ['1min'], lookback_hours=1)
+                for _sym1 in ('NQ', 'ES', 'GC'):
+                    refresh_symbol(_sym1, ['1min'], lookback_hours=2)
             except Exception as e:
-                logger.debug(f'NQ 1min refresh error: {e}')
-            background_scheduler._last_nq_1min = now
-        # Full refresh — every 5 minutes
+                logger.warning(f'1min refresh error: {e}')
+            background_scheduler._last_1min_refresh = now
+
+        # 5min + 15min every 5 minutes; 1hour + 4hour every 30 minutes
         if now - background_scheduler._last_feed > 300:
             try:
-                from data_feed import refresh_all
+                from data_feed import refresh_all, check_data_freshness
                 include_htf = (now - background_scheduler._last_htf) > 1800
                 results     = refresh_all(include_htf=include_htf)
                 if include_htf:
                     background_scheduler._last_htf = now
-                total = sum(v for sym in results.values() for v in sym.values())
-                if total > 0:
-                    logger.info(f'DataFeed: +{total} new bars')
+                for _sym, _tfs in results.items():
+                    for _tf, _cnt in _tfs.items():
+                        if _cnt > 0:
+                            logger.info(f'DataFeed: {_sym} {_tf} +{_cnt} new bars')
+                # Check freshness and alert if any critical tf is stale
+                check_data_freshness()
             except Exception as e:
-                logger.warning(f'DataFeed error: {e}')
+                logger.warning(f'DataFeed refresh error: {e}')
             background_scheduler._last_feed = now
         if now - last_macro_log > 14400:
             try:

@@ -1,0 +1,636 @@
+{
+  "generated_at": "2026-04-11T16:36:02.979606+00:00",
+  "symbols": [
+    "NQ",
+    "ES"
+  ],
+  "is_period": "2024-09-01 to 2025-09-30",
+  "oos_period": "2025-10-01 to 2026-03-31",
+  "slippage_pts": 0.25,
+  "strategies": {
+    "S1_NQ": {
+      "name": "NY Open Momentum Continuation",
+      "symbol": "NQ",
+      "is": {
+        "n": 275,
+        "win_rate": 0.2764,
+        "avg_pnl_pts": -1.5055,
+        "avg_pnl_usd": -30.1091,
+        "total_pnl_usd": -8280.0,
+        "sharpe": -0.8524,
+        "max_dd_usd": 12855.0,
+        "avg_hold_minutes": 16.22
+      },
+      "oos": {
+        "n": 120,
+        "win_rate": 0.25,
+        "avg_pnl_pts": -2.5042,
+        "avg_pnl_usd": -50.0833,
+        "total_pnl_usd": -6010.0,
+        "sharpe": -1.5168,
+        "max_dd_usd": 12450.0,
+        "avg_hold_minutes": 16.64
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S1_ES": {
+      "name": "NY Open Momentum Continuation",
+      "symbol": "ES",
+      "is": {
+        "n": 275,
+        "win_rate": 0.2509,
+        "avg_pnl_pts": -0.6486,
+        "avg_pnl_usd": -32.4318,
+        "total_pnl_usd": -8918.75,
+        "sharpe": -1.4932,
+        "max_dd_usd": 11325.0,
+        "avg_hold_minutes": 14.65
+      },
+      "oos": {
+        "n": 120,
+        "win_rate": 0.2417,
+        "avg_pnl_pts": -0.8438,
+        "avg_pnl_usd": -42.1875,
+        "total_pnl_usd": -5062.5,
+        "sharpe": -2.5119,
+        "max_dd_usd": 7306.25,
+        "avg_hold_minutes": 14.76
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S2_T1.0_NQ": {
+      "name": "VWAP Micro Reversion T=1.0",
+      "symbol": "NQ",
+      "is": {
+        "n": 7102,
+        "win_rate": 0.2182,
+        "avg_pnl_pts": -0.9283,
+        "avg_pnl_usd": -18.5662,
+        "total_pnl_usd": -131856.97,
+        "sharpe": -2.7405,
+        "max_dd_usd": 137253.81,
+        "avg_hold_minutes": 9.11
+      },
+      "oos": {
+        "n": 3142,
+        "win_rate": 0.2336,
+        "avg_pnl_pts": -0.9359,
+        "avg_pnl_usd": -18.7182,
+        "total_pnl_usd": -58812.58,
+        "sharpe": -2.2851,
+        "max_dd_usd": 79333.32,
+        "avg_hold_minutes": 8.81
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S2_T1.0_ES": {
+      "name": "VWAP Micro Reversion T=1.0",
+      "symbol": "ES",
+      "is": {
+        "n": 7895,
+        "win_rate": 0.1842,
+        "avg_pnl_pts": -0.5841,
+        "avg_pnl_usd": -29.2065,
+        "total_pnl_usd": -230585.57,
+        "sharpe": -8.8413,
+        "max_dd_usd": 232095.15,
+        "avg_hold_minutes": 7.68
+      },
+      "oos": {
+        "n": 3345,
+        "win_rate": 0.2093,
+        "avg_pnl_pts": -0.5528,
+        "avg_pnl_usd": -27.6396,
+        "total_pnl_usd": -92454.32,
+        "sharpe": -6.8882,
+        "max_dd_usd": 102084.0,
+        "avg_hold_minutes": 7.89
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S2_T1.5_NQ": {
+      "name": "VWAP Micro Reversion T=1.5",
+      "symbol": "NQ",
+      "is": {
+        "n": 5947,
+        "win_rate": 0.1872,
+        "avg_pnl_pts": -0.9642,
+        "avg_pnl_usd": -19.285,
+        "total_pnl_usd": -114687.66,
+        "sharpe": -2.3872,
+        "max_dd_usd": 119709.15,
+        "avg_hold_minutes": 10.29
+      },
+      "oos": {
+        "n": 2633,
+        "win_rate": 0.2009,
+        "avg_pnl_pts": -1.2162,
+        "avg_pnl_usd": -24.3248,
+        "total_pnl_usd": -64047.23,
+        "sharpe": -2.6498,
+        "max_dd_usd": 83007.03,
+        "avg_hold_minutes": 9.95
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S2_T1.5_ES": {
+      "name": "VWAP Micro Reversion T=1.5",
+      "symbol": "ES",
+      "is": {
+        "n": 6738,
+        "win_rate": 0.1555,
+        "avg_pnl_pts": -0.591,
+        "avg_pnl_usd": -29.5513,
+        "total_pnl_usd": -199116.35,
+        "sharpe": -7.7377,
+        "max_dd_usd": 200993.93,
+        "avg_hold_minutes": 8.51
+      },
+      "oos": {
+        "n": 2851,
+        "win_rate": 0.1778,
+        "avg_pnl_pts": -0.5767,
+        "avg_pnl_usd": -28.8336,
+        "total_pnl_usd": -82204.58,
+        "sharpe": -6.3876,
+        "max_dd_usd": 92791.41,
+        "avg_hold_minutes": 8.8
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S2_T2.0_NQ": {
+      "name": "VWAP Micro Reversion T=2.0",
+      "symbol": "NQ",
+      "is": {
+        "n": 5056,
+        "win_rate": 0.1663,
+        "avg_pnl_pts": -0.952,
+        "avg_pnl_usd": -19.0396,
+        "total_pnl_usd": -96264.09,
+        "sharpe": -2.0979,
+        "max_dd_usd": 101972.64,
+        "avg_hold_minutes": 11.38
+      },
+      "oos": {
+        "n": 2246,
+        "win_rate": 0.1839,
+        "avg_pnl_pts": -1.1353,
+        "avg_pnl_usd": -22.7056,
+        "total_pnl_usd": -50996.85,
+        "sharpe": -2.061,
+        "max_dd_usd": 73024.2,
+        "avg_hold_minutes": 11.01
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S2_T2.0_ES": {
+      "name": "VWAP Micro Reversion T=2.0",
+      "symbol": "ES",
+      "is": {
+        "n": 5867,
+        "win_rate": 0.141,
+        "avg_pnl_pts": -0.5934,
+        "avg_pnl_usd": -29.6682,
+        "total_pnl_usd": -174063.43,
+        "sharpe": -6.7303,
+        "max_dd_usd": 176443.14,
+        "avg_hold_minutes": 9.22
+      },
+      "oos": {
+        "n": 2431,
+        "win_rate": 0.1596,
+        "avg_pnl_pts": -0.5765,
+        "avg_pnl_usd": -28.8231,
+        "total_pnl_usd": -70069.01,
+        "sharpe": -5.5881,
+        "max_dd_usd": 79042.32,
+        "avg_hold_minutes": 9.68
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S3_NQ": {
+      "name": "1min Momentum Burst",
+      "symbol": "NQ",
+      "is": {
+        "n": 437,
+        "win_rate": 0.4027,
+        "avg_pnl_pts": -0.5561,
+        "avg_pnl_usd": -11.1213,
+        "total_pnl_usd": -4860.0,
+        "sharpe": -0.4514,
+        "max_dd_usd": 15635.0,
+        "avg_hold_minutes": 7.2
+      },
+      "oos": {
+        "n": 204,
+        "win_rate": 0.4461,
+        "avg_pnl_pts": 3.087,
+        "avg_pnl_usd": 61.7402,
+        "total_pnl_usd": 12595.0,
+        "sharpe": 2.0272,
+        "max_dd_usd": 6155.0,
+        "avg_hold_minutes": 7.01
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S3_ES": {
+      "name": "1min Momentum Burst",
+      "symbol": "ES",
+      "is": {
+        "n": 316,
+        "win_rate": 0.3418,
+        "avg_pnl_pts": -0.7658,
+        "avg_pnl_usd": -38.2911,
+        "total_pnl_usd": -12100.0,
+        "sharpe": -2.6832,
+        "max_dd_usd": 13450.0,
+        "avg_hold_minutes": 6.9
+      },
+      "oos": {
+        "n": 163,
+        "win_rate": 0.362,
+        "avg_pnl_pts": -0.7086,
+        "avg_pnl_usd": -35.4294,
+        "total_pnl_usd": -5775.0,
+        "sharpe": -2.263,
+        "max_dd_usd": 7825.0,
+        "avg_hold_minutes": 6.25
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S4_NQ": {
+      "name": "Absorption Reversal",
+      "symbol": "NQ",
+      "is": {
+        "n": 0,
+        "win_rate": 0.0,
+        "avg_pnl_pts": 0.0,
+        "avg_pnl_usd": 0.0,
+        "total_pnl_usd": 0.0,
+        "sharpe": 0.0,
+        "max_dd_usd": 0.0,
+        "avg_hold_minutes": 0.0
+      },
+      "oos": {
+        "n": 0,
+        "win_rate": 0.0,
+        "avg_pnl_pts": 0.0,
+        "avg_pnl_usd": 0.0,
+        "total_pnl_usd": 0.0,
+        "sharpe": 0.0,
+        "max_dd_usd": 0.0,
+        "avg_hold_minutes": 0.0
+      },
+      "pass": false,
+      "flag_short_holds": true
+    },
+    "S4_ES": {
+      "name": "Absorption Reversal",
+      "symbol": "ES",
+      "is": {
+        "n": 0,
+        "win_rate": 0.0,
+        "avg_pnl_pts": 0.0,
+        "avg_pnl_usd": 0.0,
+        "total_pnl_usd": 0.0,
+        "sharpe": 0.0,
+        "max_dd_usd": 0.0,
+        "avg_hold_minutes": 0.0
+      },
+      "oos": {
+        "n": 0,
+        "win_rate": 0.0,
+        "avg_pnl_pts": 0.0,
+        "avg_pnl_usd": 0.0,
+        "total_pnl_usd": 0.0,
+        "sharpe": 0.0,
+        "max_dd_usd": 0.0,
+        "avg_hold_minutes": 0.0
+      },
+      "pass": false,
+      "flag_short_holds": true
+    },
+    "S5_NQ": {
+      "name": "1min BOS Scalp",
+      "symbol": "NQ",
+      "is": {
+        "n": 2041,
+        "win_rate": 0.4498,
+        "avg_pnl_pts": 0.9607,
+        "avg_pnl_usd": 19.2148,
+        "total_pnl_usd": 39217.5,
+        "sharpe": 1.0123,
+        "max_dd_usd": 24770.0,
+        "avg_hold_minutes": 19.63
+      },
+      "oos": {
+        "n": 847,
+        "win_rate": 0.4734,
+        "avg_pnl_pts": 2.0258,
+        "avg_pnl_usd": 40.5165,
+        "total_pnl_usd": 34317.5,
+        "sharpe": 1.668,
+        "max_dd_usd": 20680.0,
+        "avg_hold_minutes": 19.78
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S5_ES": {
+      "name": "1min BOS Scalp",
+      "symbol": "ES",
+      "is": {
+        "n": 1790,
+        "win_rate": 0.4486,
+        "avg_pnl_pts": -0.1838,
+        "avg_pnl_usd": -9.1899,
+        "total_pnl_usd": -16450.0,
+        "sharpe": -0.7028,
+        "max_dd_usd": 33856.25,
+        "avg_hold_minutes": 18.34
+      },
+      "oos": {
+        "n": 785,
+        "win_rate": 0.4446,
+        "avg_pnl_pts": -0.1288,
+        "avg_pnl_usd": -6.4411,
+        "total_pnl_usd": -5056.25,
+        "sharpe": -0.4758,
+        "max_dd_usd": 18193.75,
+        "avg_hold_minutes": 19.1
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S6_NQ": {
+      "name": "RSI Exhaustion",
+      "symbol": "NQ",
+      "is": {
+        "n": 241,
+        "win_rate": 0.3734,
+        "avg_pnl_pts": 1.4771,
+        "avg_pnl_usd": 29.5425,
+        "total_pnl_usd": 7119.74,
+        "sharpe": 1.4502,
+        "max_dd_usd": 5922.17,
+        "avg_hold_minutes": 3.71
+      },
+      "oos": {
+        "n": 117,
+        "win_rate": 0.3846,
+        "avg_pnl_pts": 1.2036,
+        "avg_pnl_usd": 24.0717,
+        "total_pnl_usd": 2816.39,
+        "sharpe": 1.1313,
+        "max_dd_usd": 4155.24,
+        "avg_hold_minutes": 4.08
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S6_ES": {
+      "name": "RSI Exhaustion",
+      "symbol": "ES",
+      "is": {
+        "n": 247,
+        "win_rate": 0.3117,
+        "avg_pnl_pts": -0.5114,
+        "avg_pnl_usd": -25.5705,
+        "total_pnl_usd": -6315.92,
+        "sharpe": -2.4466,
+        "max_dd_usd": 7850.54,
+        "avg_hold_minutes": 3.54
+      },
+      "oos": {
+        "n": 110,
+        "win_rate": 0.3091,
+        "avg_pnl_pts": -0.2738,
+        "avg_pnl_usd": -13.6887,
+        "total_pnl_usd": -1505.76,
+        "sharpe": -1.0503,
+        "max_dd_usd": 4319.96,
+        "avg_hold_minutes": 3.52
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S7_NQ": {
+      "name": "Opening Range Breakout",
+      "symbol": "NQ",
+      "is": {
+        "n": 10,
+        "win_rate": 0.3,
+        "avg_pnl_pts": -14.425,
+        "avg_pnl_usd": -288.5,
+        "total_pnl_usd": -2885.0,
+        "sharpe": -11.5567,
+        "max_dd_usd": 3475.0,
+        "avg_hold_minutes": 6.9
+      },
+      "oos": {
+        "n": 2,
+        "win_rate": 1.0,
+        "avg_pnl_pts": 8.625,
+        "avg_pnl_usd": 172.5,
+        "total_pnl_usd": 345.0,
+        "sharpe": 0.0,
+        "max_dd_usd": 0.0,
+        "avg_hold_minutes": 2.0
+      },
+      "pass": false,
+      "flag_short_holds": true
+    },
+    "S7_ES": {
+      "name": "Opening Range Breakout",
+      "symbol": "ES",
+      "is": {
+        "n": 9,
+        "win_rate": 0.1111,
+        "avg_pnl_pts": -2.9167,
+        "avg_pnl_usd": -145.8333,
+        "total_pnl_usd": -1312.5,
+        "sharpe": -30.8856,
+        "max_dd_usd": 1187.5,
+        "avg_hold_minutes": 5.22
+      },
+      "oos": {
+        "n": 2,
+        "win_rate": 0.5,
+        "avg_pnl_pts": 1.25,
+        "avg_pnl_usd": 62.5,
+        "total_pnl_usd": 125.0,
+        "sharpe": 0.0,
+        "max_dd_usd": 43.75,
+        "avg_hold_minutes": 7.5
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S8_NQ": {
+      "name": "Micro Mean Reversion After Spike",
+      "symbol": "NQ",
+      "is": {
+        "n": 564,
+        "win_rate": 0.3316,
+        "avg_pnl_pts": -1.3057,
+        "avg_pnl_usd": -26.1131,
+        "total_pnl_usd": -14727.79,
+        "sharpe": -1.1848,
+        "max_dd_usd": 16106.11,
+        "avg_hold_minutes": 5.51
+      },
+      "oos": {
+        "n": 253,
+        "win_rate": 0.3794,
+        "avg_pnl_pts": 1.6444,
+        "avg_pnl_usd": 32.8886,
+        "total_pnl_usd": 8320.82,
+        "sharpe": 1.3208,
+        "max_dd_usd": 6780.59,
+        "avg_hold_minutes": 6.09
+      },
+      "pass": false,
+      "flag_short_holds": false
+    },
+    "S8_ES": {
+      "name": "Micro Mean Reversion After Spike",
+      "symbol": "ES",
+      "is": {
+        "n": 531,
+        "win_rate": 0.3503,
+        "avg_pnl_pts": -0.6334,
+        "avg_pnl_usd": -31.6702,
+        "total_pnl_usd": -16816.88,
+        "sharpe": -2.268,
+        "max_dd_usd": 18193.61,
+        "avg_hold_minutes": 5.9
+      },
+      "oos": {
+        "n": 220,
+        "win_rate": 0.3091,
+        "avg_pnl_pts": -0.2816,
+        "avg_pnl_usd": -14.0802,
+        "total_pnl_usd": -3097.64,
+        "sharpe": -0.957,
+        "max_dd_usd": 5434.63,
+        "avg_hold_minutes": 5.61
+      },
+      "pass": false,
+      "flag_short_holds": false
+    }
+  },
+  "rankings": [
+    {
+      "key": "S3_NQ",
+      "oos_sharpe": 2.0272,
+      "pass": false
+    },
+    {
+      "key": "S5_NQ",
+      "oos_sharpe": 1.668,
+      "pass": false
+    },
+    {
+      "key": "S8_NQ",
+      "oos_sharpe": 1.3208,
+      "pass": false
+    },
+    {
+      "key": "S6_NQ",
+      "oos_sharpe": 1.1313,
+      "pass": false
+    },
+    {
+      "key": "S4_NQ",
+      "oos_sharpe": 0.0,
+      "pass": false
+    },
+    {
+      "key": "S4_ES",
+      "oos_sharpe": 0.0,
+      "pass": false
+    },
+    {
+      "key": "S7_NQ",
+      "oos_sharpe": 0.0,
+      "pass": false
+    },
+    {
+      "key": "S7_ES",
+      "oos_sharpe": 0.0,
+      "pass": false
+    },
+    {
+      "key": "S5_ES",
+      "oos_sharpe": -0.4758,
+      "pass": false
+    },
+    {
+      "key": "S8_ES",
+      "oos_sharpe": -0.957,
+      "pass": false
+    },
+    {
+      "key": "S6_ES",
+      "oos_sharpe": -1.0503,
+      "pass": false
+    },
+    {
+      "key": "S1_NQ",
+      "oos_sharpe": -1.5168,
+      "pass": false
+    },
+    {
+      "key": "S2_T2.0_NQ",
+      "oos_sharpe": -2.061,
+      "pass": false
+    },
+    {
+      "key": "S3_ES",
+      "oos_sharpe": -2.263,
+      "pass": false
+    },
+    {
+      "key": "S2_T1.0_NQ",
+      "oos_sharpe": -2.2851,
+      "pass": false
+    },
+    {
+      "key": "S1_ES",
+      "oos_sharpe": -2.5119,
+      "pass": false
+    },
+    {
+      "key": "S2_T1.5_NQ",
+      "oos_sharpe": -2.6498,
+      "pass": false
+    },
+    {
+      "key": "S2_T2.0_ES",
+      "oos_sharpe": -5.5881,
+      "pass": false
+    },
+    {
+      "key": "S2_T1.5_ES",
+      "oos_sharpe": -6.3876,
+      "pass": false
+    },
+    {
+      "key": "S2_T1.0_ES",
+      "oos_sharpe": -6.8882,
+      "pass": false
+    }
+  ],
+  "top3_passing": [],
+  "summary": "=== FINAL RESULTS ===\nS1_NQ: IS_n=275 OOS_n=120 IS_sharpe=-0.852 OOS_sharpe=-1.517 IS_exp_usd=-30.11 PASS=False\nS1_ES: IS_n=275 OOS_n=120 IS_sharpe=-1.493 OOS_sharpe=-2.512 IS_exp_usd=-32.43 PASS=False\nS2_T1.0_NQ: IS_n=7102 OOS_n=3142 IS_sharpe=-2.740 OOS_sharpe=-2.285 IS_exp_usd=-18.57 PASS=False\nS2_T1.0_ES: IS_n=7895 OOS_n=3345 IS_sharpe=-8.841 OOS_sharpe=-6.888 IS_exp_usd=-29.21 PASS=False\nS2_T1.5_NQ: IS_n=5947 OOS_n=2633 IS_sharpe=-2.387 OOS_sharpe=-2.650 IS_exp_usd=-19.29 PASS=False\nS2_T1.5_ES: IS_n=6738 OOS_n=2851 IS_sharpe=-7.738 OOS_sharpe=-6.388 IS_exp_usd=-29.55 PASS=False\nS2_T2.0_NQ: IS_n=5056 OOS_n=2246 IS_sharpe=-2.098 OOS_sharpe=-2.061 IS_exp_usd=-19.04 PASS=False\nS2_T2.0_ES: IS_n=5867 OOS_n=2431 IS_sharpe=-6.730 OOS_sharpe=-5.588 IS_exp_usd=-29.67 PASS=False\nS3_NQ: IS_n=437 OOS_n=204 IS_sharpe=-0.451 OOS_sharpe=2.027 IS_exp_usd=-11.12 PASS=False\nS3_ES: IS_n=316 OOS_n=163 IS_sharpe=-2.683 OOS_sharpe=-2.263 IS_exp_usd=-38.29 PASS=False\nS4_NQ: IS_n=0 OOS_n=0 IS_sharpe=0.000 OOS_sharpe=0.000 IS_exp_usd=0.00 PASS=False\nS4_ES: IS_n=0 OOS_n=0 IS_sharpe=0.000 OOS_sharpe=0.000 IS_exp_usd=0.00 PASS=False\nS5_NQ: IS_n=2041 OOS_n=847 IS_sharpe=1.012 OOS_sharpe=1.668 IS_exp_usd=19.21 PASS=False\nS5_ES: IS_n=1790 OOS_n=785 IS_sharpe=-0.703 OOS_sharpe=-0.476 IS_exp_usd=-9.19 PASS=False\nS6_NQ: IS_n=241 OOS_n=117 IS_sharpe=1.450 OOS_sharpe=1.131 IS_exp_usd=29.54 PASS=False\nS6_ES: IS_n=247 OOS_n=110 IS_sharpe=-2.447 OOS_sharpe=-1.050 IS_exp_usd=-25.57 PASS=False\nS7_NQ: IS_n=10 OOS_n=2 IS_sharpe=-11.557 OOS_sharpe=0.000 IS_exp_usd=-288.50 PASS=False\nS7_ES: IS_n=9 OOS_n=2 IS_sharpe=-30.886 OOS_sharpe=0.000 IS_exp_usd=-145.83 PASS=False\nS8_NQ: IS_n=564 OOS_n=253 IS_sharpe=-1.185 OOS_sharpe=1.321 IS_exp_usd=-26.11 PASS=False\nS8_ES: IS_n=531 OOS_n=220 IS_sharpe=-2.268 OOS_sharpe=-0.957 IS_exp_usd=-31.67 PASS=False\nPASSING: []\nTOP3: []"
+}

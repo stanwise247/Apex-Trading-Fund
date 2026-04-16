@@ -12,6 +12,7 @@ Instruments: NQ, ES, GC
 import logging
 import json
 import os
+import time
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
@@ -25,6 +26,15 @@ INSTRUMENTS = {
     'ES': 'ES.c.0',
     'GC': 'GC.c.0',
 }
+
+# Session hours for staleness checks (UTC)
+_SESSION_CHECK_START = 13   # 9 AM ET
+_SESSION_CHECK_END   = 20   # 4 PM ET (1 hour past close for lingering checks)
+_MAX_STALE_MINUTES   = 10   # alert threshold during session
+_ALERT_THROTTLE_SEC  = 1800 # max one alert per 30 min per symbol/tf
+
+# Module-level throttle state for stale alerts
+_stale_alerted: dict = {}
 
 
 def get_api_key() -> str:
@@ -70,6 +80,11 @@ def fetch_recent_bars(symbol: str, timeframe: str,
     """
     Fetch recent bars using Databento Python client.
     Automatically handles schema and price conversion.
+
+    end = now - 2min: avoids the slow get_dataset_range() metadata call that
+    returned a cached, lagging avail_end (root cause of 15-20 min staleness).
+    Databento returns bars up to whatever is available — no pre-query needed.
+    Retries once on failure before logging WARNING.
     """
     key = get_api_key()
     if not key:
@@ -96,65 +111,68 @@ def fetch_recent_bars(symbol: str, timeframe: str,
     }
     schema, agg = schema_map.get(timeframe, ('ohlcv-1m', 5))
 
-    # Get schema-specific available end from Databento
-    # Fallback is now - 5min (not 30min) so stale data is not fetched on metadata timeout
-    try:
-        client_meta = db.Historical(key)
-        r = client_meta.metadata.get_dataset_range(dataset='GLBX.MDP3')
-        schema_end_str = r.get('schema', {}).get(schema, {}).get('end', r.get('end', ''))
-        avail_end = pd.Timestamp(schema_end_str.rstrip('Z')).tz_localize('UTC')
-        end = (avail_end - timedelta(minutes=2)).to_pydatetime()
-    except Exception:
-        end = datetime.now(timezone.utc) - timedelta(minutes=5)
+    # end = now - 2min: Databento returns up to what's available.
+    # No get_dataset_range() call — that was slow (extra round-trip) and
+    # its cached avail_end lagged 15-20 min, making all fetched bars stale.
+    end   = datetime.now(timezone.utc) - timedelta(minutes=2)
     start = end - timedelta(hours=lookback_hours)
 
-    try:
-        client = db.Historical(key)
-        data   = client.timeseries.get_range(
-            dataset   = 'GLBX.MDP3',
-            symbols   = [db_symbol],
-            schema    = schema,
-            start     = start,
-            end       = end,
-            stype_in  = 'continuous',
-        )
+    last_exc = None
+    for attempt in range(2):
+        try:
+            client = db.Historical(key)
+            data   = client.timeseries.get_range(
+                dataset   = 'GLBX.MDP3',
+                symbols   = [db_symbol],
+                schema    = schema,
+                start     = start,
+                end       = end,
+                stype_in  = 'continuous',
+            )
 
-        df = data.to_df()
-        if df.empty:
-            return []
+            df = data.to_df()
+            if df.empty:
+                return []
 
-        # Databento Python client already converts prices — no division needed
-        # Index is ts_event as DatetimeIndex
-        df.index = pd.to_datetime(df.index, utc=True)
+            # Databento Python client already converts prices — no division needed
+            # Index is ts_event as DatetimeIndex
+            df.index = pd.to_datetime(df.index, utc=True)
 
-        # Aggregate if needed (e.g. 1min -> 5min)
-        if agg > 1:
-            df = df.resample(f"{agg}min").agg({
-                "open":   "first",
-                "high":   "max",
-                "low":    "min",
-                "close":  "last",
-                "volume": "sum",
-            }).dropna()
+            # Aggregate if needed (e.g. 1min -> 5min)
+            if agg > 1:
+                df = df.resample(f"{agg}min").agg({
+                    "open":   "first",
+                    "high":   "max",
+                    "low":    "min",
+                    "close":  "last",
+                    "volume": "sum",
+                }).dropna()
 
-        # Convert to list of tuples
-        result = []
-        for ts, row in df.iterrows():
-            ts_unix = int(ts.timestamp())
-            result.append((
-                ts_unix,
-                round(float(row["open"]),  2),
-                round(float(row["high"]),  2),
-                round(float(row["low"]),   2),
-                round(float(row["close"]), 2),
-                float(row.get("volume", 0)),
-            ))
+            # Convert to list of tuples
+            result = []
+            for ts, row in df.iterrows():
+                ts_unix = int(ts.timestamp())
+                result.append((
+                    ts_unix,
+                    round(float(row["open"]),  2),
+                    round(float(row["high"]),  2),
+                    round(float(row["low"]),   2),
+                    round(float(row["close"]), 2),
+                    float(row.get("volume", 0)),
+                ))
 
-        return result
+            return result
 
-    except Exception as e:
-        logger.warning(f'DataFeed fetch failed {symbol} {timeframe}: {e}')
-        return []
+        except Exception as e:
+            last_exc = e
+            if attempt == 0:
+                logger.warning(
+                    f'DataFeed fetch {symbol} {timeframe} attempt 1 failed: {e} — retrying'
+                )
+                time.sleep(1)
+
+    logger.warning(f'DataFeed fetch {symbol} {timeframe} failed after retry: {last_exc}')
+    return []
 
 
 def fetch_bars_range(symbol: str, timeframe: str,
@@ -332,6 +350,49 @@ def get_latest_bar(symbol: str, timeframe: str = '5min') -> dict:
     except Exception as e:
         logger.error(f'get_latest_bar error: {e}')
         return {}
+
+
+def check_data_freshness():
+    """
+    During session hours (13:00-20:00 UTC), check critical timeframes for staleness.
+    Sends a Telegram alert (throttled to once per 30 min per symbol/tf) if any
+    critical timeframe (1min, 5min, 15min) has a last bar > 10 minutes old.
+    """
+    now_utc = datetime.now(timezone.utc)
+    if not (_SESSION_CHECK_START <= now_utc.hour < _SESSION_CHECK_END):
+        return
+
+    CRITICAL_TFS = ['1min', '5min', '15min']
+
+    try:
+        conn = _db_connect()
+        for symbol in INSTRUMENTS:
+            for tf in CRITICAL_TFS:
+                row = conn.execute(
+                    'SELECT MAX(ts) FROM ohlcv WHERE symbol=? AND timeframe=?',
+                    (symbol, tf)
+                ).fetchone()
+                if not row or not row[0]:
+                    continue
+                age_min = (now_utc.timestamp() - float(row[0])) / 60
+                if age_min > _MAX_STALE_MINUTES:
+                    alert_key  = f'{symbol}_{tf}'
+                    last_alert = _stale_alerted.get(alert_key, 0)
+                    if now_utc.timestamp() - last_alert > _ALERT_THROTTLE_SEC:
+                        _stale_alerted[alert_key] = now_utc.timestamp()
+                        msg = (
+                            f'⚠️ APEX DATA ALERT — {symbol} {tf} last bar '
+                            f'{age_min:.0f}min ago — data feed issue'
+                        )
+                        logger.warning(msg)
+                        try:
+                            from live_scanner import send_telegram
+                            send_telegram(msg)
+                        except Exception as te:
+                            logger.error(f'Failed to send stale data alert: {te}')
+        conn.close()
+    except Exception as e:
+        logger.error(f'check_data_freshness error: {e}')
 
 
 if __name__ == '__main__':
