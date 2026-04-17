@@ -477,6 +477,72 @@ def fetch_bars_range(symbol: str, timeframe: str,
         return []
 
 
+def build_intraday_from_1min(symbol: str) -> dict:
+    """
+    Build 5min and 15min bars by resampling live 1min bars already in DB.
+
+    Replaces historical API fetches for 5min/15min entirely. Since LiveBarFeed
+    stores 1min bars in real-time, derived bars are always current with zero delay.
+
+    Lookbacks:
+      5min  — last 500 1min bars (~8h of intraday data, ~40 5min bars)
+      15min — last 1000 1min bars (~16h, ~65 15min bars)
+    """
+    conn = _db_connect()
+    df = _db_read_sql(
+        'SELECT ts, open, high, low, close, volume FROM ohlcv '
+        'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 1000',
+        conn, params=(symbol, '1min')
+    )
+    conn.close()
+
+    if df.empty:
+        logger.warning(f'build_intraday_from_1min: no 1min bars for {symbol} — skipping')
+        return {}
+
+    # Sort ascending for correct resample direction
+    df = df.sort_values('ts')
+    df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+    df.set_index('dt', inplace=True)
+
+    logger.info(f'build_intraday_from_1min: {symbol} — {len(df)} 1min bars loaded')
+
+    results = {}
+    # (output_tf, resample_rule, lookback_bars)
+    for tf, rule, lookback in [('5min', '5min', 500), ('15min', '15min', 1000)]:
+        try:
+            src = df.tail(lookback)
+            agg = src.resample(rule).agg({
+                'open':   'first',
+                'high':   'max',
+                'low':    'min',
+                'close':  'last',
+                'volume': 'sum',
+            }).dropna()
+            # .asi8 → nanoseconds since epoch; works on tz-aware index in pandas 2.x
+            agg['ts'] = agg.index.asi8 // 1_000_000_000
+
+            bars = [
+                (int(row['ts']), round(float(row['open']), 2),
+                 round(float(row['high']), 2), round(float(row['low']), 2),
+                 round(float(row['close']), 2), float(row['volume']))
+                for _, row in agg.iterrows()
+            ]
+            inserted = store_bars(symbol, tf, bars)
+            results[tf] = inserted
+            logger.info(
+                f'build_intraday_from_1min: {symbol} {tf} — '
+                f'{len(bars)} bars built, {inserted} new'
+            )
+        except Exception as e:
+            logger.error(
+                f'build_intraday_from_1min error {symbol} {tf}: {e}', exc_info=True
+            )
+            results[tf] = 0
+
+    return results
+
+
 def build_htf_from_5min(symbol: str) -> dict:
     """Build 1hour and 4hour bars by aggregating 5min bars already in DB."""
     conn = _db_connect()
@@ -551,29 +617,52 @@ def refresh_symbol(symbol: str, timeframes: list = None,
 def refresh_all(include_htf: bool = False,
                 include_daily: bool = False) -> dict:
     """
-    Refresh all instruments via historical API.
-    Called every 5 minutes from scheduler.
+    Refresh all instruments. Called every 5 minutes from scheduler.
 
-    When live feed is running (session hours):
-      - 1min is streamed live — skip historical 1min fetch (it lags 15-20 min anyway)
-      - Still fetch 5min/15min from historical as secondary source
-      - include_htf rebuilds 1h/4h from 1min DB rows (which are live-fresh)
-
-    When live feed is not running (off-session / startup backfill):
-      - Include 1min in historical fetch to keep DB current
+    Data sources per timeframe:
+      1min  — LiveBarFeed streams in real-time (session hours).
+              Historical API used as fallback when live feed is not running.
+      5min  — Resampled from 1min DB rows (build_intraday_from_1min).
+              No historical API call — always derived from live 1min data.
+      15min — Same as 5min.
+      1h/4h — Resampled from 5min DB rows (build_htf_from_5min), every 30 min.
+      1day  — Historical API, when include_daily=True.
     """
-    tfs = ['5min', '15min']
-    if include_daily:
-        tfs.append('1day')
-    if not is_live_feed_running():
-        tfs = ['1min'] + tfs   # backfill 1min via historical when live is down
-
     results = {}
+
     for symbol in INSTRUMENTS:
-        results[symbol] = refresh_symbol(symbol, tfs)
+        sym_results = {}
+
+        # 1min: historical backfill only when live feed is not streaming
+        if not is_live_feed_running():
+            try:
+                bars = fetch_recent_bars(symbol, '1min', lookback_hours=4)
+                sym_results['1min'] = store_bars(symbol, '1min', bars)
+                if sym_results['1min'] > 0:
+                    logger.info(f'DataFeed: {symbol} 1min +{sym_results["1min"]} bars (historical backfill)')
+            except Exception as e:
+                logger.warning(f'DataFeed: {symbol} 1min historical fetch failed — {e}')
+                sym_results['1min'] = 0
+
+        # 5min + 15min: always from 1min resample — zero API delay
+        intraday = build_intraday_from_1min(symbol)
+        sym_results.update(intraday)
+
+        # 1h + 4h: from 5min resample, every 30 min
         if include_htf:
             htf = build_htf_from_5min(symbol)
-            results[symbol].update(htf)
+            sym_results.update(htf)
+
+        # 1day: historical API, once per day
+        if include_daily:
+            try:
+                bars = fetch_recent_bars(symbol, '1day', lookback_hours=48)
+                sym_results['1day'] = store_bars(symbol, '1day', bars)
+            except Exception as e:
+                logger.warning(f'DataFeed: {symbol} 1day fetch failed — {e}')
+                sym_results['1day'] = 0
+
+        results[symbol] = sym_results
 
     return results
 
