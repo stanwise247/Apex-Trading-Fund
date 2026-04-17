@@ -1011,6 +1011,79 @@ def db_stats():
     return jsonify({'stats': get_db_stats()})
 
 
+@app.route('/api/db/refresh_intraday', methods=['POST'])
+def db_refresh_intraday():
+    """Directly invoke build_intraday_from_1min for diagnostics. Returns detailed result."""
+    try:
+        from data_feed import build_intraday_from_1min
+        import pandas as _pd
+        from db import connect as _dbc, read_sql as _drs
+
+        symbol = (request.json or {}).get('symbol', 'NQ').upper()
+
+        # Mirror what build_intraday_from_1min does, step by step
+        conn = _dbc()
+        df = _drs(
+            'SELECT ts, open, high, low, close, volume FROM ohlcv '
+            'WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 1000',
+            conn, params=(symbol, '1min')
+        )
+        conn.close()
+
+        diag = {
+            'symbol': symbol,
+            '1min_rows_loaded': len(df),
+            '1min_empty': df.empty,
+        }
+
+        if not df.empty:
+            df = df.sort_values('ts')
+            df['dt'] = _pd.to_datetime(df['ts'], unit='s', utc=True)
+            df.set_index('dt', inplace=True)
+            diag['1min_first_ts'] = int(df.index[0].timestamp())
+            diag['1min_last_ts']  = int(df.index[-1].timestamp())
+
+            for tf, rule, lookback in [('5min', '5min', 500), ('15min', '15min', 1000)]:
+                src = df.tail(lookback)
+                agg = src.resample(rule).agg({
+                    'open': 'first', 'high': 'max', 'low': 'min',
+                    'close': 'last', 'volume': 'sum',
+                }).dropna()
+                agg['ts'] = agg.index.asi8 // 1_000_000_000
+
+                bars = [(int(r['ts']), float(r['open']), float(r['high']),
+                         float(r['low']), float(r['close']), float(r['volume']))
+                        for _, r in agg.iterrows()]
+
+                conn2 = _dbc()
+                last_row = conn2.execute(
+                    'SELECT MAX(ts) FROM ohlcv WHERE symbol=? AND timeframe=?',
+                    (symbol, tf)
+                ).fetchone()
+                conn2.close()
+                last_stored_ts = int(last_row[0]) if last_row and last_row[0] else 0
+
+                bars_to_write = [b for b in bars if b[0] >= last_stored_ts]
+
+                diag[tf] = {
+                    'resampled_bars': len(bars),
+                    'last_stored_ts': last_stored_ts,
+                    'bars_to_write': len(bars_to_write),
+                    'first_bar_ts': bars[0][0] if bars else None,
+                    'last_bar_ts':  bars[-1][0] if bars else None,
+                    'first_to_write_ts': bars_to_write[0][0] if bars_to_write else None,
+                }
+
+        # Now actually run it
+        result = build_intraday_from_1min(symbol)
+        diag['build_result'] = result
+
+        return jsonify({'ok': True, 'diag': diag})
+    except Exception as e:
+        import traceback
+        return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()})
+
+
 @app.route('/api/db/backfill', methods=['POST'])
 def db_backfill():
     data   = request.json or {}
