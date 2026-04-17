@@ -263,29 +263,40 @@ def get_api_key() -> str:
 
 
 def store_bars(symbol: str, timeframe: str, bars: list) -> int:
-    """Store bars in DB. Returns number of new/updated bars inserted."""
+    """Store bars in DB. Returns number of new bars inserted.
+
+    Uses a single transaction — no per-bar exception swallowing.
+    Per-bar exception catch in psycopg2 leaves the transaction in an ABORTED
+    state; subsequent inserts AND commit() all fail with InFailedSqlTransaction.
+    """
     if not bars:
         return 0
     conn = _db_connect()
-    count_before = conn.execute(
-        'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
-        (symbol, timeframe)
-    ).fetchone()[0]
-    for bar in bars:
-        ts, o, h, l, close, vol = bar
-        try:
+    try:
+        count_before = conn.execute(
+            'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
+            (symbol, timeframe)
+        ).fetchone()[0]
+        for bar in bars:
+            ts, o, h, l, close, vol = bar
             # upsert_ohlcv intentionally overwrites stale bars with fresh Databento data.
             # server.py:store_ohlcv uses INSERT OR IGNORE — two deliberate strategies.
             _db_upsert(conn, symbol, timeframe, ts, o, h, l, close, vol)
-        except Exception as e:
-            logger.warning(f'Insert error {symbol} {timeframe}: {e}')
-    conn.commit()
-    count_after = conn.execute(
-        'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
-        (symbol, timeframe)
-    ).fetchone()[0]
-    conn.close()
-    return count_after - count_before
+        conn.commit()
+        count_after = conn.execute(
+            'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?',
+            (symbol, timeframe)
+        ).fetchone()[0]
+        return count_after - count_before
+    except Exception as e:
+        logger.error(f'store_bars FAILED {symbol} {timeframe}: {e}', exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        conn.close()
 
 
 def fetch_recent_bars(symbol: str, timeframe: str,
@@ -535,6 +546,8 @@ def build_intraday_from_1min(symbol: str) -> dict:
 
             # ts >= last_stored_ts: re-upsert the last bar (forming) + new bars
             bars_to_write = [b for b in bars if b[0] >= last_stored_ts]
+            new_count = sum(1 for b in bars_to_write if b[0] > last_stored_ts)
+
             if not bars_to_write:
                 logger.debug(
                     f'build_intraday_from_1min: {symbol} {tf} — up to date'
@@ -542,23 +555,40 @@ def build_intraday_from_1min(symbol: str) -> dict:
                 results[tf] = 0
                 continue
 
-            conn_w = _db_connect()
-            for b in bars_to_write:
-                try:
-                    _db_upsert(conn_w, symbol, tf, b[0], b[1], b[2], b[3], b[4], b[5])
-                except Exception as ue:
-                    logger.warning(
-                        f'build_intraday_from_1min upsert error {symbol} {tf}: {ue}'
-                    )
-            conn_w.commit()
-            conn_w.close()
+            logger.info(
+                f'build_intraday_from_1min: {symbol} {tf} — '
+                f'writing {len(bars_to_write)} bars ({new_count} new) '
+                f'last_stored_ts={last_stored_ts}'
+            )
 
-            new_count = sum(1 for b in bars_to_write if b[0] > last_stored_ts)
+            # Use a clean transaction: no per-bar exception swallowing.
+            # Per-bar exception catch in psycopg2 leaves the transaction in an
+            # ABORTED state, causing all subsequent inserts AND the final
+            # commit() to fail with InFailedSqlTransaction. The result: zero
+            # bars written despite no visible error.
+            conn_w = _db_connect()
+            try:
+                for b in bars_to_write:
+                    _db_upsert(conn_w, symbol, tf, b[0], b[1], b[2], b[3], b[4], b[5])
+                conn_w.commit()
+            except Exception as write_err:
+                logger.error(
+                    f'build_intraday_from_1min: write FAILED {symbol} {tf}: {write_err}',
+                    exc_info=True
+                )
+                try:
+                    conn_w.rollback()
+                except Exception:
+                    pass
+                results[tf] = 0
+                continue
+            finally:
+                conn_w.close()
+
             results[tf] = new_count
             logger.info(
                 f'build_intraday_from_1min: {symbol} {tf} — '
-                f'{new_count} new bars, 1 updated '
-                f'(wrote {len(bars_to_write)} of {len(bars)} total resampled)'
+                f'committed {len(bars_to_write)} bars ({new_count} new)'
             )
         except Exception as e:
             logger.error(
