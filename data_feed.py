@@ -43,6 +43,10 @@ _ALERT_THROTTLE_SEC  = 1800 # max one alert per 30 min per symbol/tf
 # Module-level throttle state for stale alerts
 _stale_alerted: dict = {}
 
+# Startup timestamp — suppress data alerts for 10 min after import to allow
+# the live feed and initial resample cycle to populate fresh bars first.
+_startup_ts: float = time.time()
+
 
 # ─────────────────────────────────────────────────────────────
 #  LIVE BAR FEED (Databento Live API — zero archive lag)
@@ -208,7 +212,7 @@ class LiveBarFeed:
             conn.close()
 
             self._bar_count += 1
-            ts_str = datetime.utcfromtimestamp(ts_unix).strftime('%H:%M')
+            ts_str = datetime.fromtimestamp(ts_unix, tz=timezone.utc).strftime('%H:%M')
             logger.info(
                 f'LiveBarFeed: {symbol} 1min {ts_str}UTC  '
                 f'O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}  vol={v:.0f}  '
@@ -697,12 +701,30 @@ def get_latest_bar(symbol: str, timeframe: str = '5min') -> dict:
 
 def check_data_freshness():
     """
-    During session hours (13:00-20:00 UTC), check critical timeframes for staleness.
-    Sends a Telegram alert (throttled to once per 30 min per symbol/tf) if any
-    critical timeframe (1min, 5min, 15min) has a last bar > 10 minutes old.
+    During session hours (13:00-20:00 UTC), verify critical timeframes are current.
+
+    Queries MAX(ts) per symbol/timeframe and compares against wall clock.
+    Alerts via Telegram (throttled once per 30 min per symbol/tf) if any
+    critical timeframe (1min, 5min, 15min) has its most recent bar older
+    than _MAX_STALE_MINUTES (10 min).
+
+    Grace period: suppressed for 10 min after module import so the live feed
+    and first resample cycle can populate fresh bars before alerting.
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc  = datetime.now(timezone.utc)
+    now_unix = now_utc.timestamp()
+
+    # Session gate
     if not (_SESSION_CHECK_START <= now_utc.hour < _SESSION_CHECK_END):
+        return
+
+    # Startup grace period — don't alert while the feed is warming up
+    _GRACE_SEC = 600   # 10 minutes
+    if now_unix - _startup_ts < _GRACE_SEC:
+        logger.debug(
+            f'check_data_freshness: in grace period '
+            f'({(now_unix - _startup_ts):.0f}s / {_GRACE_SEC}s elapsed) — skipping'
+        )
         return
 
     CRITICAL_TFS = ['1min', '5min', '15min']
@@ -716,16 +738,26 @@ def check_data_freshness():
                     (symbol, tf)
                 ).fetchone()
                 if not row or not row[0]:
+                    # No bars at all — log but don't alert (may be first run)
+                    logger.warning(
+                        f'check_data_freshness: {symbol} {tf} — no bars in DB'
+                    )
                     continue
-                age_min = (now_utc.timestamp() - float(row[0])) / 60
+                last_ts  = float(row[0])
+                age_min  = (now_unix - last_ts) / 60
+                last_bar = datetime.fromtimestamp(last_ts, tz=timezone.utc).strftime('%H:%M:%S')
+                logger.debug(
+                    f'check_data_freshness: {symbol} {tf} last={last_bar}UTC '
+                    f'age={age_min:.1f}min'
+                )
                 if age_min > _MAX_STALE_MINUTES:
                     alert_key  = f'{symbol}_{tf}'
                     last_alert = _stale_alerted.get(alert_key, 0)
-                    if now_utc.timestamp() - last_alert > _ALERT_THROTTLE_SEC:
-                        _stale_alerted[alert_key] = now_utc.timestamp()
+                    if now_unix - last_alert > _ALERT_THROTTLE_SEC:
+                        _stale_alerted[alert_key] = now_unix
                         msg = (
                             f'⚠️ APEX DATA ALERT — {symbol} {tf} last bar '
-                            f'{age_min:.0f}min ago — data feed issue'
+                            f'{age_min:.0f}min ago ({last_bar}UTC) — data feed issue'
                         )
                         logger.warning(msg)
                         try:
