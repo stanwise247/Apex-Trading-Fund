@@ -34,18 +34,6 @@ INSTRUMENTS = {
     'GC': 'GC.c.0',
 }
 
-# Session hours for staleness checks (UTC)
-_SESSION_CHECK_START = 13   # 9 AM ET
-_SESSION_CHECK_END   = 20   # 4 PM ET (1 hour past close for lingering checks)
-_MAX_STALE_MINUTES   = 10   # alert threshold during session
-_ALERT_THROTTLE_SEC  = 1800 # max one alert per 30 min per symbol/tf
-
-# Module-level throttle state for stale alerts
-_stale_alerted: dict = {}
-
-# Startup timestamp — suppress data alerts for 10 min after import to allow
-# the live feed and initial resample cycle to populate fresh bars first.
-_startup_ts: float = time.time()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -731,79 +719,6 @@ def get_latest_bar(symbol: str, timeframe: str = '5min') -> dict:
     except Exception as e:
         logger.error(f'get_latest_bar error: {e}')
         return {}
-
-
-def check_data_freshness():
-    """
-    During session hours (13:00-20:00 UTC), verify critical timeframes are current.
-
-    Queries MAX(ts) per symbol/timeframe and compares against wall clock.
-    Alerts via Telegram (throttled once per 30 min per symbol/tf) if any
-    critical timeframe (1min, 5min, 15min) has its most recent bar older
-    than _MAX_STALE_MINUTES (10 min).
-
-    Grace period: suppressed for 10 min after module import so the live feed
-    and first resample cycle can populate fresh bars before alerting.
-    """
-    now_utc  = datetime.now(timezone.utc)
-    now_unix = now_utc.timestamp()
-
-    # Session gate
-    if not (_SESSION_CHECK_START <= now_utc.hour < _SESSION_CHECK_END):
-        return
-
-    # Startup grace period — don't alert while the feed is warming up.
-    # _startup_ts is set at module import; grace expires 10 min later.
-    _GRACE_SEC = 600   # 10 minutes
-    elapsed = now_unix - _startup_ts
-    if elapsed < _GRACE_SEC:
-        logger.info(
-            f'check_data_freshness: startup grace period '
-            f'({elapsed:.0f}s / {_GRACE_SEC}s) — skipping alerts'
-        )
-        return
-
-    CRITICAL_TFS = ['1min', '5min', '15min']
-
-    try:
-        conn = _db_connect()
-        for symbol in INSTRUMENTS:
-            for tf in CRITICAL_TFS:
-                row = conn.execute(
-                    'SELECT MAX(ts) FROM ohlcv WHERE symbol=? AND timeframe=?',
-                    (symbol, tf)
-                ).fetchone()
-                if not row or not row[0]:
-                    # No bars at all — log but don't alert (may be first run)
-                    logger.warning(
-                        f'check_data_freshness: {symbol} {tf} — no bars in DB'
-                    )
-                    continue
-                last_ts  = float(row[0])
-                age_min  = (now_unix - last_ts) / 60
-                last_bar = datetime.fromtimestamp(last_ts, tz=timezone.utc).strftime('%H:%M:%S')
-                logger.debug(
-                    f'check_data_freshness: {symbol} {tf} last={last_bar}UTC '
-                    f'age={age_min:.1f}min'
-                )
-                if age_min > _MAX_STALE_MINUTES:
-                    alert_key  = f'{symbol}_{tf}'
-                    last_alert = _stale_alerted.get(alert_key, 0)
-                    if now_unix - last_alert > _ALERT_THROTTLE_SEC:
-                        _stale_alerted[alert_key] = now_unix
-                        msg = (
-                            f'⚠️ APEX DATA ALERT — {symbol} {tf} last bar '
-                            f'{age_min:.0f}min ago ({last_bar}UTC) — data feed issue'
-                        )
-                        logger.warning(msg)
-                        try:
-                            from live_scanner import send_telegram
-                            send_telegram(msg)
-                        except Exception as te:
-                            logger.error(f'Failed to send stale data alert: {te}')
-        conn.close()
-    except Exception as e:
-        logger.error(f'check_data_freshness error: {e}')
 
 
 if __name__ == '__main__':

@@ -1213,7 +1213,7 @@ def background_scheduler():
         # When live feed is down, refresh_all() includes 1min via historical.
         if now - background_scheduler._last_feed > 300:
             try:
-                from data_feed import refresh_all, check_data_freshness
+                from data_feed import refresh_all
                 include_htf = (now - background_scheduler._last_htf) > 1800
                 results     = refresh_all(include_htf=include_htf)
                 if include_htf:
@@ -1222,7 +1222,7 @@ def background_scheduler():
                     for _tf, _cnt in _tfs.items():
                         if _cnt > 0:
                             logger.info(f'DataFeed: {_sym} {_tf} +{_cnt} new bars')
-                check_data_freshness()
+
             except Exception as e:
                 logger.warning(f'DataFeed refresh error: {e}')
             background_scheduler._last_feed = now
