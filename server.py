@@ -1188,23 +1188,29 @@ def background_scheduler():
 
         # ── APEX Data Feed ────────────────────────────────────────
         if not hasattr(background_scheduler, '_last_feed'):
-            background_scheduler._last_feed         = 0
-            background_scheduler._last_htf          = 0
-            background_scheduler._last_1min_refresh = 0
+            background_scheduler._last_feed = 0
+            background_scheduler._last_htf  = 0
 
-        # 1min refresh — NQ, ES, GC every 60s during session (13:00-19:00 UTC)
+        # Live bar feed — start at session open, stop at session close
+        # During session (13:00-19:00 UTC), Databento Live streams ohlcv-1m
+        # bars as they close (zero archive lag vs 15-20 min for historical API).
         _now_utc_hr = datetime.now(timezone.utc).hour
         _in_session = 13 <= _now_utc_hr < 19
-        if _in_session and now - background_scheduler._last_1min_refresh > 60:
-            try:
-                from data_feed import refresh_symbol
-                for _sym1 in ('NQ', 'ES', 'GC'):
-                    refresh_symbol(_sym1, ['1min'], lookback_hours=2)
-            except Exception as e:
-                logger.warning(f'1min refresh error: {e}')
-            background_scheduler._last_1min_refresh = now
+        try:
+            from data_feed import start_live_feed, stop_live_feed, is_live_feed_running
+            if _in_session and not is_live_feed_running():
+                started = start_live_feed()
+                if started:
+                    logger.info('LiveBarFeed: session open — live 1min stream started')
+            elif not _in_session and is_live_feed_running():
+                stop_live_feed()
+                logger.info('LiveBarFeed: session closed — live feed stopped')
+        except Exception as e:
+            logger.warning(f'LiveBarFeed management error: {e}')
 
-        # 5min + 15min every 5 minutes; 1hour + 4hour every 30 minutes
+        # Historical refresh — 5min/15min every 5 min; HTF every 30 min
+        # When live feed is running, refresh_all() skips 1min (live handles it).
+        # When live feed is down, refresh_all() includes 1min via historical.
         if now - background_scheduler._last_feed > 300:
             try:
                 from data_feed import refresh_all, check_data_freshness
@@ -1216,7 +1222,6 @@ def background_scheduler():
                     for _tf, _cnt in _tfs.items():
                         if _cnt > 0:
                             logger.info(f'DataFeed: {_sym} {_tf} +{_cnt} new bars')
-                # Check freshness and alert if any critical tf is stale
                 check_data_freshness()
             except Exception as e:
                 logger.warning(f'DataFeed refresh error: {e}')

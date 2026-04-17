@@ -1,18 +1,25 @@
 """
 APEX Live Data Feed — data_feed.py
 =====================================
-Uses Databento Python client for reliable data fetching.
-Two modes:
-  1. refresh_all() — fetch recent bars every 5 minutes (historical API)
-  2. start_live_feed() — stream real-time bars as they close (live API)
+Two-mode data feed:
 
-Instruments: NQ, ES, GC
+  SESSION (13:00-19:00 UTC):
+    LiveBarFeed — background thread streaming ohlcv-1m from Databento Live API.
+    Bars stored to DB as each 1-minute bar closes. Zero archive lag.
+    HTF (5min/15min/1h/4h) built from 1min by polling every 5 min.
+
+  OFF-SESSION / BACKFILL:
+    Historical API — fetches recent bars for 1min/5min/15min.
+    Used on startup (backfill) and when live feed is not running.
+
+Instruments: NQ, ES, GC (GLBX.MDP3 continuous front-month)
 """
 
 import logging
 import json
 import os
 import time
+import threading
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
@@ -35,6 +42,220 @@ _ALERT_THROTTLE_SEC  = 1800 # max one alert per 30 min per symbol/tf
 
 # Module-level throttle state for stale alerts
 _stale_alerted: dict = {}
+
+
+# ─────────────────────────────────────────────────────────────
+#  LIVE BAR FEED (Databento Live API — zero archive lag)
+# ─────────────────────────────────────────────────────────────
+
+class LiveBarFeed:
+    """
+    Background thread that streams ohlcv-1m bars from Databento Live API.
+    Each bar is stored to DB the instant it closes. Auto-reconnects on disconnect.
+
+    Price note: OHLCVMsg.open/high/low/close are fixed-point integers (× 1e9).
+                record.pretty_open/high/low/close return the float price.
+    Symbol note: Live API delivers SymbolMappingMsg (instrument_id → db_symbol)
+                 before bars arrive. We map instrument_id → apex symbol ('NQ' etc.).
+    """
+
+    _RECONNECT_DELAY_S = 5
+
+    def __init__(self):
+        self._thread    = None
+        self._stop_evt  = threading.Event()
+        self._live_conn = None
+        self._lock      = threading.Lock()
+        self._sym_map   = {}   # instrument_id (int) → 'NQ'/'ES'/'GC'
+        self._bar_count = 0
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def bar_count(self) -> int:
+        return self._bar_count
+
+    def start(self):
+        with self._lock:
+            if self.is_running:
+                return
+            self._stop_evt.clear()
+            self._thread = threading.Thread(
+                target=self._run, name='LiveBarFeed', daemon=True
+            )
+            self._thread.start()
+        logger.info('LiveBarFeed: started — streaming ohlcv-1m for NQ/ES/GC')
+
+    def stop(self):
+        self._stop_evt.set()
+        with self._lock:
+            if self._live_conn:
+                try:
+                    self._live_conn.stop()
+                except Exception:
+                    pass
+                self._live_conn = None
+        logger.info('LiveBarFeed: stopped')
+
+    def _run(self):
+        """Outer loop — reconnects on any error."""
+        while not self._stop_evt.is_set():
+            try:
+                self._connect_and_stream()
+            except Exception as e:
+                if not self._stop_evt.is_set():
+                    logger.error(
+                        f'LiveBarFeed: stream error: {e} — '
+                        f'reconnecting in {self._RECONNECT_DELAY_S}s'
+                    )
+                    time.sleep(self._RECONNECT_DELAY_S)
+
+    def _connect_and_stream(self):
+        key = get_api_key()
+        if not key:
+            raise RuntimeError('No Databento API key configured')
+
+        live = db.Live(key=key)
+        self._sym_map = {}   # reset on each (re)connect
+
+        # Subscribe all instruments in one session; dataset goes in subscribe(), not __init__
+        for db_sym in INSTRUMENTS.values():
+            live.subscribe(
+                dataset  = 'GLBX.MDP3',
+                schema   = 'ohlcv-1m',
+                symbols  = [db_sym],
+                stype_in = 'continuous',
+            )
+
+        with self._lock:
+            self._live_conn = live
+
+        logger.info(
+            f'LiveBarFeed: connected to GLBX.MDP3 ohlcv-1m — '
+            f'waiting for bar closes ({list(INSTRUMENTS.keys())})'
+        )
+
+        for record in live:
+            if self._stop_evt.is_set():
+                break
+
+            rtype = type(record).__name__
+
+            if rtype == 'SymbolMappingMsg':
+                # stype_in_symbol = 'NQ.c.0' — map back to apex symbol
+                in_sym = (getattr(record, 'stype_in_symbol', None) or
+                          getattr(record, 'input_symbol', None) or '')
+                matched = next(
+                    (apex for apex, db_s in INSTRUMENTS.items() if db_s == in_sym),
+                    None
+                )
+                if matched:
+                    self._sym_map[record.instrument_id] = matched
+                    logger.info(
+                        f'LiveBarFeed: symbol map  '
+                        f'instrument_id={record.instrument_id} → {matched} ({in_sym})'
+                    )
+                else:
+                    logger.warning(
+                        f'LiveBarFeed: SymbolMappingMsg unrecognised '
+                        f'stype_in_symbol={in_sym!r} — '
+                        f'known: {list(INSTRUMENTS.values())}'
+                    )
+
+            elif rtype == 'OHLCVMsg':
+                apex_sym = self._sym_map.get(record.instrument_id)
+                if apex_sym:
+                    self._store_bar(apex_sym, record)
+                else:
+                    logger.warning(
+                        f'LiveBarFeed: OHLCVMsg instrument_id={record.instrument_id} '
+                        f'not in sym_map {self._sym_map} — bar skipped '
+                        f'(sym_map populates from SymbolMappingMsg on connect)'
+                    )
+
+            elif rtype == 'ErrorMsg':
+                err = getattr(record, 'err', str(record))
+                logger.error(f'LiveBarFeed: Databento server error: {err}')
+                break   # trigger reconnect
+
+            # SystemMsg = keepalive — ignore
+
+        with self._lock:
+            self._live_conn = None
+
+    def _store_bar(self, symbol: str, record):
+        """Persist a live ohlcv-1m bar to DB immediately on bar close."""
+        try:
+            # ts_event: nanoseconds since Unix epoch
+            ts_unix = record.ts_event // 1_000_000_000
+            o = float(record.pretty_open)
+            h = float(record.pretty_high)
+            l = float(record.pretty_low)
+            c = float(record.pretty_close)
+            v = float(record.volume)
+
+            if c <= 0 or ts_unix <= 0:
+                logger.warning(
+                    f'LiveBarFeed: invalid bar {symbol} ts={ts_unix} close={c} — skipped'
+                )
+                return
+
+            conn = _db_connect()
+            _db_upsert(conn, symbol, '1min', ts_unix, o, h, l, c, v)
+            conn.commit()
+            conn.close()
+
+            self._bar_count += 1
+            ts_str = datetime.utcfromtimestamp(ts_unix).strftime('%H:%M')
+            logger.info(
+                f'LiveBarFeed: {symbol} 1min {ts_str}UTC  '
+                f'O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}  vol={v:.0f}  '
+                f'(total bars stored: {self._bar_count})'
+            )
+        except Exception as e:
+            logger.error(f'LiveBarFeed: _store_bar error {symbol}: {e}', exc_info=True)
+
+
+# Module-level singleton — created once, managed by start/stop functions
+_live_feed: 'LiveBarFeed | None' = None
+
+
+def start_live_feed() -> bool:
+    """
+    Start the live bar feed background thread.
+    Returns True if newly started, False if already running.
+    """
+    global _live_feed
+    if _live_feed is None:
+        _live_feed = LiveBarFeed()
+    if not _live_feed.is_running:
+        _live_feed.start()
+        return True
+    return False
+
+
+def stop_live_feed():
+    """Stop the live bar feed background thread."""
+    global _live_feed
+    if _live_feed and _live_feed.is_running:
+        _live_feed.stop()
+
+
+def is_live_feed_running() -> bool:
+    """True if the live bar feed thread is alive."""
+    return _live_feed is not None and _live_feed.is_running
+
+
+def get_live_feed_stats() -> dict:
+    """Return live feed status for monitoring/dashboard."""
+    if _live_feed is None:
+        return {'running': False, 'bar_count': 0}
+    return {
+        'running':   _live_feed.is_running,
+        'bar_count': _live_feed.bar_count,
+    }
 
 
 def get_api_key() -> str:
@@ -330,13 +551,22 @@ def refresh_symbol(symbol: str, timeframes: list = None,
 def refresh_all(include_htf: bool = False,
                 include_daily: bool = False) -> dict:
     """
-    Refresh all instruments.
-    Call every 5 minutes from scheduler.
-    include_htf=True every 30 min — rebuilds 1hour/4hour from 5min.
+    Refresh all instruments via historical API.
+    Called every 5 minutes from scheduler.
+
+    When live feed is running (session hours):
+      - 1min is streamed live — skip historical 1min fetch (it lags 15-20 min anyway)
+      - Still fetch 5min/15min from historical as secondary source
+      - include_htf rebuilds 1h/4h from 1min DB rows (which are live-fresh)
+
+    When live feed is not running (off-session / startup backfill):
+      - Include 1min in historical fetch to keep DB current
     """
     tfs = ['5min', '15min']
     if include_daily:
         tfs.append('1day')
+    if not is_live_feed_running():
+        tfs = ['1min'] + tfs   # backfill 1min via historical when live is down
 
     results = {}
     for symbol in INSTRUMENTS:
