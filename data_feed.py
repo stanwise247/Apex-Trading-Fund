@@ -111,14 +111,19 @@ def fetch_recent_bars(symbol: str, timeframe: str,
     }
     schema, agg = schema_map.get(timeframe, ('ohlcv-1m', 5))
 
-    # end = now - 2min: Databento returns up to what's available.
-    # No get_dataset_range() call — that was slow (extra round-trip) and
-    # its cached avail_end lagged 15-20 min, making all fetched bars stale.
-    end   = datetime.now(timezone.utc) - timedelta(minutes=2)
-    start = end - timedelta(hours=lookback_hours)
+    # Try progressively earlier end times. Databento's archive has a variable
+    # ingestion lag — if end = now-2min returns empty (data not indexed yet),
+    # fall back to now-10min, then now-15min. Each attempt logs the end used
+    # so Railway logs show exactly which window succeeded or failed.
+    now_utc       = datetime.now(timezone.utc)
+    end_offsets   = [2, 10, 15]   # minutes before now to try as end
 
-    last_exc = None
-    for attempt in range(2):
+    for offset_idx, offset_min in enumerate(end_offsets):
+        end   = now_utc - timedelta(minutes=offset_min)
+        start = end - timedelta(hours=lookback_hours)
+        end_label = end.strftime('%H:%M:%S') + 'UTC'
+        is_last = offset_idx == len(end_offsets) - 1
+
         try:
             client = db.Historical(key)
             data   = client.timeseries.get_range(
@@ -132,6 +137,16 @@ def fetch_recent_bars(symbol: str, timeframe: str,
 
             df = data.to_df()
             if df.empty:
+                if not is_last:
+                    logger.warning(
+                        f'DataFeed {symbol} {timeframe}: empty response '
+                        f'(end={end_label}) — retrying with earlier end'
+                    )
+                    continue
+                logger.warning(
+                    f'DataFeed {symbol} {timeframe}: empty after all end '
+                    f'candidates {end_offsets}min — Databento may be behind'
+                )
                 return []
 
             # Databento Python client already converts prices — no division needed
@@ -161,17 +176,26 @@ def fetch_recent_bars(symbol: str, timeframe: str,
                     float(row.get("volume", 0)),
                 ))
 
+            if offset_min > 2:
+                logger.info(
+                    f'DataFeed {symbol} {timeframe}: fetched {len(result)} bars '
+                    f'using end={end_label} (offset {offset_min}min)'
+                )
             return result
 
         except Exception as e:
-            last_exc = e
-            if attempt == 0:
+            if not is_last:
                 logger.warning(
-                    f'DataFeed fetch {symbol} {timeframe} attempt 1 failed: {e} — retrying'
+                    f'DataFeed {symbol} {timeframe}: fetch error '
+                    f'(end={end_label}): {e} — retrying with earlier end'
                 )
                 time.sleep(1)
+            else:
+                logger.warning(
+                    f'DataFeed {symbol} {timeframe}: failed after all attempts: {e}'
+                )
+                return []
 
-    logger.warning(f'DataFeed fetch {symbol} {timeframe} failed after retry: {last_exc}')
     return []
 
 
