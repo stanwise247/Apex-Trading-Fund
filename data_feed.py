@@ -532,11 +532,45 @@ def build_intraday_from_1min(symbol: str) -> dict:
                  round(float(row['close']), 2), float(row['volume']))
                 for _, row in agg.iterrows()
             ]
-            inserted = store_bars(symbol, tf, bars)
-            results[tf] = inserted
+
+            # Only write bars that are new or the most-recent bar (which may
+            # still be forming — re-upsert to keep its OHLCV current).
+            # Avoids upserting hundreds of already-stored historical bars on
+            # every cycle, which made store_bars() always return 0 new.
+            conn_ts = _db_connect()
+            last_row = conn_ts.execute(
+                'SELECT MAX(ts) FROM ohlcv WHERE symbol=? AND timeframe=?',
+                (symbol, tf)
+            ).fetchone()
+            conn_ts.close()
+            last_stored_ts = int(last_row[0]) if last_row and last_row[0] else 0
+
+            # ts >= last_stored_ts: re-upsert the last bar (forming) + new bars
+            bars_to_write = [b for b in bars if b[0] >= last_stored_ts]
+            if not bars_to_write:
+                logger.debug(
+                    f'build_intraday_from_1min: {symbol} {tf} — up to date'
+                )
+                results[tf] = 0
+                continue
+
+            conn_w = _db_connect()
+            for b in bars_to_write:
+                try:
+                    _db_upsert(conn_w, symbol, tf, b[0], b[1], b[2], b[3], b[4], b[5])
+                except Exception as ue:
+                    logger.warning(
+                        f'build_intraday_from_1min upsert error {symbol} {tf}: {ue}'
+                    )
+            conn_w.commit()
+            conn_w.close()
+
+            new_count = sum(1 for b in bars_to_write if b[0] > last_stored_ts)
+            results[tf] = new_count
             logger.info(
                 f'build_intraday_from_1min: {symbol} {tf} — '
-                f'{len(bars)} bars built, {inserted} new'
+                f'{new_count} new bars, 1 updated '
+                f'(wrote {len(bars_to_write)} of {len(bars)} total resampled)'
             )
         except Exception as e:
             logger.error(
@@ -718,12 +752,14 @@ def check_data_freshness():
     if not (_SESSION_CHECK_START <= now_utc.hour < _SESSION_CHECK_END):
         return
 
-    # Startup grace period — don't alert while the feed is warming up
+    # Startup grace period — don't alert while the feed is warming up.
+    # _startup_ts is set at module import; grace expires 10 min later.
     _GRACE_SEC = 600   # 10 minutes
-    if now_unix - _startup_ts < _GRACE_SEC:
-        logger.debug(
-            f'check_data_freshness: in grace period '
-            f'({(now_unix - _startup_ts):.0f}s / {_GRACE_SEC}s elapsed) — skipping'
+    elapsed = now_unix - _startup_ts
+    if elapsed < _GRACE_SEC:
+        logger.info(
+            f'check_data_freshness: startup grace period '
+            f'({elapsed:.0f}s / {_GRACE_SEC}s) — skipping alerts'
         )
         return
 
