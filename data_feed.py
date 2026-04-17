@@ -522,8 +522,11 @@ def build_intraday_from_1min(symbol: str) -> dict:
                 'close':  'last',
                 'volume': 'sum',
             }).dropna()
-            # .asi8 → nanoseconds since epoch; works on tz-aware index in pandas 2.x
-            agg['ts'] = agg.index.asi8 // 1_000_000_000
+            # .timestamp() is resolution-independent — works whether pandas stores
+            # datetime64[ns] or datetime64[s] (pandas 2.1+ changed unit='s' to [s]).
+            # .asi8 // 1e9 broke in pandas 2.1+: asi8 returns seconds (not ns) for
+            # [s]-resolution indexes, so integer division always yields 1.
+            agg['ts'] = agg.index.map(lambda x: int(x.timestamp()))
 
             bars = [
                 (int(row['ts']), round(float(row['open']), 2),
@@ -627,9 +630,11 @@ def build_htf_from_5min(symbol: str) -> dict:
                 'close':  'last',
                 'volume': 'sum',
             }).dropna()
-            # Use .asi8 (nanoseconds since epoch) — works on tz-aware indexes in all pandas versions.
-            # astype('int64') raises TypeError on tz-aware DatetimeIndex in pandas 2.x.
-            agg['ts'] = agg.index.asi8 // 1_000_000_000
+            # .timestamp() is resolution-independent — works whether pandas stores
+            # datetime64[ns] or datetime64[s] (pandas 2.1+ changed unit='s' to [s]).
+            # .asi8 // 1e9 broke in pandas 2.1+: asi8 returns seconds for [s]-resolution
+            # indexes, so integer division always yielded 1 instead of the real Unix ts.
+            agg['ts'] = agg.index.map(lambda x: int(x.timestamp()))
 
             bars = [
                 (int(row['ts']), round(float(row['open']),2),
