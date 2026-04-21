@@ -62,6 +62,10 @@ class LiveBarFeed:
         self._bar_count             = 0
         self._last_bar_time         = 0.0  # epoch seconds of most recent stored bar (any symbol)
         self._last_bar_time_by_sym  = {}   # symbol → epoch seconds
+        self._bar_count_by_sym      = {}   # symbol → lifetime bars stored
+        self._window_start_time     = 0.0  # epoch for current 30-min rate window
+        self._window_bars_by_sym    = {}   # symbol → bars in current 30-min window
+        self._records_seen          = 0    # records processed since last connect
 
     @property
     def is_running(self) -> bool:
@@ -128,30 +132,72 @@ class LiveBarFeed:
             raise RuntimeError('No Databento API key configured')
 
         live = db.Live(key=key)
-        self._sym_map = {}   # reset on each (re)connect
+        self._sym_map      = {}   # reset on each (re)connect
+        self._records_seen = 0
+        self._window_start_time  = time.time()
+        self._window_bars_by_sym = {}
 
-        # Subscribe all instruments in one session; dataset goes in subscribe(), not __init__
-        for db_sym in INSTRUMENTS.values():
-            live.subscribe(
-                dataset  = 'GLBX.MDP3',
-                schema   = 'ohlcv-1m',
-                symbols  = [db_sym],
-                stype_in = 'continuous',
-            )
+        # Subscribe all instruments — log each attempt individually so Railway logs
+        # show exactly which symbols were attempted and whether any threw on subscribe()
+        subscribed = []
+        for apex_sym, db_sym in INSTRUMENTS.items():
+            try:
+                logger.info(f'LiveBarFeed: subscribing {apex_sym} ({db_sym}) on GLBX.MDP3 ohlcv-1m ...')
+                live.subscribe(
+                    dataset  = 'GLBX.MDP3',
+                    schema   = 'ohlcv-1m',
+                    symbols  = [db_sym],
+                    stype_in = 'continuous',
+                )
+                subscribed.append(apex_sym)
+                logger.info(f'LiveBarFeed: subscribe() returned for {apex_sym} ({db_sym}) — awaiting SymbolMappingMsg')
+            except Exception as sub_err:
+                logger.error(f'LiveBarFeed: subscribe() FAILED for {apex_sym} ({db_sym}): {sub_err}')
 
         with self._lock:
             self._live_conn = live
 
         logger.info(
             f'LiveBarFeed: connected to GLBX.MDP3 ohlcv-1m — '
-            f'waiting for bar closes ({list(INSTRUMENTS.keys())})'
+            f'subscribed={subscribed}  waiting for SymbolMappingMsg per symbol'
         )
+
+        _sym_map_checked = False   # warn once after first batch of records if any symbol unmapped
 
         for record in live:
             if self._stop_evt.is_set():
                 break
 
+            self._records_seen += 1
             rtype = type(record).__name__
+
+            # After 20 records, warn once about any instrument still not mapped
+            if not _sym_map_checked and self._records_seen >= 20:
+                _sym_map_checked = True
+                mapped_syms   = set(self._sym_map.values())
+                expected_syms = set(INSTRUMENTS.keys())
+                missing = expected_syms - mapped_syms
+                if missing:
+                    logger.warning(
+                        f'LiveBarFeed: {self._records_seen} records processed but '
+                        f'NO SymbolMappingMsg received for: {missing} — '
+                        f'these symbols will not stream bars. '
+                        f'sym_map so far: {self._sym_map}  subscribed: {subscribed}'
+                    )
+                else:
+                    logger.info(f'LiveBarFeed: all symbols mapped after {self._records_seen} records — {self._sym_map}')
+
+            # 30-minute rolling rate window: log bars per symbol and reset
+            if self._window_start_time and time.time() - self._window_start_time >= 1800:
+                elapsed = round(time.time() - self._window_start_time)
+                parts = [f'{s}={self._window_bars_by_sym.get(s, 0)}' for s in INSTRUMENTS]
+                logger.info(
+                    f'LiveBarFeed: 30-min rate window ({elapsed}s) — '
+                    f'bars per symbol: {", ".join(parts)}  '
+                    f'sym_map: {self._sym_map}'
+                )
+                self._window_start_time  = time.time()
+                self._window_bars_by_sym = {}
 
             if rtype == 'SymbolMappingMsg':
                 # stype_in_symbol = 'NQ.c.0' — map back to apex symbol
@@ -164,8 +210,9 @@ class LiveBarFeed:
                 if matched:
                     self._sym_map[record.instrument_id] = matched
                     logger.info(
-                        f'LiveBarFeed: symbol map  '
-                        f'instrument_id={record.instrument_id} → {matched} ({in_sym})'
+                        f'LiveBarFeed: SymbolMappingMsg  '
+                        f'instrument_id={record.instrument_id} → {matched} ({in_sym})  '
+                        f'sym_map now: {self._sym_map}'
                     )
                 else:
                     logger.warning(
@@ -182,7 +229,7 @@ class LiveBarFeed:
                     logger.warning(
                         f'LiveBarFeed: OHLCVMsg instrument_id={record.instrument_id} '
                         f'not in sym_map {self._sym_map} — bar skipped '
-                        f'(sym_map populates from SymbolMappingMsg on connect)'
+                        f'(expected SymbolMappingMsg first; subscribed={subscribed})'
                     )
 
             elif rtype == 'ErrorMsg':
@@ -220,11 +267,13 @@ class LiveBarFeed:
             self._bar_count                      += 1
             self._last_bar_time                   = time.time()
             self._last_bar_time_by_sym[symbol]    = self._last_bar_time
+            self._bar_count_by_sym[symbol]        = self._bar_count_by_sym.get(symbol, 0) + 1
+            self._window_bars_by_sym[symbol]      = self._window_bars_by_sym.get(symbol, 0) + 1
             ts_str = datetime.fromtimestamp(ts_unix, tz=timezone.utc).strftime('%H:%M')
             logger.info(
                 f'LiveBarFeed: {symbol} 1min {ts_str}UTC  '
                 f'O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}  vol={v:.0f}  '
-                f'(total bars stored: {self._bar_count})'
+                f'(session: {symbol}={self._bar_count_by_sym[symbol]} total={self._bar_count})'
             )
         except Exception as e:
             logger.error(f'LiveBarFeed: _store_bar error {symbol}: {e}', exc_info=True)
@@ -299,6 +348,10 @@ def get_live_feed_stats() -> dict:
         'NQ_secs':                nq_s,
         'ES_secs':                es_s,
         'GC_secs':                gc_s,
+        # Per-symbol session bar counts
+        'bar_count_by_sym':       dict(_live_feed._bar_count_by_sym),
+        'sym_map':                dict(_live_feed._sym_map),
+        'records_seen':           _live_feed._records_seen,
     }
 
 
