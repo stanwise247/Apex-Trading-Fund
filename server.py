@@ -1270,11 +1270,22 @@ def background_scheduler():
         _now_utc_hr = datetime.now(timezone.utc).hour
         _in_session = 13 <= _now_utc_hr < 19
         try:
-            from data_feed import start_live_feed, stop_live_feed, is_live_feed_running
+            from data_feed import start_live_feed, stop_live_feed, is_live_feed_running, \
+                                  get_live_feed_stats, restart_live_feed
             if _in_session and not is_live_feed_running():
                 started = start_live_feed()
                 if started:
                     logger.info('LiveBarFeed: session open — live 1min stream started')
+            elif _in_session and is_live_feed_running():
+                # Watchdog: thread alive but no bar in >5 min means silent stall — force restart
+                _feed_stats = get_live_feed_stats()
+                _secs = _feed_stats.get('seconds_since_last_bar')
+                if _secs is not None and _secs > 300:
+                    logger.warning(
+                        f'LiveBarFeed: watchdog — no bar in {_secs}s during session, '
+                        f'force-restarting feed'
+                    )
+                    restart_live_feed()
             elif not _in_session and is_live_feed_running():
                 stop_live_feed()
                 logger.info('LiveBarFeed: session closed — live feed stopped')
@@ -1542,8 +1553,10 @@ def background_scheduler():
                                 continue
                             msg = format_f_alert(sig) + _risk_footer
                             send_telegram(msg)
+                            logger.info(f'Setup F: about to log trade {sig["symbol"]} {sig["direction"]}')
                             try:
                                 _f_tid = log_trade(sig)
+                                logger.info(f'Setup F: log_trade returned {_f_tid}')
                                 if not _f_tid:
                                     logger.error(
                                         f'CRITICAL: log_trade() returned None for Setup F {_sym} {sig["direction"]} '

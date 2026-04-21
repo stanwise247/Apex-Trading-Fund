@@ -54,12 +54,13 @@ class LiveBarFeed:
     _RECONNECT_DELAY_S = 5
 
     def __init__(self):
-        self._thread    = None
-        self._stop_evt  = threading.Event()
-        self._live_conn = None
-        self._lock      = threading.Lock()
-        self._sym_map   = {}   # instrument_id (int) → 'NQ'/'ES'/'GC'
-        self._bar_count = 0
+        self._thread         = None
+        self._stop_evt       = threading.Event()
+        self._live_conn      = None
+        self._lock           = threading.Lock()
+        self._sym_map        = {}   # instrument_id (int) → 'NQ'/'ES'/'GC'
+        self._bar_count      = 0
+        self._last_bar_time  = 0.0  # epoch seconds of most recent stored bar
 
     @property
     def is_running(self) -> bool:
@@ -68,6 +69,15 @@ class LiveBarFeed:
     @property
     def bar_count(self) -> int:
         return self._bar_count
+
+    @property
+    def last_bar_time(self) -> float:
+        return self._last_bar_time
+
+    def seconds_since_last_bar(self) -> float:
+        if self._last_bar_time == 0.0:
+            return float('inf')
+        return time.time() - self._last_bar_time
 
     def start(self):
         with self._lock:
@@ -107,6 +117,7 @@ class LiveBarFeed:
     def _connect_and_stream(self):
         key = get_api_key()
         if not key:
+            logger.error('LiveBarFeed: DATABENTO_API_KEY not set — feed cannot connect')
             raise RuntimeError('No Databento API key configured')
 
         live = db.Live(key=key)
@@ -199,7 +210,8 @@ class LiveBarFeed:
             conn.commit()
             conn.close()
 
-            self._bar_count += 1
+            self._bar_count     += 1
+            self._last_bar_time  = time.time()
             ts_str = datetime.fromtimestamp(ts_unix, tz=timezone.utc).strftime('%H:%M')
             logger.info(
                 f'LiveBarFeed: {symbol} 1min {ts_str}UTC  '
@@ -243,11 +255,24 @@ def is_live_feed_running() -> bool:
 def get_live_feed_stats() -> dict:
     """Return live feed status for monitoring/dashboard."""
     if _live_feed is None:
-        return {'running': False, 'bar_count': 0}
+        return {'running': False, 'bar_count': 0, 'seconds_since_last_bar': None}
+    secs = _live_feed.seconds_since_last_bar()
     return {
-        'running':   _live_feed.is_running,
-        'bar_count': _live_feed.bar_count,
+        'running':              _live_feed.is_running,
+        'bar_count':            _live_feed.bar_count,
+        'last_bar_time':        _live_feed.last_bar_time or None,
+        'seconds_since_last_bar': None if secs == float('inf') else round(secs),
     }
+
+
+def restart_live_feed() -> bool:
+    """Force-stop and restart the live feed. Returns True if restarted."""
+    global _live_feed
+    if _live_feed and _live_feed.is_running:
+        _live_feed.stop()
+    _live_feed = LiveBarFeed()
+    _live_feed.start()
+    return True
 
 
 def get_api_key() -> str:
