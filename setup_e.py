@@ -18,7 +18,7 @@ Entry rules (all must be true):
 
 Exit:
   Stop:   ±1.5 × ATR from entry
-  Target: ±3.0 × ATR from entry  (2:1 RR)
+  Target: ±3.75 × ATR from entry  (2.5:1 RR)
   Max hold: end of session (19:00 UTC)
 
 Min gap: 12 bars (60 min) between trades.
@@ -45,7 +45,7 @@ EMA_PERIOD    = 50
 EMA_PROXIMITY = 0.30   # within 0.30 ATR of EMA50
 ATR_PERIOD    = 14
 STOP_ATR      = 1.50
-TARGET_ATR    = 3.00
+TARGET_ATR    = 3.75  # 1.5 stop × 2.5 RR = 3.75 ATR target
 SESSION_START = 13     # UTC inclusive
 SESSION_END   = 19     # UTC exclusive (last entry at 18:xx)
 BIAS_EMA      = 20     # 4hour EMA period

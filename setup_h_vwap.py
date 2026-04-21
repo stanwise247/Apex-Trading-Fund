@@ -20,6 +20,7 @@ logger = logging.getLogger('APEX.SetupH')
 NY_TZ             = ZoneInfo('America/New_York')
 SESSION_START_UTC = 13   # 13:00 UTC = NY open
 SESSION_END_UTC   = 19   # 19:00 UTC = session end
+MIN_RR_H          = 2.0  # skip signal if VWAP target gives less than 2.0 RR
 
 
 # ─────────────────────────────────────────────────────────────
@@ -245,10 +246,18 @@ def scan_setup_h(symbol: str = 'ES', dt: datetime = None,
 
     rr = round(abs(target - entry) / abs(entry - stop), 2) if abs(entry - stop) > 0 else 0
 
+    if rr < MIN_RR_H:
+        logger.info(
+            f'Setup H {symbol}: skipped — insufficient RR '
+            f'(actual={rr:.2f}, minimum={MIN_RR_H}) | '
+            f'entry={entry:.2f} target={target:.2f} stop={stop:.2f}'
+        )
+        return None
+
     logger.info(
         f'Setup H {symbol} SIGNAL: {direction.upper()} @ {entry:.2f} | '
         f'vwap={curr_vwap:.2f} upper={curr_upper:.2f} lower={curr_lower:.2f} | '
-        f'stop={stop:.2f} target={target:.2f} htf={htf_bias}'
+        f'stop={stop:.2f} target={target:.2f} rr={rr:.2f} htf={htf_bias}'
     )
 
     return {

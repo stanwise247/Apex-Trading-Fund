@@ -35,9 +35,9 @@ SCAN_EVERY  = 60
 BAR_MINUTES = 5
 
 DAY_FILTERS = {
-    'NQ': [0, 2, 3, 4],
-    'ES': [0, 1, 3],
-    'GC': [0, 1, 2, 3],
+    'NQ': [1, 2, 3],        # Tue/Wed/Thu — spec: exclude Mon and Fri
+    'ES': [0, 1, 3],        # Mon/Tue/Thu — unchanged
+    'GC': [0, 1, 2, 3, 4],  # Mon–Fri all week — spec: no day exclusion for GC
 }
 
 

@@ -50,12 +50,12 @@ def _load_htf(symbol: str, tf: str, limit_htf: int) -> pd.DataFrame:
 
 SESSION_WINDOWS = {
     'NQ': [
-        {'name': 'NY Primary',      'start': 13, 'end': 19, 'quality': 'primary'},
-        {'name': 'London Secondary','start':  7, 'end': 11, 'quality': 'secondary'},
+        {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},
+        {'name': 'NY Secondary',    'start': 13, 'end': 19, 'quality': 'secondary'},
     ],
     'ES': [
-        {'name': 'NY Primary',      'start': 13, 'end': 19, 'quality': 'primary'},
-        {'name': 'London Secondary','start':  7, 'end': 11, 'quality': 'secondary'},
+        {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},
+        {'name': 'NY Secondary',    'start': 13, 'end': 19, 'quality': 'secondary'},
     ],
     'GC': [
         {'name': 'NY Primary',      'start': 12, 'end': 17, 'quality': 'primary'},
@@ -410,7 +410,7 @@ def calc_trade_levels(symbol: str, direction: str, poi, mode: str = 'swing',
     """
     Returns (entry, stop, target, rr)
     Entry: current_price (actual fill) if provided, else POI edge
-    Stop:  beyond POI by 0.5 ATR
+    Stop:  beyond POI by 0.8 ATR
     Target: RR based on mode (scalp=2.5, swing=4.0)
     """
     df      = _load_htf(symbol, '1hour', 50)
@@ -423,12 +423,12 @@ def calc_trade_levels(symbol: str, direction: str, poi, mode: str = 'swing',
 
     if direction == 'long':
         entry  = round(current_price if current_price is not None else poi.high, 2)
-        stop   = round(poi.low - atr_val * 0.5, 2)
+        stop   = round(poi.low - atr_val * 0.8, 2)
         risk   = entry - stop
         target = round(entry + risk * rr, 2)
     else:
         entry  = round(current_price if current_price is not None else poi.low, 2)
-        stop   = round(poi.high + atr_val * 0.5, 2)
+        stop   = round(poi.high + atr_val * 0.8, 2)
         risk   = stop - entry
         target = round(entry - risk * rr, 2)
 

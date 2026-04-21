@@ -424,7 +424,7 @@ def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
 
     entry  = float(last['close'])
     stop   = entry - 1.5 * atr14 if direction == 'long' else entry + 1.5 * atr14
-    target = entry + 3.0 * atr14 if direction == 'long' else entry - 3.0 * atr14
+    target = entry + 3.75 * atr14 if direction == 'long' else entry - 3.75 * atr14  # 1.5 stop × 2.5 RR
     rr     = round(abs(target - entry) / abs(entry - stop), 2)
 
     # Top features by importance (use model feature importances)

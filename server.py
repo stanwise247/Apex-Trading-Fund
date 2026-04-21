@@ -2162,6 +2162,16 @@ def _startup():
         conn.close()
     except Exception as e:
         logger.warning(f'  DB ts=0 cleanup error: {e}')
+    # ── Strategy parameter summary — visible in Railway logs ──
+    logger.info('  STRATEGY PARAMETERS')
+    logger.info('  ─────────────────────────────────────────────────')
+    logger.info('  A/B/C  stop_atr=0.8  RR=4.0  NQ/ES London primary (7-11 UTC) / NY secondary (13-19 UTC)')
+    logger.info('  A/B/C  NQ day filter: Tue/Wed/Thu | ES: Mon/Tue/Thu | GC: Mon-Fri')
+    logger.info('  D      stop_atr=1.0  RR=2.5  NQ+ES  session=13-19 UTC  min_score=70')
+    logger.info('  E      stop_atr=1.5  RR=2.5  target=3.75×ATR  NQ only  session=13-18 UTC')
+    logger.info('  F      stop_atr=1.5  RR=2.5  target=3.75×ATR  NQ+ES    long>0.58  short<0.42')
+    logger.info('  H      stop_atr=1.5  RR≥2.0  target=VWAP  ES live/NQ paper  session=13-19 UTC')
+    logger.info('  ─────────────────────────────────────────────────')
     try:
         from trade_tracker import init_trades_table as _itt
         _itt()
