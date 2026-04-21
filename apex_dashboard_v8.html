@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APEX Trading Engine</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:       #ffffff;
+  --bg2:      #f5f5f7;
+  --bg3:      #ebebed;
+  --card:     #ffffff;
+  --border:   rgba(0,0,0,0.08);
+  --text:     #1d1d1f;
+  --text2:    #6e6e73;
+  --text3:    #aeaeb2;
+  --accent:   #0071e3;
+  --green:    #34c759;
+  --red:      #ff3b30;
+  --amber:    #ff9f0a;
+  --radius:   16px;
+  --radius-sm:10px;
+  --radius-pill:20px;
+  --font:     -apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',sans-serif;
+  --mono:     ui-monospace,'SF Mono','Menlo',monospace;
+}
+[data-theme="dark"] {
+  --bg:   #000000;
+  --bg2:  #1c1c1e;
+  --bg3:  #2c2c2e;
+  --card: #1c1c1e;
+  --border:rgba(255,255,255,0.1);
+  --text: #f5f5f7;
+  --text2:#aeaeb2;
+  --text3:#6e6e73;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px;-webkit-font-smoothing:antialiased}
+body{font-family:var(--font);background:var(--bg);color:var(--text);letter-spacing:-0.01em;transition:background .2s,color .2s;min-height:100vh}
+/* ── Nav ── */
+.nav{position:sticky;top:0;z-index:100;background:var(--bg);border-bottom:0.5px solid var(--border);display:flex;align-items:center;gap:0;padding:0 24px;height:52px;backdrop-filter:blur(20px)}
+.nav-brand{font-size:14px;font-weight:600;letter-spacing:-0.02em;color:var(--text);margin-right:32px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.85)}}
+.nav-tabs{display:flex;align-items:center;gap:2px;flex:1;overflow-x:auto;scrollbar-width:none}
+.nav-tabs::-webkit-scrollbar{display:none}
+.nav-tab{padding:6px 14px;border-radius:var(--radius-pill);font-size:13px;font-weight:500;color:var(--text2);cursor:pointer;border:none;background:none;white-space:nowrap;transition:background .15s,color .15s;letter-spacing:-0.01em}
+.nav-tab:hover{background:var(--bg2);color:var(--text)}
+.nav-tab.active{background:var(--accent);color:#fff}
+.theme-toggle{margin-left:auto;padding:6px 12px;border-radius:var(--radius-pill);font-size:13px;color:var(--text2);cursor:pointer;border:0.5px solid var(--border);background:var(--bg2);font-family:var(--font);letter-spacing:-0.01em;flex-shrink:0;transition:background .15s}
+.theme-toggle:hover{background:var(--bg3)}
+/* ── Layout ── */
+.page{display:none;padding:24px;max-width:1280px;margin:0 auto;animation:fadein .2s}
+.page.active{display:block}
+@keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* ── Cards ── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--card);border:0.5px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+.card-label{font-size:12px;font-weight:500;color:var(--text2);letter-spacing:.02em;text-transform:uppercase;margin-bottom:6px}
+.card-value{font-size:26px;font-weight:600;letter-spacing:-0.02em;color:var(--text);line-height:1.1}
+.card-sub{font-size:12px;color:var(--text2);margin-top:4px;font-family:var(--mono)}
+/* ── Progress bar ── */
+.progress-wrap{margin-top:8px}
+.progress-bar{height:4px;border-radius:4px;background:var(--bg3);overflow:hidden}
+.progress-fill{height:100%;border-radius:4px;transition:width .4s,background .4s;background:var(--green)}
+.progress-fill.amber{background:var(--amber)}
+.progress-fill.red{background:var(--red)}
+/* ── Tables ── */
+.tbl-wrap{overflow-x:auto;border-radius:var(--radius);border:0.5px solid var(--border);margin-bottom:20px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:10px 14px;font-size:11px;font-weight:500;letter-spacing:.04em;text-transform:uppercase;color:var(--text2);background:var(--bg2);border-bottom:0.5px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--text)}
+td{padding:10px 14px;border-bottom:0.5px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr.win td{background:rgba(52,199,89,.05)}
+tr.loss td{background:rgba(255,59,48,.05)}
+tr:hover td{background:var(--bg2)}
+.tbl-summary{padding:10px 14px;font-size:12px;color:var(--text2);background:var(--bg2);border-top:0.5px solid var(--border);display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono)}
+/* ── Pills ── */
+.pill{display:inline-block;padding:2px 8px;border-radius:var(--radius-pill);font-size:11px;font-weight:500;letter-spacing:.02em;white-space:nowrap}
+.pill-long{background:rgba(52,199,89,.15);color:var(--green)}
+.pill-short{background:rgba(255,59,48,.15);color:var(--red)}
+.pill-a{background:rgba(0,113,227,.12);color:var(--accent)}
+.pill-b{background:rgba(94,92,230,.15);color:#5e5ce6}
+.pill-c{background:rgba(255,159,10,.15);color:var(--amber)}
+.pill-d{background:rgba(52,199,89,.15);color:var(--green)}
+.pill-e{background:rgba(255,45,85,.15);color:#ff2d55}
+.pill-f{background:rgba(100,210,255,.2);color:#0090d0}
+.pill-h{background:rgba(175,82,222,.15);color:#af52de}
+.pill-open{background:rgba(0,113,227,.12);color:var(--accent)}
+.pill-closed{background:rgba(110,110,115,.12);color:var(--text2)}
+/* ── Status dots ── */
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot-green{background:var(--green)}
+.dot-amber{background:var(--amber)}
+.dot-red{background:var(--red)}
+.dot-grey{background:var(--text3)}
+/* ── Section headers ── */
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.section-title{font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--text)}
+.section-sub{font-size:12px;color:var(--text2)}
+.refresh-btn{padding:5px 12px;border-radius:var(--radius-pill);font-size:12px;color:var(--text2);cursor:pointer;border:0.5px solid var(--border);background:var(--bg2);font-family:var(--font);transition:background .15s}
+.refresh-btn:hover{background:var(--bg3);color:var(--text)}
+/* ── Health strip ── */
+.health-strip{display:flex;gap:16px;flex-wrap:wrap;padding:12px 16px;background:var(--bg2);border-radius:var(--radius-sm);border:0.5px solid var(--border);margin-bottom:20px;align-items:center}
+.health-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);font-family:var(--mono)}
+.health-item strong{color:var(--text);font-weight:500}
+/* ── Filter bar ── */
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+.filter-bar select,.filter-bar input{padding:6px 10px;border-radius:var(--radius-sm);border:0.5px solid var(--border);background:var(--bg2);color:var(--text);font-family:var(--font);font-size:13px;outline:none}
+.filter-bar select:focus,.filter-bar input:focus{border-color:var(--accent)}
+/* ── Setup scanner cards ── */
+.setup-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:20px}
+.setup-card{background:var(--card);border:0.5px solid var(--border);border-radius:var(--radius);padding:16px 18px}
+.setup-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.setup-card-name{font-size:14px;font-weight:600;letter-spacing:-0.02em;color:var(--text)}
+.setup-card-desc{font-size:12px;color:var(--text2);margin-bottom:10px}
+.setup-card-rows{display:flex;flex-direction:column;gap:5px}
+.setup-card-row{display:flex;justify-content:space-between;font-size:12px;color:var(--text2)}
+.setup-card-row span:last-child{color:var(--text);font-family:var(--mono);font-weight:500}
+/* ── Diagnostics ── */
+.diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:20px}
+.diag-card{background:var(--card);border:0.5px solid var(--border);border-radius:var(--radius);padding:16px 18px}
+.diag-title{font-size:13px;font-weight:600;letter-spacing:-0.02em;margin-bottom:10px;color:var(--text)}
+.diag-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid var(--border);font-size:12px}
+.diag-row:last-child{border-bottom:none}
+.diag-row-label{color:var(--text2)}
+.diag-row-val{color:var(--text);font-family:var(--mono);font-weight:500;text-align:right;max-width:60%}
+/* ── Chart containers ── */
+.chart-wrap{background:var(--card);border:0.5px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:20px}
+.chart-wrap canvas{max-height:260px}
+/* ── Loading / empty ── */
+.loading{color:var(--text3);font-size:13px;padding:24px;text-align:center;font-family:var(--mono)}
+.empty{color:var(--text3);font-size:13px;padding:24px;text-align:center}
+/* ── Responsive ── */
+@media(max-width:768px){
+  .nav{padding:0 12px}
+  .page{padding:16px 12px}
+  .cards{grid-template-columns:1fr 1fr}
+  .setup-grid,.diag-grid{grid-template-columns:1fr}
+  .health-strip{gap:10px}
+  .filter-bar{gap:6px}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+
+<!-- ── Navigation ── -->
+<nav class="nav">
+  <div class="nav-brand">
+    <span class="live-dot" id="liveDot"></span>
+    APEX
+  </div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showPage('overview')">Overview</button>
+    <button class="nav-tab" onclick="showPage('trades')">Trades</button>
+    <button class="nav-tab" onclick="showPage('performance')">Performance</button>
+    <button class="nav-tab" onclick="showPage('setups')">Setups</button>
+    <button class="nav-tab" onclick="showPage('health')">System Health</button>
+    <button class="nav-tab" onclick="showPage('diagnostics')">Diagnostics</button>
+  </div>
+  <button class="theme-toggle" onclick="toggleTheme()">☀︎ Light</button>
+</nav>
+
+<!-- ══════════ SECTION 1 — OVERVIEW ══════════ -->
+<div id="page-overview" class="page active">
+  <div class="section-header">
+    <span class="section-title">Overview</span>
+    <span class="section-sub" id="overviewTime">—</span>
+  </div>
+
+  <!-- Metric cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Account Balance</div>
+      <div class="card-value" id="metBalance">—</div>
+      <div class="card-sub" id="metReturn">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Today P&L</div>
+      <div class="card-value" id="metTodayPnl">—</div>
+      <div class="card-sub" id="metTodayR">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Trades</div>
+      <div class="card-value" id="metTrades">—</div>
+      <div class="card-sub" id="metOpenTrades">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Daily Loss Limit</div>
+      <div class="card-value" id="metDailyLoss">—</div>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="limitBar" style="width:0%"></div></div>
+      </div>
+      <div class="card-sub" id="metLimitSub">$150 daily limit</div>
+    </div>
+  </div>
+
+  <!-- Open positions -->
+  <div class="section-header">
+    <span class="section-title" style="font-size:15px">Open Positions</span>
+    <button class="refresh-btn" onclick="loadOverview()">↻ Refresh</button>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Direction</th><th>Setup</th>
+          <th>Entry</th><th>Stop</th><th>Target</th><th>Current P&L</th>
+        </tr>
+      </thead>
+      <tbody id="openTradesBody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- System health strip -->
+  <div class="health-strip" id="healthStrip">
+    <div class="health-item"><span class="dot dot-grey"></span><strong>Loading health…</strong></div>
+  </div>
+</div>
+
+<!-- ══════════ SECTION 2 — TRADES ══════════ -->
+<div id="page-trades" class="page">
+  <div class="section-header">
+    <span class="section-title">Trades Journal</span>
+    <button class="refresh-btn" onclick="loadTrades()">↻ Refresh</button>
+  </div>
+  <div class="filter-bar">
+    <select id="filterSetup" onchange="renderTradesTable()">
+      <option value="">All Setups</option>
+      <option>A_sweep_ob</option><option>B_choch_breaker</option><option>C_bos_ob</option>
+      <option>D_fvg_fill</option><option>E_ema50_pullback</option>
+      <option>F_rf_ml</option><option>H_vwap_rev</option>
+    </select>
+    <select id="filterSymbol" onchange="renderTradesTable()">
+      <option value="">All Symbols</option>
+      <option>NQ</option><option>ES</option><option>GC</option>
+    </select>
+    <select id="filterStatus" onchange="renderTradesTable()">
+      <option value="">All Status</option>
+      <option value="closed">Closed</option><option value="open">Open</option>
+    </select>
+    <input type="date" id="filterFrom" onchange="renderTradesTable()" placeholder="From">
+    <input type="date" id="filterTo" onchange="renderTradesTable()" placeholder="To">
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th onclick="sortTrades('id')">#</th>
+          <th onclick="sortTrades('entry_time')">Date/Time</th>
+          <th onclick="sortTrades('symbol')">Symbol</th>
+          <th onclick="sortTrades('setup')">Setup</th>
+          <th onclick="sortTrades('direction')">Direction</th>
+          <th onclick="sortTrades('entry_price')">Entry</th>
+          <th>Stop</th><th>Target</th>
+          <th onclick="sortTrades('exit_price')">Exit</th>
+          <th onclick="sortTrades('exit_reason')">Reason</th>
+          <th onclick="sortTrades('pnl_r')">P&L (R)</th>
+          <th onclick="sortTrades('status')">Status</th>
+        </tr>
+      </thead>
+      <tbody id="tradesBody"><tr><td colspan="12" class="loading">Loading…</td></tr></tbody>
+    </table>
+    <div class="tbl-summary" id="tradesSummary"></div>
+  </div>
+</div>
+
+<!-- ══════════ SECTION 3 — PERFORMANCE ══════════ -->
+<div id="page-performance" class="page">
+  <div class="section-header">
+    <span class="section-title">Performance</span>
+    <button class="refresh-btn" onclick="loadPerformance()">↻ Refresh</button>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="card-label">Total R</div><div class="card-value" id="perfTotalR">—</div></div>
+    <div class="card"><div class="card-label">Win Rate</div><div class="card-value" id="perfWR">—</div></div>
+    <div class="card"><div class="card-label">Expectancy</div><div class="card-value" id="perfExp">—</div></div>
+    <div class="card"><div class="card-label">Profit Factor</div><div class="card-value" id="perfPF">—</div></div>
+  </div>
+  <div class="chart-wrap">
+    <div class="section-header" style="margin-bottom:12px">
+      <span class="section-title" style="font-size:14px">Cumulative R — Equity Curve</span>
+    </div>
+    <canvas id="equityChart"></canvas>
+  </div>
+  <div class="chart-wrap">
+    <div class="section-header" style="margin-bottom:12px">
+      <span class="section-title" style="font-size:14px">Monthly P&L (R)</span>
+    </div>
+    <canvas id="monthlyChart"></canvas>
+  </div>
+  <div class="section-header" style="margin-top:4px">
+    <span class="section-title" style="font-size:15px">Per-Setup Breakdown</span>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Setup</th><th>Trades</th><th>Win Rate</th><th>Avg R</th><th>Total R</th><th>Best</th><th>Worst</th></tr></thead>
+      <tbody id="perfTableBody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════ SECTION 4 — SETUPS ══════════ -->
+<div id="page-setups" class="page">
+  <div class="section-header">
+    <span class="section-title">Setups Scanner</span>
+    <span class="section-sub" id="setupsTime">Auto-refresh 60s</span>
+  </div>
+  <div class="setup-grid" id="setupGrid"><div class="loading">Loading…</div></div>
+</div>
+
+<!-- ══════════ SECTION 5 — SYSTEM HEALTH ══════════ -->
+<div id="page-health" class="page">
+  <div class="section-header">
+    <span class="section-title">System Health</span>
+    <button class="refresh-btn" onclick="loadHealth()">↻ Refresh</button>
+  </div>
+  <div class="diag-grid" id="healthGrid"><div class="loading">Loading…</div></div>
+</div>
+
+<!-- ══════════ SECTION 6 — DIAGNOSTICS ══════════ -->
+<div id="page-diagnostics" class="page">
+  <div class="section-header">
+    <span class="section-title">Diagnostics</span>
+    <button class="refresh-btn" onclick="loadDiagnostics()">↻ Refresh</button>
+  </div>
+  <div class="diag-grid" id="diagGrid"><div class="loading">Loading…</div></div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────────────────────
+//  THEME
+// ──────────────────────────────────────────────────────────────
+const saved = localStorage.getItem('apex_theme') || 'light';
+applyTheme(saved);
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.querySelector('.theme-toggle').textContent = t === 'dark' ? '☀︎ Light' : '⏾ Dark';
+  localStorage.setItem('apex_theme', t);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+  if (window._equityChart) rebuildCharts();
+}
+
+// ──────────────────────────────────────────────────────────────
+//  NAVIGATION
+// ──────────────────────────────────────────────────────────────
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (id === 'trades') loadTrades();
+  if (id === 'performance') loadPerformance();
+  if (id === 'setups') loadSetups();
+  if (id === 'health') loadHealth();
+  if (id === 'diagnostics') loadDiagnostics();
+}
+
+// ──────────────────────────────────────────────────────────────
+//  FETCH HELPER
+// ──────────────────────────────────────────────────────────────
+async function api(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    return await r.json();
+  } catch(e) { return { ok: false, error: e.message }; }
+}
+
+function fmt(v, dec=2) {
+  if (v === null || v === undefined || v === '') return '—';
+  return typeof v === 'number' ? v.toFixed(dec) : v;
+}
+function fmtR(r) {
+  if (r === null || r === undefined) return '—';
+  const f = r.toFixed(2);
+  return r >= 0 ? '+' + f : f;
+}
+function fmtDt(s) {
+  if (!s) return '—';
+  try { return new Date(s).toLocaleString('en-US',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}); }
+  catch { return s.slice(0,16); }
+}
+function setupPill(s) {
+  if (!s) return '—';
+  const cls = s.startsWith('A') ? 'pill-a' : s.startsWith('B') ? 'pill-b' :
+              s.startsWith('C') ? 'pill-c' : s.startsWith('D') ? 'pill-d' :
+              s.startsWith('E') ? 'pill-e' : s.startsWith('F') ? 'pill-f' :
+              s.startsWith('H') ? 'pill-h' : '';
+  const lbl = s.split('_')[0];
+  return `<span class="pill ${cls}">${lbl}</span>`;
+}
+function dirPill(d) {
+  if (!d) return '—';
+  return d === 'long'
+    ? '<span class="pill pill-long">Long</span>'
+    : '<span class="pill pill-short">Short</span>';
+}
+function pnlColor(r) {
+  if (r === null || r === undefined) return '';
+  return r >= 0 ? `style="color:var(--green)"` : `style="color:var(--red)"`;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  OVERVIEW
+// ──────────────────────────────────────────────────────────────
+let _overviewData = null;
+async function loadOverview() {
+  document.getElementById('overviewTime').textContent = 'Refreshing…';
+  const [eq, trades, health] = await Promise.all([
+    api('/api/apex/equity'),
+    api('/api/apex/trades'),
+    api('/api/apex/health'),
+  ]);
+
+  // Metrics
+  if (eq.ok) {
+    const b = eq.live_balance ?? eq.current_balance ?? 10000;
+    const ret = eq.total_return ?? 0;
+    document.getElementById('metBalance').textContent = '$' + b.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+    document.getElementById('metReturn').textContent = (ret >= 0 ? '+' : '') + ret.toFixed(2) + '% all-time';
+    const tp = eq.today_pnl ?? 0;
+    const tr = eq.today_r ?? 0;
+    document.getElementById('metTodayPnl').innerHTML = `<span ${pnlColor(tp)}>$${tp >= 0 ? '+' : ''}${tp.toFixed(2)}</span>`;
+    document.getElementById('metTodayR').textContent = fmtR(tr) + 'R today';
+  }
+
+  if (trades.ok) {
+    const st = trades.stats || {};
+    document.getElementById('metTrades').textContent = (st.total_trades ?? '—') + '';
+    document.getElementById('metOpenTrades').textContent = `${st.open_trades ?? 0} open · ${st.win_rate ?? 0}% WR`;
+    // Daily loss limit (rough estimate: today_r × $100 risk)
+    const todayLoss = Math.abs(Math.min(0, (eq.today_r ?? 0) * 100));
+    const limitPct = Math.min(100, todayLoss / 150 * 100);
+    document.getElementById('metDailyLoss').textContent = '-$' + todayLoss.toFixed(0) + ' today';
+    const bar = document.getElementById('limitBar');
+    bar.style.width = limitPct + '%';
+    bar.className = 'progress-fill' + (limitPct >= 100 ? ' red' : limitPct >= 70 ? ' amber' : '');
+  }
+
+  // Open trades table
+  const body = document.getElementById('openTradesBody');
+  const open = (trades.ok ? trades.open_trades : []) || [];
+  if (open.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No open positions</td></tr>';
+  } else {
+    body.innerHTML = open.map(t => {
+      const pnl = t.current_pnl_r ?? null;
+      return `<tr>
+        <td><strong>${t.symbol}</strong></td>
+        <td>${dirPill(t.direction)}</td>
+        <td>${setupPill(t.setup)}</td>
+        <td>${fmt(t.entry_price)}</td>
+        <td>${fmt(t.stop)}</td>
+        <td>${fmt(t.target)}</td>
+        <td ${pnlColor(pnl)}><strong>${fmtR(pnl)}R</strong></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Health strip
+  renderHealthStrip(health);
+
+  document.getElementById('overviewTime').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+function renderHealthStrip(h) {
+  const strip = document.getElementById('healthStrip');
+  if (!h || !h.ok) {
+    strip.innerHTML = `<div class="health-item"><span class="dot dot-red"></span><strong>Health check failed</strong></div>`;
+    return;
+  }
+  const sched = h.scheduler || {};
+  const hbAgo = sched.last_heartbeat_ago_s;
+  const hbDot = hbAgo === null ? 'dot-grey' : hbAgo < 120 ? 'dot-green' : hbAgo < 360 ? 'dot-amber' : 'dot-red';
+  const hbTxt = hbAgo === null ? '—' : hbAgo + 's ago';
+
+  const feed = h.live_feed || {};
+  function feedDot(sym) {
+    const key = `${sym}_secs`;
+    const s = feed[key] ?? feed.seconds_since_last_bar;
+    if (s === null || s === undefined) return 'dot-grey';
+    return s < 60 ? 'dot-green' : s < 300 ? 'dot-amber' : 'dot-red';
+  }
+  function feedTxt(sym) {
+    const key = `${sym}_secs`;
+    const s = feed[key] ?? feed.seconds_since_last_bar;
+    return s !== null && s !== undefined ? s + 's' : '—';
+  }
+
+  const pg = h.postgres || {};
+  const pgDot = pg.ok ? 'dot-green' : 'dot-red';
+  const tgDot = h.telegram ? 'dot-green' : 'dot-amber';
+  const fired = (sched.fired_today || []).length;
+
+  strip.innerHTML = `
+    <div class="health-item"><span class="dot ${hbDot}"></span>Scheduler <strong>${hbTxt}</strong></div>
+    <div class="health-item"><span class="dot ${pgDot}"></span>PostgreSQL <strong>${pg.ok ? 'OK' : 'ERROR'}</strong></div>
+    <div class="health-item"><span class="dot ${feedDot('NQ')}"></span>NQ feed <strong>${feedTxt('NQ')}</strong></div>
+    <div class="health-item"><span class="dot ${feedDot('ES')}"></span>ES feed <strong>${feedTxt('ES')}</strong></div>
+    <div class="health-item"><span class="dot ${feedDot('GC')}"></span>GC feed <strong>${feedTxt('GC')}</strong></div>
+    <div class="health-item"><span class="dot ${tgDot}"></span>Telegram <strong>${h.telegram ? 'OK' : 'Not set'}</strong></div>
+    <div class="health-item">Dedup <strong>${fired} fired today</strong></div>
+  `;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  TRADES
+// ──────────────────────────────────────────────────────────────
+let _allTrades = [];
+let _tradeSort = { col: 'entry_time', asc: false };
+
+async function loadTrades() {
+  document.getElementById('tradesBody').innerHTML = '<tr><td colspan="12" class="loading">Loading…</td></tr>';
+  const [closed, open] = await Promise.all([
+    api('/api/apex/journal'),
+    api('/api/apex/trades'),
+  ]);
+  _allTrades = [];
+  if (closed.ok) _allTrades = _allTrades.concat(closed.trades || []);
+  if (open.ok) {
+    (open.open_trades || []).forEach(t => {
+      _allTrades.push({ ...t, status: 'open' });
+    });
+  }
+  renderTradesTable();
+}
+
+function sortTrades(col) {
+  if (_tradeSort.col === col) _tradeSort.asc = !_tradeSort.asc;
+  else { _tradeSort.col = col; _tradeSort.asc = false; }
+  renderTradesTable();
+}
+
+function renderTradesTable() {
+  const setup  = document.getElementById('filterSetup').value;
+  const symbol = document.getElementById('filterSymbol').value;
+  const status = document.getElementById('filterStatus').value;
+  const from   = document.getElementById('filterFrom').value;
+  const to     = document.getElementById('filterTo').value;
+
+  let rows = _allTrades.filter(t => {
+    if (setup  && !t.setup?.includes(setup.split('_')[0]))  return false;
+    if (symbol && t.symbol !== symbol) return false;
+    if (status && t.status !== status) return false;
+    if (from && t.entry_time && t.entry_time < from) return false;
+    if (to   && t.entry_time && t.entry_time.slice(0,10) > to) return false;
+    return true;
+  });
+
+  const col = _tradeSort.col;
+  rows.sort((a,b) => {
+    let va = a[col], vb = b[col];
+    if (va === null || va === undefined) va = '';
+    if (vb === null || vb === undefined) vb = '';
+    if (typeof va === 'number') return _tradeSort.asc ? va-vb : vb-va;
+    return _tradeSort.asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  });
+
+  const body = document.getElementById('tradesBody');
+  if (rows.length === 0) {
+    body.innerHTML = '<tr><td colspan="12" class="empty">No trades match filters</td></tr>';
+  } else {
+    body.innerHTML = rows.map(t => {
+      const pnl = t.pnl_r ?? null;
+      const rowCls = t.status === 'closed' ? (pnl > 0 ? ' class="win"' : pnl < 0 ? ' class="loss"' : '') : '';
+      const statPill = t.status === 'open'
+        ? '<span class="pill pill-open">Open</span>'
+        : '<span class="pill pill-closed">Closed</span>';
+      return `<tr${rowCls}>
+        <td>${t.id ?? '—'}</td>
+        <td>${fmtDt(t.entry_time)}</td>
+        <td><strong>${t.symbol}</strong></td>
+        <td>${setupPill(t.setup)}</td>
+        <td>${dirPill(t.direction)}</td>
+        <td>${fmt(t.entry_price)}</td>
+        <td>${fmt(t.stop)}</td>
+        <td>${fmt(t.target)}</td>
+        <td>${t.exit_price != null ? fmt(t.exit_price) : '—'}</td>
+        <td>${t.exit_reason ?? '—'}</td>
+        <td ${pnlColor(pnl)}><strong>${fmtR(pnl)}R</strong></td>
+        <td>${statPill}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Summary row
+  const closed2 = rows.filter(t => t.status === 'closed' && t.pnl_r !== null);
+  const wins = closed2.filter(t => t.pnl_r > 0);
+  const totalR = closed2.reduce((a,t) => a + (t.pnl_r||0), 0);
+  const avgR = closed2.length ? totalR / closed2.length : 0;
+  const wr = closed2.length ? (wins.length / closed2.length * 100).toFixed(1) : 0;
+  document.getElementById('tradesSummary').innerHTML =
+    `<span>${rows.length} trades shown</span>` +
+    (closed2.length ? `<span>WR: ${wr}%</span><span>Avg R: ${fmtR(avgR)}</span><span>Total R: ${fmtR(totalR)}</span>` : '');
+}
+
+// ──────────────────────────────────────────────────────────────
+//  PERFORMANCE
+// ──────────────────────────────────────────────────────────────
+let _equityChart = null, _monthlyChart = null;
+
+async function loadPerformance() {
+  const [eq, journal] = await Promise.all([
+    api('/api/apex/equity'),
+    api('/api/apex/journal'),
+  ]);
+
+  if (eq.ok) {
+    const pts  = eq.points || [];
+    const tr   = pts.length > 1 ? pts[pts.length-1].equity - pts[0].equity : 0;
+    const rSum = (journal.trades || []).filter(t=>t.pnl_r!=null).reduce((a,t)=>a+t.pnl_r,0);
+    document.getElementById('perfTotalR').textContent = fmtR(rSum) + 'R';
+
+    const cl = (journal.trades || []).filter(t=>t.pnl_r!=null);
+    const wins = cl.filter(t=>t.pnl_r>0);
+    document.getElementById('perfWR').textContent = cl.length ? (wins.length/cl.length*100).toFixed(1)+'%' : '—';
+    const exp = cl.length ? cl.reduce((a,t)=>a+t.pnl_r,0)/cl.length : null;
+    document.getElementById('perfExp').textContent = exp !== null ? fmtR(exp)+'R' : '—';
+    // Profit factor
+    const grossW = wins.reduce((a,t)=>a+t.pnl_r,0);
+    const losses = cl.filter(t=>t.pnl_r<0);
+    const grossL = Math.abs(losses.reduce((a,t)=>a+t.pnl_r,0));
+    document.getElementById('perfPF').textContent = grossL > 0 ? (grossW/grossL).toFixed(2) : '—';
+
+    buildEquityChart(pts);
+    buildMonthlyChart(journal.trades || []);
+    buildPerfTable(journal.trades || []);
+  }
+}
+
+function buildEquityChart(pts) {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const textColor = isDark ? '#aeaeb2' : '#6e6e73';
+  const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
+
+  if (_equityChart) _equityChart.destroy();
+  const ctx = document.getElementById('equityChart').getContext('2d');
+  _equityChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.label),
+      datasets: [{
+        label: 'Equity ($)',
+        data: pts.map(p => p.equity),
+        borderColor: '#0071e3',
+        borderWidth: 2,
+        fill: false,
+        tension: 0.3,
+        pointRadius: pts.length > 50 ? 0 : 3,
+        pointHoverRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+      scales: {
+        x: { ticks: { color: textColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
+        y: { ticks: { color: textColor, callback: v => '$'+v.toLocaleString() }, grid: { color: gridColor } }
+      }
+    }
+  });
+}
+
+function buildMonthlyChart(trades) {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const textColor = isDark ? '#aeaeb2' : '#6e6e73';
+  const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
+
+  const monthly = {};
+  (trades || []).forEach(t => {
+    if (!t.pnl_r || !t.entry_time) return;
+    const mo = t.entry_time.slice(0, 7);
+    monthly[mo] = (monthly[mo] || 0) + t.pnl_r;
+  });
+  const labels = Object.keys(monthly).sort();
+  const vals = labels.map(k => parseFloat(monthly[k].toFixed(2)));
+
+  if (_monthlyChart) _monthlyChart.destroy();
+  const ctx = document.getElementById('monthlyChart').getContext('2d');
+  _monthlyChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: vals,
+        backgroundColor: vals.map(v => v >= 0 ? 'rgba(52,199,89,0.7)' : 'rgba(255,59,48,0.7)'),
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtR(ctx.raw)+'R' } } },
+      scales: {
+        x: { ticks: { color: textColor }, grid: { display: false } },
+        y: { ticks: { color: textColor, callback: v => fmtR(v)+'R' }, grid: { color: gridColor } }
+      }
+    }
+  });
+}
+
+function buildPerfTable(trades) {
+  const bySetup = {};
+  (trades || []).filter(t => t.pnl_r != null).forEach(t => {
+    const s = t.setup || 'unknown';
+    if (!bySetup[s]) bySetup[s] = [];
+    bySetup[s].push(t.pnl_r);
+  });
+  const body = document.getElementById('perfTableBody');
+  const rows = Object.entries(bySetup).map(([s, rs]) => {
+    const wins = rs.filter(r => r > 0);
+    const wr = (wins.length / rs.length * 100).toFixed(1);
+    const avg = (rs.reduce((a,v)=>a+v,0)/rs.length).toFixed(2);
+    const tot = rs.reduce((a,v)=>a+v,0).toFixed(2);
+    const best = Math.max(...rs).toFixed(2);
+    const worst = Math.min(...rs).toFixed(2);
+    return `<tr>
+      <td>${setupPill(s)} <span style="margin-left:6px;color:var(--text2)">${s}</span></td>
+      <td>${rs.length}</td>
+      <td>${wr}%</td>
+      <td ${rs.reduce((a,v)=>a+v,0)>=0 ? 'style="color:var(--green)"' : 'style="color:var(--red)"}'}>${fmtR(parseFloat(avg))}R</td>
+      <td ${parseFloat(tot)>=0 ? 'style="color:var(--green)"' : 'style="color:var(--red)"'}>${fmtR(parseFloat(tot))}R</td>
+      <td style="color:var(--green)">+${best}R</td>
+      <td style="color:var(--red)">${parseFloat(worst)<0?'':'-'}${Math.abs(worst)}R</td>
+    </tr>`;
+  });
+  body.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="7" class="empty">No closed trades yet</td></tr>';
+}
+
+function rebuildCharts() {
+  if (_equityChart) { const p = _equityChart.data; buildEquityChart(_overviewData?.equity_pts || []); }
+  if (_monthlyChart) { buildMonthlyChart([]); }
+}
+
+// ──────────────────────────────────────────────────────────────
+//  SETUPS SCANNER
+// ──────────────────────────────────────────────────────────────
+const SETUP_META = {
+  'A': { name:'Setup A — Sweep + OB',       desc:'Liquidity sweep + active order block within 1 ATR. RR 4.0, stop 0.8×ATR.', rr:'4.0', stop:'0.8×ATR', session:'London 7-11 / NY 13-19 UTC' },
+  'B': { name:'Setup B — CHoCH + Breaker',  desc:'Change-of-character + nearby breaker block. RR 4.0, stop 0.8×ATR.',        rr:'4.0', stop:'0.8×ATR', session:'London 7-11 / NY 13-19 UTC' },
+  'C': { name:'Setup C — BOS + OB',         desc:'Break of structure + OB pullback. Blocked 07-09 UTC. RR 4.0.',             rr:'4.0', stop:'0.8×ATR', session:'London 7-11 / NY 13-19 UTC' },
+  'D': { name:'Setup D — FVG Fill',         desc:'15min FVG + 4h bias + 1min entry. NQ/ES only. RR 2.5, score ≥70.',         rr:'2.5', stop:'1.0×ATR', session:'13-19 UTC' },
+  'E': { name:'Setup E — EMA50 Pullback',   desc:'5min retraces to EMA50 in 4h trend. NQ only. RR 2.5.',                     rr:'2.5', stop:'1.5×ATR', session:'13-18 UTC' },
+  'F': { name:'Setup F — Random Forest ML', desc:'RF classifier on 8 features. P>0.58 long / P<0.42 short. NQ/ES.',          rr:'2.5', stop:'1.5×ATR', session:'13-19 UTC' },
+  'H': { name:'Setup H — VWAP 2σ Rev.',    desc:'ES price reverts from 2-sigma band with 1h bias. RR≥2.0.',                  rr:'≥2.0',stop:'1.5×ATR', session:'13-19 UTC' },
+};
+
+async function loadSetups() {
+  document.getElementById('setupsTime').textContent = 'Loading…';
+  const [scan, health] = await Promise.all([
+    api('/api/apex/scan'),
+    api('/api/apex/health'),
+  ]);
+  const grid = document.getElementById('setupGrid');
+
+  const results = scan.results || [];
+  const fvgSigs = scan.fvg_signals || [];
+  const fPreds  = scan.setup_f_predictions || [];
+  const hData   = scan.setup_h_data || [];
+
+  // Group by setup letter
+  const bySetup = {};
+  results.forEach(r => {
+    const s = r.setup || '?';
+    if (!bySetup[s]) bySetup[s] = [];
+    bySetup[s].push(r);
+  });
+
+  const cards = [];
+
+  // A/B/C from results
+  ['A','B','C'].forEach(s => {
+    const meta = SETUP_META[s];
+    const sigs = bySetup[s] || [];
+    const valid = sigs.filter(r => r.valid);
+    const nq = sigs.filter(r => r.symbol === 'NQ');
+    const es = sigs.filter(r => r.symbol === 'ES');
+    const gc = sigs.filter(r => r.symbol === 'GC');
+
+    function symStatus(rows) {
+      const v = rows.find(r=>r.valid);
+      if (v) return `<span style="color:var(--green)">✓ ${v.direction.toUpperCase()}</span>`;
+      if (!rows.length) return '<span style="color:var(--text3)">—</span>';
+      const f = rows[0].failed_at || rows[0].gates?.find(g=>!g.passed)?.name || '?';
+      return `<span style="color:var(--text2)">✗ ${f}</span>`;
+    }
+
+    const status = valid.length
+      ? `<span class="dot dot-green" style="animation:pulse 2s infinite"></span>`
+      : `<span class="dot dot-grey"></span>`;
+
+    cards.push(`<div class="setup-card">
+      <div class="setup-card-header">
+        <span class="setup-card-name">${meta.name}</span>
+        ${status}
+      </div>
+      <div class="setup-card-desc">${meta.desc}</div>
+      <div class="setup-card-rows">
+        <div class="setup-card-row"><span>NQ</span><span>${symStatus(nq)}</span></div>
+        <div class="setup-card-row"><span>ES</span><span>${symStatus(es)}</span></div>
+        <div class="setup-card-row"><span>GC</span><span>${symStatus(gc)}</span></div>
+        <div class="setup-card-row"><span>Session</span><span>${meta.session}</span></div>
+        <div class="setup-card-row"><span>RR / Stop</span><span>${meta.rr} / ${meta.stop}</span></div>
+      </div>
+    </div>`);
+  });
+
+  // Setup D
+  {
+    const meta = SETUP_META['D'];
+    const valid = fvgSigs.filter(s => s.valid);
+    const status = valid.length
+      ? `<span class="dot dot-green" style="animation:pulse 2s infinite"></span>`
+      : `<span class="dot dot-grey"></span>`;
+    const sigRows = ['NQ','ES'].map(sym => {
+      const v = valid.find(s => s.symbol === sym);
+      return `<div class="setup-card-row"><span>${sym}</span><span>${v ? `<span style="color:var(--green)">✓ ${v.direction?.toUpperCase()} entry=${v.entry} rr=${v.rr}x</span>` : '<span style="color:var(--text2)">No signal</span>'}</span></div>`;
+    }).join('');
+    cards.push(`<div class="setup-card">
+      <div class="setup-card-header"><span class="setup-card-name">${meta.name}</span>${status}</div>
+      <div class="setup-card-desc">${meta.desc}</div>
+      <div class="setup-card-rows">
+        ${sigRows}
+        <div class="setup-card-row"><span>GC</span><span style="color:var(--text3)">Disabled (feed unverified)</span></div>
+        <div class="setup-card-row"><span>Session</span><span>${meta.session}</span></div>
+        <div class="setup-card-row"><span>RR / Stop</span><span>${meta.rr} / ${meta.stop}</span></div>
+      </div>
+    </div>`);
+  }
+
+  // Setup E
+  {
+    const meta = SETUP_META['E'];
+    const eRows = (bySetup['E'] || []);
+    const valid = eRows.filter(r=>r.valid);
+    const status = valid.length
+      ? `<span class="dot dot-green" style="animation:pulse 2s infinite"></span>`
+      : `<span class="dot dot-grey"></span>`;
+    const long_  = eRows.find(r=>r.direction==='long');
+    const short_ = eRows.find(r=>r.direction==='short');
+    function eDir(r) {
+      if (!r) return '<span style="color:var(--text3)">—</span>';
+      if (r.valid) return `<span style="color:var(--green)">✓ SIGNAL entry=${r.entry}</span>`;
+      return `<span style="color:var(--text2)">✗ ${r.failed_at || '?'}</span>`;
+    }
+    cards.push(`<div class="setup-card">
+      <div class="setup-card-header"><span class="setup-card-name">${meta.name}</span>${status}</div>
+      <div class="setup-card-desc">${meta.desc}</div>
+      <div class="setup-card-rows">
+        <div class="setup-card-row"><span>NQ Long</span><span>${eDir(long_)}</span></div>
+        <div class="setup-card-row"><span>NQ Short</span><span>${eDir(short_)}</span></div>
+        <div class="setup-card-row"><span>Session</span><span>${meta.session}</span></div>
+        <div class="setup-card-row"><span>RR / Stop</span><span>${meta.rr} / ${meta.stop}</span></div>
+      </div>
+    </div>`);
+  }
+
+  // Setup F
+  {
+    const meta = SETUP_META['F'];
+    const hasSignal = fPreds.some(p => p.signal_state?.includes('SIGNAL'));
+    const status = hasSignal
+      ? `<span class="dot dot-green" style="animation:pulse 2s infinite"></span>`
+      : `<span class="dot dot-grey"></span>`;
+    const predRows = fPreds.map(p => {
+      const stateColor = p.signal_state?.includes('SIGNAL') ? 'var(--green)' : 'var(--text2)';
+      return `<div class="setup-card-row"><span>${p.symbol}</span><span style="color:${stateColor}">${p.signal_state ?? '—'} <span style="color:var(--text2);font-size:11px">${p.probability != null ? (p.probability*100).toFixed(1)+'%' : ''}</span></span></div>`;
+    });
+    cards.push(`<div class="setup-card">
+      <div class="setup-card-header"><span class="setup-card-name">${meta.name}</span>${status}</div>
+      <div class="setup-card-desc">${meta.desc}</div>
+      <div class="setup-card-rows">
+        ${predRows.join('')}
+        <div class="setup-card-row"><span>Session</span><span>${meta.session}</span></div>
+        <div class="setup-card-row"><span>RR / Stop</span><span>${meta.rr} / ${meta.stop}</span></div>
+      </div>
+    </div>`);
+  }
+
+  // Setup H
+  {
+    const meta = SETUP_META['H'];
+    const hasSignal = false; // H signals only fire intraday — check via scan
+    const hRows = hData.map(h => {
+      const stColor = h.signal_state === 'ABOVE_UPPER' || h.signal_state === 'BELOW_LOWER'
+        ? 'var(--amber)' : h.in_session ? 'var(--green)' : 'var(--text2)';
+      return `<div class="setup-card-row"><span>${h.symbol} ${h.symbol==='NQ'?'(paper)':'(live)'}</span><span style="color:${stColor}">${h.signal_state ?? '—'} <span style="color:var(--text3);font-size:11px">vwap=${h.vwap??'—'}</span></span></div>`;
+    });
+    const status = `<span class="dot dot-grey"></span>`;
+    cards.push(`<div class="setup-card">
+      <div class="setup-card-header"><span class="setup-card-name">${meta.name}</span>${status}</div>
+      <div class="setup-card-desc">${meta.desc}</div>
+      <div class="setup-card-rows">
+        ${hRows.join('') || '<div class="setup-card-row"><span>Status</span><span style="color:var(--text3)">—</span></div>'}
+        <div class="setup-card-row"><span>Session</span><span>${meta.session}</span></div>
+        <div class="setup-card-row"><span>RR / Stop</span><span>${meta.rr} / ${meta.stop}</span></div>
+      </div>
+    </div>`);
+  }
+
+  grid.innerHTML = cards.join('');
+  document.getElementById('setupsTime').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+// ──────────────────────────────────────────────────────────────
+//  SYSTEM HEALTH
+// ──────────────────────────────────────────────────────────────
+async function loadHealth() {
+  document.getElementById('healthGrid').innerHTML = '<div class="loading">Loading…</div>';
+  const h = await api('/api/apex/health');
+  if (!h.ok) {
+    document.getElementById('healthGrid').innerHTML = `<div class="loading">Health check failed: ${h.error || '—'}</div>`;
+    return;
+  }
+
+  function diag(title, rows) {
+    const rs = rows.map(([k,v,color]) =>
+      `<div class="diag-row"><span class="diag-row-label">${k}</span><span class="diag-row-val" ${color?`style="color:${color}"` : ''}>${v ?? '—'}</span></div>`
+    ).join('');
+    return `<div class="diag-card"><div class="diag-title">${title}</div>${rs}</div>`;
+  }
+
+  const sched = h.scheduler || {};
+  const hbAgo = sched.last_heartbeat_ago_s;
+  const hbColor = hbAgo===null ? null : hbAgo < 120 ? 'var(--green)' : hbAgo < 360 ? 'var(--amber)' : 'var(--red)';
+  const fired = sched.fired_today || [];
+
+  const pg = h.postgres || {};
+  const feed = h.live_feed || {};
+  const sf = h.setup_f || {};
+  const db = h.db_counts || {};
+  const ohlcv_d = db.ohlcv_detail || {};
+
+  const cards = [
+    diag('Scheduler', [
+      ['Last heartbeat', hbAgo !== null ? hbAgo + 's ago' : '—', hbColor],
+      ['Fired today', fired.length + ' signals', null],
+      ['Reset date', sched.fired_today_date || '—', null],
+      ['Fired keys', fired.length > 0 ? fired.slice(0,5).join(', ') + (fired.length>5?'…':'') : 'none', 'var(--text2)'],
+    ]),
+    diag('PostgreSQL / SQLite', [
+      ['Connection', pg.ok ? 'OK' : 'FAILED', pg.ok ? 'var(--green)' : 'var(--red)'],
+      ['Mode', pg.is_postgres ? 'PostgreSQL (Railway)' : 'SQLite (local)', null],
+      ['ohlcv rows', db.ohlcv ?? '—', null],
+      ['apex_trades rows', db.apex_trades ?? '—', null],
+      ['fvg_alerted_zones', db.fvg_alerted_zones ?? '—', null],
+      ['swing_alerted_signals', db.swing_alerted_signals ?? '—', null],
+    ]),
+    diag('OHLCV Bar Counts', [
+      ['NQ 1min', ohlcv_d['NQ_1min'] ?? '—', null],
+      ['NQ 5min', ohlcv_d['NQ_5min'] ?? '—', null],
+      ['NQ 15min', ohlcv_d['NQ_15min'] ?? '—', null],
+      ['ES 1min', ohlcv_d['ES_1min'] ?? '—', null],
+      ['ES 5min', ohlcv_d['ES_5min'] ?? '—', null],
+      ['GC 1min', ohlcv_d['GC_1min'] ?? '—', null],
+    ]),
+    diag('Live Bar Feed', [
+      ['Connected', feed.running !== undefined ? (feed.running ? 'Yes' : 'No') : '—',
+       feed.running ? 'var(--green)' : 'var(--red)'],
+      ['Secs since last bar', feed.seconds_since_last_bar ?? '—',
+       feed.seconds_since_last_bar < 60 ? 'var(--green)' : feed.seconds_since_last_bar < 300 ? 'var(--amber)' : 'var(--red)'],
+      ['Last bar time', feed.last_bar_time ?? '—', null],
+      ['Bars today', feed.bars_today ?? '—', null],
+    ]),
+    diag('Setup F Model', [
+      ['NQ trained', sf.NQ?.trained_at?.slice(0,16) ?? '—', null],
+      ['ES trained', sf.ES?.trained_at?.slice(0,16) ?? '—', null],
+      ['NQ state', sf.NQ?.signal_state ?? '—', null],
+      ['ES state', sf.ES?.signal_state ?? '—', null],
+      ['NQ prob', sf.NQ?.probability != null ? (sf.NQ.probability*100).toFixed(1)+'%' : '—', null],
+      ['ES prob', sf.ES?.probability != null ? (sf.ES.probability*100).toFixed(1)+'%' : '—', null],
+    ]),
+    diag('Integrations', [
+      ['Telegram', h.telegram ? 'Configured' : 'Not set', h.telegram ? 'var(--green)' : 'var(--amber)'],
+      ['Timestamp', h.timestamp?.slice(0,19).replace('T',' ') ?? '—', null],
+    ]),
+  ];
+
+  document.getElementById('healthGrid').innerHTML = cards.join('');
+}
+
+// ──────────────────────────────────────────────────────────────
+//  DIAGNOSTICS
+// ──────────────────────────────────────────────────────────────
+async function loadDiagnostics() {
+  document.getElementById('diagGrid').innerHTML = '<div class="loading">Loading…</div>';
+  const [market, scan, health] = await Promise.all([
+    api('/api/apex/market'),
+    api('/api/apex/scan'),
+    api('/api/apex/health'),
+  ]);
+
+  function diagCard(title, rows) {
+    const rs = rows.map(([k,v,color]) =>
+      `<div class="diag-row"><span class="diag-row-label">${k}</span><span class="diag-row-val" ${color?`style="color:${color}"`:''}>${v ?? '—'}</span></div>`
+    ).join('');
+    return `<div class="diag-card"><div class="diag-title">${title}</div>${rs}</div>`;
+  }
+
+  const cards = [];
+
+  // HTF Bias
+  const mkt = market.market || {};
+  cards.push(diagCard('HTF Bias (4h EMA20)', ['NQ','ES','GC'].map(sym => {
+    const m = mkt[sym] || {};
+    const biasColor = m.bias === 'bullish' ? 'var(--green)' : m.bias === 'bearish' ? 'var(--red)' : 'var(--text2)';
+    const detail = m.close != null ? `${m.bias?.toUpperCase()} | ${m.close} (${m.pct >= 0 ? '+' : ''}${m.pct}%)` : m.error || '—';
+    return [sym, detail, biasColor];
+  })));
+
+  // Setup F probabilities
+  const fPreds = scan.setup_f_predictions || [];
+  cards.push(diagCard('Setup F Probabilities', fPreds.map(p => {
+    const pct = p.probability != null ? (p.probability*100).toFixed(1)+'%' : '—';
+    const stColor = p.signal_state?.includes('SIGNAL') ? 'var(--green)' : 'var(--text2)';
+    return [p.symbol, `${p.signal_state ?? '—'} (${pct})`, stColor];
+  })));
+
+  // Gate status per symbol per direction for A/B/C/E
+  const results = scan.results || [];
+  ['NQ','ES','GC'].forEach(sym => {
+    const rows = results.filter(r => r.symbol === sym);
+    if (!rows.length) return;
+    cards.push(diagCard(`${sym} — Gate Status`, rows.map(r => {
+      const failed = r.failed_at || (r.gates?.find(g=>!g.passed)?.name) || 'passed all';
+      const color = r.valid ? 'var(--green)' : 'var(--text2)';
+      return [`${r.setup} ${r.direction}`, r.valid ? `✓ Valid entry=${r.entry}` : `✗ ${failed}`, color];
+    })));
+  });
+
+  // Last bar OHLCV per symbol
+  const db = health.db_counts || {};
+  const ohlcv_d = db.ohlcv_detail || {};
+  cards.push(diagCard('OHLCV Bar Counts (ts>0)', [
+    ['NQ 1min', ohlcv_d['NQ_1min'] ?? '—', null],
+    ['NQ 5min', ohlcv_d['NQ_5min'] ?? '—', null],
+    ['NQ 15min', ohlcv_d['NQ_15min'] ?? '—', null],
+    ['ES 1min', ohlcv_d['ES_1min'] ?? '—', null],
+    ['ES 5min', ohlcv_d['ES_5min'] ?? '—', null],
+    ['GC 1min', ohlcv_d['GC_1min'] ?? '—', null],
+    ['GC 5min', ohlcv_d['GC_5min'] ?? '—', null],
+  ]));
+
+  // Parameter summary
+  cards.push(diagCard('Parameter Summary', [
+    ['A/B/C stop_atr', '0.8',    null],
+    ['A/B/C RR',       '4.0',    null],
+    ['A/B/C session',  'London primary 7-11 / NY secondary 13-19 UTC', null],
+    ['D stop_atr',     '1.0',    null],
+    ['D RR',           '2.5',    null],
+    ['D session',      '13-19 UTC', null],
+    ['E stop_atr',     '1.5',    null],
+    ['E RR',           '2.5',    null],
+    ['F stop_atr',     '1.5',    null],
+    ['F RR',           '2.5',    null],
+    ['H stop_atr',     '1.5',    null],
+    ['H min RR',       '2.0',    null],
+    ['NQ days',        'Tue/Wed/Thu', null],
+    ['GC days',        'Mon–Fri', null],
+  ]));
+
+  // Setup H state
+  const hData = scan.setup_h_data || [];
+  if (hData.length) {
+    cards.push(diagCard('Setup H — VWAP State', hData.flatMap(h => [
+      [`${h.symbol} price`, h.price ?? '—', null],
+      [`${h.symbol} VWAP`, h.vwap ?? '—', null],
+      [`${h.symbol} upper 2σ`, h.upper_band ?? '—', null],
+      [`${h.symbol} lower 2σ`, h.lower_band ?? '—', null],
+      [`${h.symbol} state`, h.signal_state ?? '—',
+       h.signal_state === 'ABOVE_UPPER' || h.signal_state === 'BELOW_LOWER' ? 'var(--amber)' : null],
+    ])));
+  }
+
+  document.getElementById('diagGrid').innerHTML = cards.join('');
+}
+
+// ──────────────────────────────────────────────────────────────
+//  AUTO-REFRESH
+// ──────────────────────────────────────────────────────────────
+function activePage() {
+  const p = document.querySelector('.page.active');
+  return p ? p.id.replace('page-', '') : 'overview';
+}
+
+loadOverview();
+setInterval(() => {
+  const p = activePage();
+  if (p === 'overview') loadOverview();
+  if (p === 'health')   loadHealth();
+}, 30000);
+setInterval(() => {
+  const p = activePage();
+  if (p === 'setups')      loadSetups();
+  if (p === 'diagnostics') loadDiagnostics();
+}, 60000);
+</script>
+</body>
+</html>

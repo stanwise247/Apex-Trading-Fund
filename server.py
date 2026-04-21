@@ -815,7 +815,7 @@ def call_anthropic(api_key, prompt, max_tokens=2500):
 @app.route('/')
 def dashboard():
     from flask import send_from_directory
-    return send_from_directory('.', 'apex_dashboard_v7.html')
+    return send_from_directory('.', 'apex_dashboard_v8.html')
 
 @app.route('/api/debug')
 def debug():
@@ -2325,7 +2325,7 @@ def _startup():
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
-    logger.info('  Open apex_dashboard_v7.html in your browser')
+    logger.info('  Open apex_dashboard_v8.html in your browser')
     logger.info('=' * 55)
 
 _startup()
@@ -2873,9 +2873,86 @@ def apex_fvg_zones(symbol):
 
 @app.route('/api/apex/health', methods=['GET'])
 def apex_health():
-    """Health check — returns Telegram configured status without hitting the API."""
+    """System health — scheduler state, live feed stats, DB row counts, Setup F status."""
+    import time as _time_mod
     tg_ok = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT)
-    return jsonify({'ok': True, 'telegram': tg_ok})
+    now_ts = _time_mod.time()
+
+    # ── Scheduler state ──────────────────────────────────────
+    sched_hb = getattr(background_scheduler, '_last_heartbeat', None)
+    sched_hb_ago = round(now_ts - sched_hb) if sched_hb else None
+    fired_today_keys = list(_fired_today.keys()) if _fired_today else []
+    fired_today_date = getattr(background_scheduler, '_fired_today_date', None)
+
+    # ── Live feed stats ───────────────────────────────────────
+    feed_stats = {}
+    try:
+        from data_feed import get_live_feed_stats
+        feed_stats = get_live_feed_stats() or {}
+    except Exception as _fe:
+        feed_stats = {'error': str(_fe)}
+
+    # ── DB row counts ─────────────────────────────────────────
+    db_counts = {}
+    try:
+        conn = _db.connect()
+        for tbl in ('ohlcv', 'apex_trades', 'fvg_alerted_zones', 'swing_alerted_signals'):
+            try:
+                db_counts[tbl] = conn.execute(f'SELECT COUNT(*) FROM {tbl}').fetchone()[0]
+            except Exception:
+                db_counts[tbl] = None
+        # Per-symbol per-timeframe 1min bar counts
+        ohlcv_detail = {}
+        for sym in ('NQ', 'ES', 'GC'):
+            for tf in ('1min', '5min', '15min'):
+                try:
+                    cnt = conn.execute(
+                        'SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=? AND ts>0',
+                        (sym, tf)
+                    ).fetchone()[0]
+                    ohlcv_detail[f'{sym}_{tf}'] = cnt
+                except Exception:
+                    ohlcv_detail[f'{sym}_{tf}'] = None
+        conn.close()
+        db_counts['ohlcv_detail'] = ohlcv_detail
+    except Exception as _dbe:
+        db_counts = {'error': str(_dbe)}
+
+    # ── Setup F model status ──────────────────────────────────
+    setup_f_status = {}
+    try:
+        from setup_f_ml import get_current_prediction
+        for sym in ('NQ', 'ES'):
+            p = get_current_prediction(sym)
+            setup_f_status[sym] = p
+    except Exception as _sfe:
+        setup_f_status = {'error': str(_sfe)}
+
+    # ── PostgreSQL connection check ────────────────────────────
+    pg_ok = False
+    pg_error = None
+    try:
+        conn2 = _db.connect()
+        conn2.execute('SELECT 1').fetchone()
+        conn2.close()
+        pg_ok = True
+    except Exception as _pge:
+        pg_error = str(_pge)
+
+    return jsonify({
+        'ok': True,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'telegram':  tg_ok,
+        'postgres':  {'ok': pg_ok, 'is_postgres': _db.IS_POSTGRES, 'error': pg_error},
+        'scheduler': {
+            'last_heartbeat_ago_s': sched_hb_ago,
+            'fired_today':          fired_today_keys,
+            'fired_today_date':     fired_today_date,
+        },
+        'live_feed':  feed_stats,
+        'db_counts':  db_counts,
+        'setup_f':    setup_f_status,
+    })
 
 
 @app.route('/api/apex/telegram_test', methods=['POST'])
