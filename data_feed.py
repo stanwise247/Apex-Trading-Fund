@@ -59,8 +59,9 @@ class LiveBarFeed:
         self._live_conn      = None
         self._lock           = threading.Lock()
         self._sym_map        = {}   # instrument_id (int) → 'NQ'/'ES'/'GC'
-        self._bar_count      = 0
-        self._last_bar_time  = 0.0  # epoch seconds of most recent stored bar
+        self._bar_count             = 0
+        self._last_bar_time         = 0.0  # epoch seconds of most recent stored bar (any symbol)
+        self._last_bar_time_by_sym  = {}   # symbol → epoch seconds
 
     @property
     def is_running(self) -> bool:
@@ -78,6 +79,12 @@ class LiveBarFeed:
         if self._last_bar_time == 0.0:
             return float('inf')
         return time.time() - self._last_bar_time
+
+    def seconds_since_last_bar_for(self, symbol: str) -> float:
+        t = self._last_bar_time_by_sym.get(symbol, 0.0)
+        if t == 0.0:
+            return float('inf')
+        return time.time() - t
 
     def start(self):
         with self._lock:
@@ -210,8 +217,9 @@ class LiveBarFeed:
             conn.commit()
             conn.close()
 
-            self._bar_count     += 1
-            self._last_bar_time  = time.time()
+            self._bar_count                      += 1
+            self._last_bar_time                   = time.time()
+            self._last_bar_time_by_sym[symbol]    = self._last_bar_time
             ts_str = datetime.fromtimestamp(ts_unix, tz=timezone.utc).strftime('%H:%M')
             logger.info(
                 f'LiveBarFeed: {symbol} 1min {ts_str}UTC  '
@@ -255,13 +263,42 @@ def is_live_feed_running() -> bool:
 def get_live_feed_stats() -> dict:
     """Return live feed status for monitoring/dashboard."""
     if _live_feed is None:
-        return {'running': False, 'bar_count': 0, 'seconds_since_last_bar': None}
+        return {
+            'running': False, 'bar_count': 0, 'seconds_since_last_bar': None,
+            'nq_feed_seconds_ago': None, 'es_feed_seconds_ago': None, 'gc_feed_seconds_ago': None,
+            'nq_feed_status': 'red', 'es_feed_status': 'red', 'gc_feed_status': 'red',
+        }
     secs = _live_feed.seconds_since_last_bar()
+
+    def _sym_secs(sym):
+        s = _live_feed.seconds_since_last_bar_for(sym)
+        return None if s == float('inf') else round(s)
+
+    def _sym_status(s):
+        if s is None:    return 'red'
+        if s < 60:       return 'green'
+        if s < 300:      return 'amber'
+        return 'red'
+
+    nq_s = _sym_secs('NQ')
+    es_s = _sym_secs('ES')
+    gc_s = _sym_secs('GC')
+
     return {
-        'running':              _live_feed.is_running,
-        'bar_count':            _live_feed.bar_count,
-        'last_bar_time':        _live_feed.last_bar_time or None,
+        'running':                _live_feed.is_running,
+        'bar_count':              _live_feed.bar_count,
+        'last_bar_time':          _live_feed.last_bar_time or None,
         'seconds_since_last_bar': None if secs == float('inf') else round(secs),
+        'nq_feed_seconds_ago':    nq_s,
+        'es_feed_seconds_ago':    es_s,
+        'gc_feed_seconds_ago':    gc_s,
+        'nq_feed_status':         _sym_status(nq_s),
+        'es_feed_status':         _sym_status(es_s),
+        'gc_feed_status':         _sym_status(gc_s),
+        # Short aliases used by dashboard health strip
+        'NQ_secs':                nq_s,
+        'ES_secs':                es_s,
+        'GC_secs':                gc_s,
     }
 
 
