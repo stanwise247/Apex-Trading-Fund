@@ -29,10 +29,13 @@ from db import connect as _db_connect, IS_POSTGRES, read_sql as _db_read_sql, up
 logger = logging.getLogger('APEX.DataFeed')
 
 INSTRUMENTS = {
-    'NQ': 'NQ.c.0',
-    'ES': 'ES.c.0',
-    'GC': 'GC.c.0',
+    'NQ':  'NQ.c.0',
+    'ES':  'ES.c.0',
+    'GC':  'GC.c.0',
+    'MNQ': 'MNQ.c.0',  # data collection only — signals disabled
 }
+
+logger.info('LiveBarFeed: MNQ added for data collection (signals disabled)')
 
 
 
@@ -99,7 +102,7 @@ class LiveBarFeed:
                 target=self._run, name='LiveBarFeed', daemon=True
             )
             self._thread.start()
-        logger.info('LiveBarFeed: started — streaming ohlcv-1m for NQ/ES/GC')
+        logger.info('LiveBarFeed: started — streaming ohlcv-1m for NQ/ES/GC/MNQ')
 
     def stop(self):
         self._stop_evt.set()
@@ -314,8 +317,10 @@ def get_live_feed_stats() -> dict:
     if _live_feed is None:
         return {
             'running': False, 'bar_count': 0, 'seconds_since_last_bar': None,
-            'nq_feed_seconds_ago': None, 'es_feed_seconds_ago': None, 'gc_feed_seconds_ago': None,
-            'nq_feed_status': 'red', 'es_feed_status': 'red', 'gc_feed_status': 'red',
+            'nq_feed_seconds_ago': None, 'es_feed_seconds_ago': None,
+            'gc_feed_seconds_ago': None, 'mnq_feed_seconds_ago': None,
+            'nq_feed_status': 'red', 'es_feed_status': 'red',
+            'gc_feed_status': 'red', 'mnq_feed_status': 'red',
         }
     secs = _live_feed.seconds_since_last_bar()
 
@@ -329,9 +334,10 @@ def get_live_feed_stats() -> dict:
         if s < 300:      return 'amber'
         return 'red'
 
-    nq_s = _sym_secs('NQ')
-    es_s = _sym_secs('ES')
-    gc_s = _sym_secs('GC')
+    nq_s  = _sym_secs('NQ')
+    es_s  = _sym_secs('ES')
+    gc_s  = _sym_secs('GC')
+    mnq_s = _sym_secs('MNQ')
 
     return {
         'running':                _live_feed.is_running,
@@ -341,13 +347,16 @@ def get_live_feed_stats() -> dict:
         'nq_feed_seconds_ago':    nq_s,
         'es_feed_seconds_ago':    es_s,
         'gc_feed_seconds_ago':    gc_s,
+        'mnq_feed_seconds_ago':   mnq_s,
         'nq_feed_status':         _sym_status(nq_s),
         'es_feed_status':         _sym_status(es_s),
         'gc_feed_status':         _sym_status(gc_s),
+        'mnq_feed_status':        _sym_status(mnq_s),
         # Short aliases used by dashboard health strip
         'NQ_secs':                nq_s,
         'ES_secs':                es_s,
         'GC_secs':                gc_s,
+        'MNQ_secs':               mnq_s,
         # Per-symbol session bar counts
         'bar_count_by_sym':       dict(_live_feed._bar_count_by_sym),
         'sym_map':                dict(_live_feed._sym_map),

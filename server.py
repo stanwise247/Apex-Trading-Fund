@@ -64,14 +64,15 @@ SIGNAL_FILTERS = {
 SETUP_E_MIN_ATR = {'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
 INSTRUMENTS = {
-    'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'databento': 'NQ.c.0', 'type': 'future', 'name': 'Nasdaq 100 Futures'},
-    'ES':  {'yahoo': 'ES=F',     'polygon_paid': 'ES:CME',   'databento': 'ES.c.0', 'type': 'future', 'name': 'S&P 500 E-Mini'},
-    'GC':  {'yahoo': 'GC=F',     'polygon_paid': 'GC:COMEX', 'databento': 'GC.c.0', 'type': 'future', 'name': 'Gold Futures'},
-    'CL':  {'yahoo': 'CL=F',     'polygon_paid': 'CL:NYMEX', 'databento': None,     'type': 'future', 'name': 'Crude Oil Futures'},
-    'ZN':  {'yahoo': 'ZN=F',     'polygon_paid': 'ZN:CBOT',  'databento': None,     'type': 'future', 'name': '10Y T-Note Futures'},
-    'VIX': {'yahoo': '^VIX',     'polygon_paid': None,       'databento': None,     'type': 'index',  'name': 'CBOE VIX'},
-    'DXY': {'yahoo': 'DX-Y.NYB', 'polygon_paid': None,       'databento': None,     'type': 'forex',  'name': 'Dollar Index'},
-    'BTC': {'yahoo': 'BTC-USD',  'polygon_paid': None,       'databento': None,     'type': 'crypto', 'name': 'Bitcoin USD'},
+    'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'databento': 'NQ.c.0',  'type': 'future', 'name': 'Nasdaq 100 Futures'},
+    'ES':  {'yahoo': 'ES=F',     'polygon_paid': 'ES:CME',   'databento': 'ES.c.0',  'type': 'future', 'name': 'S&P 500 E-Mini'},
+    'GC':  {'yahoo': 'GC=F',     'polygon_paid': 'GC:COMEX', 'databento': 'GC.c.0',  'type': 'future', 'name': 'Gold Futures'},
+    'MNQ': {'yahoo': None,       'polygon_paid': None,       'databento': 'MNQ.c.0', 'type': 'future', 'name': 'Micro E-mini Nasdaq 100 (data only)'},
+    'CL':  {'yahoo': 'CL=F',     'polygon_paid': 'CL:NYMEX', 'databento': None,      'type': 'future', 'name': 'Crude Oil Futures'},
+    'ZN':  {'yahoo': 'ZN=F',     'polygon_paid': 'ZN:CBOT',  'databento': None,      'type': 'future', 'name': '10Y T-Note Futures'},
+    'VIX': {'yahoo': '^VIX',     'polygon_paid': None,       'databento': None,      'type': 'index',  'name': 'CBOE VIX'},
+    'DXY': {'yahoo': 'DX-Y.NYB', 'polygon_paid': None,       'databento': None,      'type': 'forex',  'name': 'Dollar Index'},
+    'BTC': {'yahoo': 'BTC-USD',  'polygon_paid': None,       'databento': None,      'type': 'crypto', 'name': 'Bitcoin USD'},
 }
 
 # Databento dataset for CME futures
@@ -2419,6 +2420,63 @@ def _startup():
                     logger.warning(f'Setup F: {_sym} HTF build error: {_he}')
         except Exception as e:
             logger.warning(f'Setup F HTF build failed: {e}')
+
+        # ── MNQ 1min historical backfill (6 months) ──────────────
+        # MNQ is data-collection only — no signals. We backfill once on startup
+        # so backtesting can begin immediately. Chunked monthly to avoid timeouts.
+        try:
+            conn = _db.connect()
+            mnq_1min_count = conn.execute(
+                "SELECT COUNT(*) FROM ohlcv WHERE symbol='MNQ' AND timeframe='1min'"
+            ).fetchone()[0]
+            conn.close()
+            if mnq_1min_count < 5000:
+                logger.info(
+                    f'MNQ: only {mnq_1min_count} 1min bars — '
+                    f'fetching 6 months of history in monthly chunks...'
+                )
+                try:
+                    from data_feed import fetch_bars_range, store_bars
+                    from datetime import date
+                    import calendar as _cal
+                    mnq_total = 0
+                    now_dt = datetime.now(timezone.utc)
+                    # 6 months back from today
+                    start_dt = now_dt - timedelta(days=183)
+                    cur_year, cur_month = start_dt.year, start_dt.month
+                    while (cur_year, cur_month) <= (now_dt.year, now_dt.month):
+                        month_label = date(cur_year, cur_month, 1).strftime('%b %Y')
+                        try:
+                            days_in_month = _cal.monthrange(cur_year, cur_month)[1]
+                            chunk_start = datetime(cur_year, cur_month, 1, tzinfo=timezone.utc)
+                            chunk_end   = min(
+                                datetime(cur_year, cur_month, days_in_month, 23, 59, tzinfo=timezone.utc),
+                                now_dt
+                            )
+                            bars = fetch_bars_range('MNQ', '1min', chunk_start, chunk_end)
+                            stored = store_bars('MNQ', '1min', bars)
+                            mnq_total += stored
+                            logger.info(f'MNQ backfill: 1min {month_label}... done ({stored} bars)')
+                        except Exception as _me:
+                            logger.warning(f'MNQ backfill: 1min {month_label} failed: {_me}')
+                        if cur_month == 12:
+                            cur_year += 1
+                            cur_month = 1
+                        else:
+                            cur_month += 1
+                        _t.sleep(2)
+                    conn = _db.connect()
+                    mnq_final = conn.execute(
+                        "SELECT COUNT(*) FROM ohlcv WHERE symbol='MNQ' AND timeframe='1min'"
+                    ).fetchone()[0]
+                    conn.close()
+                    logger.info(f'MNQ backfill complete: {mnq_final} total 1min bars stored')
+                except Exception as _be:
+                    logger.warning(f'MNQ chunked backfill error: {_be}')
+            else:
+                logger.info(f'MNQ: 1min data sufficient ({mnq_1min_count} bars) — backfill skipped')
+        except Exception as _mnqe:
+            logger.warning(f'MNQ backfill check failed: {_mnqe}')
         # Train Setup F ML models after data is ready
         _t.sleep(5)
         try:
@@ -3046,7 +3104,7 @@ def apex_health():
                 db_counts[tbl] = None
         # Per-symbol per-timeframe 1min bar counts
         ohlcv_detail = {}
-        for sym in ('NQ', 'ES', 'GC'):
+        for sym in ('NQ', 'ES', 'GC', 'MNQ'):
             for tf in ('1min', '5min', '15min'):
                 try:
                     cnt = conn.execute(
