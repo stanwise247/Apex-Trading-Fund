@@ -815,7 +815,7 @@ def call_anthropic(api_key, prompt, max_tokens=2500):
 @app.route('/')
 def dashboard():
     from flask import send_from_directory
-    return send_from_directory('.', 'apex_dashboard_v4.html')
+    return send_from_directory('.', 'apex_dashboard_v7.html')
 
 @app.route('/api/debug')
 def debug():
@@ -1239,8 +1239,21 @@ def background_scheduler():
     logger.info('Background scheduler started')
     last_daily, last_macro_log = time.time(), time.time()
     last_session_alerted = {}
+    _tick = 0
     while True:
-        now = time.time()
+        now   = time.time()
+        _tick += 1
+
+        # ── Heartbeat — log every 5 min so Railway logs show liveness ──
+        if not hasattr(background_scheduler, '_last_heartbeat') or \
+                now - background_scheduler._last_heartbeat >= 300:
+            background_scheduler._last_heartbeat = now
+            _utc_hr = datetime.now(timezone.utc).hour
+            _in_sess = 13 <= _utc_hr < 19
+            logger.info(
+                f'Scheduler heartbeat tick={_tick} '
+                f'utc_hour={_utc_hr} in_session={_in_sess}'
+            )
 
         # ── Clear _fired_today at midnight UTC ────────────────────
         _today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -1276,6 +1289,15 @@ def background_scheduler():
                 started = start_live_feed()
                 if started:
                     logger.info('LiveBarFeed: session open — live 1min stream started')
+            elif not _in_session and not is_live_feed_running():
+                # Log once per hour so logs show feed is intentionally idle
+                if not hasattr(background_scheduler, '_last_offsession_log') or \
+                        now - background_scheduler._last_offsession_log >= 3600:
+                    background_scheduler._last_offsession_log = now
+                    logger.info(
+                        f'LiveBarFeed: off-session (UTC hour={_now_utc_hr}) — '
+                        f'feed starts at 13:00 UTC'
+                    )
             elif _in_session and is_live_feed_running():
                 # Watchdog: thread alive but no bar in >5 min means silent stall — force restart
                 _feed_stats = get_live_feed_stats()
@@ -2243,7 +2265,7 @@ def _startup():
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
-    logger.info('  Open apex_dashboard_v4.html in your browser')
+    logger.info('  Open apex_dashboard_v7.html in your browser')
     logger.info('=' * 55)
 
 _startup()
