@@ -52,6 +52,17 @@ if TELEGRAM_TOKEN and not cfg.get('telegram_token'):
     cfg['telegram_chat_id'] = TELEGRAM_CHAT
     save_config(cfg)
 
+# ─────────────────────────────────────────────────────────────
+#  SIGNAL QUALITY FILTERS — set False to disable individually
+# ─────────────────────────────────────────────────────────────
+SIGNAL_FILTERS = {
+    'max_concurrent_per_instrument': True,   # block if same instrument already has open trade
+    'primary_session_only_bcd':      True,   # B/C/D: require quality=='primary' session
+    'dual_htf_bias':                 True,   # A/B/C/D/E: 1h EMA20 must align with 4h direction
+    'setup_e_min_atr':               True,   # E: skip if 5min ATR14 < minimum (slow markets)
+}
+SETUP_E_MIN_ATR = {'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
+
 INSTRUMENTS = {
     'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'databento': 'NQ.c.0', 'type': 'future', 'name': 'Nasdaq 100 Futures'},
     'ES':  {'yahoo': 'ES=F',     'polygon_paid': 'ES:CME',   'databento': 'ES.c.0', 'type': 'future', 'name': 'S&P 500 E-Mini'},
@@ -1235,6 +1246,53 @@ def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
         return False
 
 
+def _has_open_trade_on_instrument(symbol: str) -> tuple:
+    """Return (True, trade_id) if ANY open trade exists on symbol regardless of direction/setup."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id FROM apex_trades WHERE symbol=? AND status='open' LIMIT 1",
+            (symbol,)
+        ).fetchone()
+        conn.close()
+        return (True, row[0]) if row else (False, None)
+    except Exception:
+        return (False, None)
+
+
+def _check_1h_bias(symbol: str, direction: str) -> tuple:
+    """
+    1h EMA20 bias check (in-memory resample from 5min bars — same pattern as gate1_htf_bias).
+    Returns (aligned: bool, detail: str). Fails open on data errors — allowed through.
+    BULLISH: 1h close > EMA20 × 1.001  |  BEARISH: 1h close < EMA20 × 0.999
+    """
+    try:
+        from market_structure import load_bars
+        import pandas as _pd
+        df5 = load_bars(symbol, '5min', limit=1500)
+        if df5.empty or len(df5) < 25:
+            return (True, f'1h bias: no data ({len(df5)} bars) — allowed')
+        df1h = df5['close'].resample('1h').last().dropna().to_frame('close')
+        if len(df1h) < 21:
+            return (True, f'1h bias: only {len(df1h)} 1h bars — allowed')
+        ema20      = df1h['close'].ewm(span=20, adjust=False).mean()
+        last_close = float(df1h['close'].iloc[-1])
+        last_ema   = float(ema20.iloc[-1])
+        if last_close > last_ema * 1.001:
+            bias_1h = 'bullish'
+        elif last_close < last_ema * 0.999:
+            bias_1h = 'bearish'
+        else:
+            bias_1h = 'neutral'
+        aligned = (
+            (direction == 'long'  and bias_1h == 'bullish') or
+            (direction == 'short' and bias_1h == 'bearish')
+        )
+        return (aligned, f'1h bias={bias_1h.upper()} (close={last_close:.2f} EMA20={last_ema:.2f})')
+    except Exception as _e:
+        return (True, f'1h bias error: {_e} — allowed')
+
+
 def background_scheduler():
     logger.info('Background scheduler started')
     last_daily, last_macro_log = time.time(), time.time()
@@ -1445,6 +1503,12 @@ def background_scheduler():
                     )
                     fvg_signals = scan_fvg('NQ', now_utc)
                     for sig in fvg_signals:
+                        # ── FILTER 1: max 1 concurrent per instrument ─────
+                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                            _f1fvg_has, _f1fvg_id = _has_open_trade_on_instrument(sig['symbol'])
+                            if _f1fvg_has:
+                                logger.info(f'FVG: skipped — {sig["symbol"]} already has open trade #{_f1fvg_id}')
+                                continue
                         if _has_opposite_swing_trade(sig['symbol'], sig['direction']):
                             logger.info(
                                 f'FVG {sig["direction"]} suppressed — '
@@ -1496,6 +1560,47 @@ def background_scheduler():
                     _sym   = result.symbol
                     _dirn  = result.direction
                     _setup = getattr(result, 'setup', '')
+
+                    # ── FILTER 1: max 1 concurrent trade per instrument ───
+                    if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                        _f1_has, _f1_id = _has_open_trade_on_instrument(_sym)
+                        if _f1_has:
+                            logger.info(f'{_setup}: skipped — {_sym} already has open trade #{_f1_id}')
+                            continue
+
+                    # ── FILTER 2: primary session only for B and C ────────
+                    if SIGNAL_FILTERS['primary_session_only_bcd']:
+                        if _setup in ('B_choch_breaker', 'C_bos_ob'):
+                            _qual = getattr(result, 'quality', 'primary')
+                            if _qual != 'primary':
+                                logger.info(
+                                    f'{_setup}: skipped — secondary session quality, requires primary '
+                                    f'({getattr(result, "session", "")})'
+                                )
+                                continue
+
+                    # ── FILTER 3: dual HTF bias (1h must align with 4h) ──
+                    if SIGNAL_FILTERS['dual_htf_bias']:
+                        _f3_ok, _f3_detail = _check_1h_bias(_sym, _dirn)
+                        if not _f3_ok:
+                            logger.info(
+                                f'{_setup}: skipped — 1h bias conflicts with {_dirn} direction '
+                                f'({_f3_detail})'
+                            )
+                            continue
+
+                    # ── FILTER 4: Setup E minimum ATR ────────────────────
+                    if SIGNAL_FILTERS['setup_e_min_atr'] and _setup == 'E_ema50_pullback':
+                        _min_atr = SETUP_E_MIN_ATR.get(_sym, 0.0)
+                        if result.entry is not None and result.stop is not None:
+                            _atr_impl = abs(result.entry - result.stop) / 1.5
+                            if _atr_impl < _min_atr:
+                                logger.info(
+                                    f'Setup E: skipped — ATR too low '
+                                    f'(ATR={_atr_impl:.2f} pts, minimum={_min_atr})'
+                                )
+                                continue
+
                     # Correlation filter: suppress Setup E if opposite swing trade open
                     if _setup == 'E_ema50_pullback':
                         if _has_opposite_swing_trade(_sym, _dirn):
@@ -1556,6 +1661,12 @@ def background_scheduler():
                 )
                 for _sym in ['NQ', 'ES']:  # GC paper only — no live signals
                     try:
+                        # ── FILTER 1: max 1 concurrent per instrument ─────
+                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                            _f1f_has, _f1f_id = _has_open_trade_on_instrument(_sym)
+                            if _f1f_has:
+                                logger.info(f'Setup F: skipped — {_sym} already has open trade #{_f1f_id}')
+                                continue
                         if check_model_degradation(_sym):
                             logger.warning(f'Setup F {_sym} model degraded — skipping')
                             continue
@@ -1613,6 +1724,26 @@ def background_scheduler():
                         sig_d = scan_setup_d(_sym_d, _now_utc_d)
                         if not sig_d:
                             continue
+                        # ── FILTER 1: max 1 concurrent per instrument ─────
+                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                            _f1d_has, _f1d_id = _has_open_trade_on_instrument(_sym_d)
+                            if _f1d_has:
+                                logger.info(f'Setup D: skipped — {_sym_d} already has open trade #{_f1d_id}')
+                                continue
+                        # ── FILTER 2: primary session only (D is always primary — explicit check) ──
+                        if SIGNAL_FILTERS['primary_session_only_bcd']:
+                            if sig_d.get('quality', 'primary') != 'primary':
+                                logger.info(f'Setup D: skipped — secondary session quality, requires primary')
+                                continue
+                        # ── FILTER 3: dual HTF bias (1h must align with 4h) ──
+                        if SIGNAL_FILTERS['dual_htf_bias']:
+                            _f3d_ok, _f3d_detail = _check_1h_bias(_sym_d, sig_d['direction'])
+                            if not _f3d_ok:
+                                logger.info(
+                                    f'Setup D: skipped — 1h bias conflicts with {sig_d["direction"]} '
+                                    f'direction ({_f3d_detail})'
+                                )
+                                continue
                         if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
                             continue
                         _d_tid = None
@@ -1669,6 +1800,13 @@ def background_scheduler():
                 try:
                     if not _rg.daily.is_daily_limit_hit():
                         sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
+                        if sig_es:
+                            # ── FILTER 1: max 1 concurrent per instrument ─
+                            if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                _f1h_has, _f1h_id = _has_open_trade_on_instrument('ES')
+                                if _f1h_has:
+                                    logger.info(f'Setup H: skipped — ES already has open trade #{_f1h_id}')
+                                    sig_es = None
                         if sig_es:
                             if not _has_opposite_swing_trade('ES', sig_es['direction']):
                                 if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
@@ -2171,6 +2309,11 @@ def _startup():
     logger.info('  E      stop_atr=1.5  RR=2.5  target=3.75×ATR  NQ only  session=13-18 UTC')
     logger.info('  F      stop_atr=1.5  RR=2.5  target=3.75×ATR  NQ+ES    long>0.58  short<0.42')
     logger.info('  H      stop_atr=1.5  RR≥2.0  target=VWAP  ES live/NQ paper  session=13-19 UTC')
+    logger.info('  ─────────────────────────────────────────────────')
+    logger.info('  SIGNAL FILTERS')
+    for _fk, _fv in SIGNAL_FILTERS.items():
+        logger.info(f'  {"ON " if _fv else "OFF"} {_fk}')
+    logger.info(f'  setup_e_min_atr = {SETUP_E_MIN_ATR}')
     logger.info('  ─────────────────────────────────────────────────')
     try:
         from trade_tracker import init_trades_table as _itt
