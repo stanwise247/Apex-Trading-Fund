@@ -178,7 +178,7 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     # ── 2. htf_bias — resample 5min → 4h in memory, SMA20, map back ──
     df_4h_mem = df_idx['close'].resample('4h').last().dropna().to_frame('close')
     df_4h_mem['sma20'] = df_4h_mem['close'].rolling(20).mean()
-    df_4h_mem['ts']    = df_4h_mem.index.asi8 // 1_000_000_000
+    df_4h_mem['ts']    = df_4h_mem.index.map(lambda x: int(x.timestamp()))
     _5m_ts = pd.DataFrame({'ts': df_5m['ts'].values})
     merged = pd.merge_asof(_5m_ts, df_4h_mem[['ts','close','sma20']].sort_values('ts'),
                             on='ts', direction='backward')
@@ -207,7 +207,7 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
     vr[rvol > p75] = 1.0
     vr[rvol < p25] = -1.0
     df_1h_mem['vr'] = vr
-    df_1h_mem['ts'] = df_1h_mem.index.asi8 // 1_000_000_000
+    df_1h_mem['ts'] = df_1h_mem.index.map(lambda x: int(x.timestamp()))
     merged_vr = pd.merge_asof(_5m_ts, df_1h_mem[['ts','vr']].sort_values('ts'),
                                on='ts', direction='backward')
     feats[:, 5] = merged_vr['vr'].fillna(0.0).values
@@ -240,7 +240,7 @@ def calculate_features(symbol: str, df_5m: pd.DataFrame,
             h_vals.append(_hurst_rs(lr_vals[i-window:i]))
         # Map each hurst value back to the corresponding 1h bar ts
         valid_1h = df_1h_mem.iloc[log_ret.isna().sum() + window - 1:]
-        h_ts = valid_1h.index.asi8[:len(h_vals)] // 1_000_000_000
+        h_ts = valid_1h.index[:len(h_vals)].map(lambda x: int(x.timestamp())).values
         h_df = pd.DataFrame({'ts': h_ts, 'hv': h_vals})
         merged_h = pd.merge_asof(_5m_ts, h_df.sort_values('ts'),
                                   on='ts', direction='backward')

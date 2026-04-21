@@ -430,6 +430,173 @@ def format_fvg_alert(signal):
     return chr(10).join(parts)
 
 
+SETUP_D_PARAMS = {
+    'min_score':         70,
+    'target_rr':         2.5,
+    'stop_atr':          1.0,
+    'session_start':     13,
+    'session_end':       19,
+    'fvg_lookback_bars': 96,
+    'min_fvg_atr':       0.7,
+    # GC disabled — only 32 bars in DB, feed unverified
+    'symbols':           ['NQ', 'ES'],
+}
+
+
+def scan_setup_d(symbol: str, dt: datetime = None) -> dict | None:
+    """
+    Setup D — FVG Fill.
+    15min FVG + 4hour bias + 1min entry trigger.
+    NQ and ES only (GC disabled until feed verified).
+    Session: 13-19 UTC.
+    Min score: 70. RR: 2.5. Stop: 1.0×ATR14.
+    Returns a single signal dict or None.
+    """
+    params = SETUP_D_PARAMS
+    if symbol not in params['symbols']:
+        return None
+
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+
+    if dt.weekday() >= 5:
+        return None
+
+    hour = dt.hour
+    if not (params['session_start'] <= hour < params['session_end']):
+        return None
+
+    bias = get_htf_bias(symbol)
+    if bias == 'neutral':
+        return None
+
+    df_15m  = load_bars(symbol, '15min', limit=200)
+    if df_15m.empty or len(df_15m) < 20:
+        return None
+
+    atr_15m = calc_atr(df_15m, 14)
+    fvgs    = detect_fvgs(df_15m, atr_15m, params['min_fvg_atr'], params['fvg_lookback_bars'])
+    if not fvgs:
+        return None
+
+    df_1m  = load_bars(symbol, '1min', limit=50)
+    if df_1m.empty:
+        return None
+
+    atr_1m = calc_atr(df_1m, 14)
+    last_bar   = df_1m.iloc[-1]
+    last_close = float(last_bar['close'])
+    last_open  = float(last_bar['open'])
+    last_high  = float(last_bar['high'])
+    last_low   = float(last_bar['low'])
+
+    vol_baseline_15m = float(df_15m['volume'].tail(20).mean())
+
+    for fvg in fvgs:
+        if fvg['formed_at'] >= df_1m.index[-1]:
+            continue
+
+        direction = None
+        if (fvg['type'] == 'bullish'
+                and bias == 'bullish'
+                and last_low  <= fvg['top']
+                and last_close >= fvg['mid']
+                and last_close > last_open):
+            direction = 'long'
+        elif (fvg['type'] == 'bearish'
+                and bias == 'bearish'
+                and last_high >= fvg['bottom']
+                and last_close <= fvg['mid']
+                and last_close < last_open):
+            direction = 'short'
+
+        if direction is None:
+            continue
+
+        if _is_fvg_already_alerted(symbol, fvg['formed_at']):
+            continue
+
+        fvg_score = score_fvg(fvg, df_15m, df_1m.index[-1], vol_baseline_15m)
+        if fvg_score < params['min_score']:
+            continue
+
+        _mark_fvg_alerted(symbol, fvg['formed_at'])
+
+        atr_val = float(atr_1m.iloc[-1]) if not pd.isna(atr_1m.iloc[-1]) else fvg['atr'] / 15
+
+        entry = last_close
+        if direction == 'long':
+            stop   = fvg['bottom'] - params['stop_atr'] * atr_val
+            target = entry + params['target_rr'] * (entry - stop)
+        else:
+            stop   = fvg['top'] + params['stop_atr'] * atr_val
+            target = entry - params['target_rr'] * (stop - entry)
+
+        risk = abs(entry - stop)
+        if risk == 0:
+            continue
+
+        rr = round(abs(target - entry) / risk, 2)
+
+        return {
+            'symbol':     symbol,
+            'direction':  direction,
+            'setup':      'D_fvg_fill',
+            'mode':       'scalp',
+            'entry':      round(entry, 2),
+            'stop':       round(stop, 2),
+            'target':     round(target, 2),
+            'rr':         rr,
+            'fvg_top':    round(fvg['top'], 2),
+            'fvg_bottom': round(fvg['bottom'], 2),
+            'fvg_mid':    round(fvg['mid'], 2),
+            'fvg_score':  fvg_score,
+            'bias':       bias,
+            'quality':    'primary',
+            'session':    f'13:00-19:00 UTC',
+            'timestamp':  df_1m.index[-1],
+        }
+
+    return None
+
+
+def format_d_alert(signal: dict) -> str:
+    """Format Setup D signal for Telegram."""
+    from zoneinfo import ZoneInfo
+    NY  = ZoneInfo('America/New_York')
+    now = datetime.now(timezone.utc).astimezone(NY).strftime('%Y-%m-%d %H:%M')
+    sym = signal['symbol']
+    dir_= signal['direction'].upper()
+    sep = chr(9473) * 20
+
+    emoji = chr(128200) if dir_ == 'LONG' else chr(128201)
+    bias  = signal['bias'].upper()
+    score = signal.get('fvg_score', '?')
+
+    entry      = signal['entry']
+    stop       = signal['stop']
+    target     = signal['target']
+    stop_pts   = abs(round(entry - stop, 2))
+    target_pts = abs(round(entry - target, 2))
+
+    parts = [
+        f'{emoji} <b>APEX Setup D — {sym}</b>',
+        sep,
+        f'<b>Direction:</b> {dir_}',
+        f'<b>Setup:</b>     FVG Fill (D_fvg_fill)',
+        f'<b>Zone:</b>      {signal["fvg_top"]:.2f} – {signal["fvg_bottom"]:.2f}',
+        f'<b>Bias:</b>      {bias} (4hour) | Score: {score}/100',
+        sep,
+        f'<b>Entry:</b>     {entry:.2f}',
+        f'<b>Stop:</b>      {stop:.2f} ({stop_pts} pts)',
+        f'<b>Target:</b>    {target:.2f} ({target_pts} pts)',
+        f'<b>R:R:</b>       {signal["rr"]}x',
+        sep,
+        f'<i>{now} ET</i>',
+    ]
+    return chr(10).join(parts)
+
+
 if __name__ == '__main__':
     import os
     # API key loaded from environment variable — never hardcode keys

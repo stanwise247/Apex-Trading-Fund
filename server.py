@@ -1049,7 +1049,7 @@ def db_refresh_intraday():
                     'open': 'first', 'high': 'max', 'low': 'min',
                     'close': 'last', 'volume': 'sum',
                 }).dropna()
-                agg['ts'] = agg.index.asi8 // 1_000_000_000
+                agg['ts'] = agg.index.map(lambda x: int(x.timestamp()))
 
                 bars = [(int(r['ts']), float(r['open']), float(r['high']),
                          float(r['low']), float(r['close']), float(r['volume']))
@@ -1356,7 +1356,7 @@ def background_scheduler():
             from trade_tracker import monitor_trades
             monitor_trades()
         except Exception as e:
-            logger.debug(f'Trade monitor error: {e}')
+            logger.warning(f'Trade monitor error: {e}', exc_info=True)
 
         # _active_signals reconciliation removed — replaced by _fired_today dedup.
         # _fired_today expires automatically at midnight; no per-cycle DB reconciliation needed.
@@ -1573,29 +1573,66 @@ def background_scheduler():
                                 continue
                             if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
                                 continue
-                            msg = format_f_alert(sig) + _risk_footer
-                            send_telegram(msg)
-                            logger.info(f'Setup F: about to log trade {sig["symbol"]} {sig["direction"]}')
+                            _f_tid = None
                             try:
+                                logger.info(f'Setup F: logging trade {_sym} {sig["direction"]} entry={sig["entry"]}')
                                 _f_tid = log_trade(sig)
-                                logger.info(f'Setup F: log_trade returned {_f_tid}')
-                                if not _f_tid:
-                                    logger.error(
-                                        f'CRITICAL: log_trade() returned None for Setup F {_sym} {sig["direction"]} '
-                                        f'— trade NOT in DB (signal blocked all day via _fired_today)'
-                                    )
+                                if _f_tid:
+                                    logger.info(f'Setup F: trade logged id={_f_tid} {_sym} {sig["direction"]}')
                                 else:
-                                    logger.info(f'Trade logged: id={_f_tid} {_sym} {sig["direction"]} {sig["setup"]}')
+                                    logger.error(
+                                        f'CRITICAL: Setup F log_trade() returned None — {_sym} {sig["direction"]} NOT in DB'
+                                    )
                             except Exception as _lte:
-                                logger.error(f'CRITICAL: log_trade() FAILED for Setup F {_sym}: {_lte}', exc_info=True)
-                                _f_tid = None
+                                logger.error(f'CRITICAL: Setup F log_trade() EXCEPTION — {_sym} {sig["direction"]}: {_lte}', exc_info=True)
+                            try:
+                                msg = format_f_alert(sig) + _risk_footer
+                                send_telegram(msg)
+                            except Exception as _te:
+                                logger.error(f'Setup F: send_telegram failed {_sym}: {_te}')
                             if _f_tid:
                                 _execute_via_tradovate(sig, _f_tid)
-                            logger.info(f'Setup F signal: {_sym} {sig["direction"].upper()} conf={sig["confidence"]:.0%} regime={_regime.label}')
+                            logger.info(f'Setup F signal: {_sym} {sig["direction"].upper()} conf={sig["confidence"]:.0%} regime={_regime.label} db_id={_f_tid}')
                     except Exception as _fe:
                         logger.warning(f'Setup F {_sym} error: {_fe}')
             except Exception as e:
                 logger.warning(f'Setup F scanner error: {e}')
+
+        # ── Setup D — FVG Fill (every 5 min, NQ+ES only) ─────────
+        if not hasattr(background_scheduler, '_last_setup_d'):
+            background_scheduler._last_setup_d = 0
+        if now - background_scheduler._last_setup_d >= 300:
+            background_scheduler._last_setup_d = now
+            try:
+                from fvg_engine import scan_setup_d, format_d_alert
+                from live_scanner import send_telegram as _send_tg
+                from trade_tracker import log_trade as _log_trade
+                _now_utc_d = datetime.now(timezone.utc)
+                for _sym_d in ['NQ', 'ES']:  # GC disabled — feed unverified
+                    try:
+                        sig_d = scan_setup_d(_sym_d, _now_utc_d)
+                        if not sig_d:
+                            continue
+                        if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
+                            continue
+                        _d_tid = None
+                        try:
+                            _d_tid = _log_trade(sig_d)
+                            if _d_tid:
+                                logger.info(f'Setup D: trade logged id={_d_tid} {_sym_d} {sig_d["direction"]}')
+                            else:
+                                logger.error(f'CRITICAL: Setup D log_trade() returned None — {_sym_d} {sig_d["direction"]} NOT in DB')
+                        except Exception as _d_lte:
+                            logger.error(f'CRITICAL: Setup D log_trade() EXCEPTION — {_sym_d}: {_d_lte}', exc_info=True)
+                        try:
+                            _send_tg(format_d_alert(sig_d))
+                        except Exception as _d_te:
+                            logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
+                        logger.info(f'Setup D signal: {_sym_d} {sig_d["direction"].upper()} score={sig_d.get("fvg_score")} db_id={_d_tid}')
+                    except Exception as _de:
+                        logger.warning(f'Setup D {_sym_d} error: {_de}')
+            except Exception as e:
+                logger.warning(f'Setup D scanner error: {e}')
 
         # ── Setup G — Wyckoff Upthrust Tracker (every 5 min) ─────
         if not hasattr(background_scheduler, '_last_wyckoff'):
@@ -2113,6 +2150,19 @@ def _startup():
     logger.info('=' * 55)
     init_db()
     try:
+        conn = _db.connect()
+        for _tf in ('5min', '15min'):
+            n = conn.execute('SELECT COUNT(*) FROM ohlcv WHERE ts=0 AND timeframe=?', (_tf,)).fetchone()[0]
+            if n > 0:
+                conn.execute('DELETE FROM ohlcv WHERE ts=0 AND timeframe=?', (_tf,))
+                conn.commit()
+                logger.info(f'  DB cleanup: removed {n} corrupted ts=0 rows from ohlcv {_tf}')
+            else:
+                logger.info(f'  DB cleanup: no ts=0 rows in ohlcv {_tf} — clean')
+        conn.close()
+    except Exception as e:
+        logger.warning(f'  DB ts=0 cleanup error: {e}')
+    try:
         from trade_tracker import init_trades_table as _itt
         _itt()
         logger.info('  apex_trades table ready')
@@ -2332,30 +2382,32 @@ def apex_scan():
         except Exception as e:
             logger.debug(f'Setup E scan error ({direction}): {e}')
 
-    # FVG signals — NQ only
+    # Setup D — FVG Fill (NQ + ES, GC disabled)
     fvg_signals = []
     try:
-        from fvg_engine import scan_fvg
-        sigs = scan_fvg('NQ', now)
-        for s in sigs:
-            fvg_signals.append({
-                'symbol':    s['symbol'],
-                'direction': s['direction'],
-                'setup':     'D',
-                'valid':     True,
-                'gates':     [{'gate': i+1, 'name': f'Gate {i+1}', 'passed': True, 'detail': ''} for i in range(4)],
-                'entry':     s['entry'],
-                'stop':      s['stop'],
-                'target':    s['target'],
-                'rr':        s['rr'],
-                'quality':   'primary',
-                'fvg_top':   s.get('fvg_top'),
-                'fvg_bottom':s.get('fvg_bottom'),
-                'bias':      s.get('bias'),
-                'failed_at': None,
-            })
+        from fvg_engine import scan_setup_d
+        for _d_sym in ['NQ', 'ES']:
+            s = scan_setup_d(_d_sym, now)
+            if s:
+                fvg_signals.append({
+                    'symbol':    s['symbol'],
+                    'direction': s['direction'],
+                    'setup':     'D_fvg_fill',
+                    'valid':     True,
+                    'gates':     [{'gate': i+1, 'name': f'Gate {i+1}', 'passed': True, 'detail': ''} for i in range(4)],
+                    'entry':     s['entry'],
+                    'stop':      s['stop'],
+                    'target':    s['target'],
+                    'rr':        s['rr'],
+                    'quality':   'primary',
+                    'fvg_score': s.get('fvg_score'),
+                    'fvg_top':   s.get('fvg_top'),
+                    'fvg_bottom':s.get('fvg_bottom'),
+                    'bias':      s.get('bias'),
+                    'failed_at': None,
+                })
     except Exception as e:
-        logger.debug(f'FVG scan error in apex_scan: {e}')
+        logger.debug(f'Setup D scan error in apex_scan: {e}')
 
     # Setup F — ML predictions for all 3 symbols (dashboard only, no trade execution)
     setup_f_predictions = []

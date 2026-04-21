@@ -501,7 +501,11 @@ def fetch_bars_range(symbol: str, timeframe: str,
             ))
         return result
     except Exception as e:
-        logger.error(f'fetch_bars_range error {symbol} {timeframe}: {e}')
+        err_str = str(e)
+        if '422' in err_str or 'data_end_after_available_end' in err_str:
+            logger.warning(f'fetch_bars_range {symbol} {timeframe}: Databento 422 — requested end beyond available data: {e}')
+        else:
+            logger.error(f'fetch_bars_range error {symbol} {timeframe}: {e}')
         return []
 
 
