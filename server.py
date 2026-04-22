@@ -3148,7 +3148,7 @@ def apex_health():
     setup_f_status = {}
     try:
         from setup_f_ml import get_current_prediction
-        for sym in ('NQ', 'ES'):
+        for sym in ('MNQ', 'ES'):
             p = get_current_prediction(sym)
             setup_f_status[sym] = p
     except Exception as _sfe:
