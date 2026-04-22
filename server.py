@@ -1150,6 +1150,11 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
         if not TRADING_ENABLED:
             logger.warning('_execute_via_tradovate: TRADING_ENABLED=false — order blocked')
             return
+        if _kill_switch_active:
+            logger.warning(
+                f'_execute_via_tradovate: kill switch active (balance=${_kill_switch_balance:.0f}) — order blocked'
+            )
+            return
         result = execute_apex_signal(signal)
         if result['ok'] and trade_id:
             try:
@@ -1188,6 +1193,12 @@ _active_signals: set = set()
 # Key: f"{symbol}_{setup}_{direction}_{utc_date}" — expires naturally at midnight UTC.
 # Marked BEFORE send_telegram so even if log_trade fails, signal stays blocked all day.
 _fired_today: dict = {}
+
+# Kill switch — set to True when account balance drops to/below tier threshold.
+# Cleared automatically when balance recovers, or by KILL_SWITCH_OVERRIDE=true.
+_kill_switch_active:       bool  = False
+_kill_switch_balance:      float = 0.0
+_kill_switch_threshold:    float = 400.0
 
 
 def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
@@ -1316,6 +1327,60 @@ def background_scheduler():
                 f'Scheduler heartbeat tick={_tick} '
                 f'utc_hour={_utc_hr} in_session={_in_sess}'
             )
+
+        # ── Kill switch — check account balance every 5 min ─────────
+        if not hasattr(background_scheduler, '_last_kill_check') or \
+                now - background_scheduler._last_kill_check >= 300:
+            background_scheduler._last_kill_check = now
+            try:
+                global _kill_switch_active, _kill_switch_balance, _kill_switch_threshold
+                _ks_balance = None
+                try:
+                    from tradovate import TRADOVATE_ENABLED as _TV_EN, get_account as _tv_acct
+                    if _TV_EN:
+                        _acct_r = _tv_acct()
+                        if _acct_r.get('ok'):
+                            _ks_balance = _acct_r['balance']
+                except Exception:
+                    pass
+                if _ks_balance is None:
+                    try:
+                        from paper_trader import get_account_value as _gav
+                        _ks_balance = float(_gav('balance') or 10000)
+                    except Exception:
+                        _ks_balance = 10000.0
+
+                from tradovate import get_risk_tier as _get_tier
+                _ks_tier = _get_tier(_ks_balance)
+                _ks_threshold = _ks_tier['kill_switch']
+                _kill_switch_threshold = _ks_threshold
+
+                _ks_override = os.environ.get('KILL_SWITCH_OVERRIDE', 'false').lower() == 'true'
+
+                if _ks_balance <= _ks_threshold and not _ks_override:
+                    if not _kill_switch_active:
+                        _kill_switch_active   = True
+                        _kill_switch_balance  = _ks_balance
+                        logger.critical(
+                            f'Kill switch triggered — account ${_ks_balance:.0f} <= ${_ks_threshold} threshold'
+                        )
+                        try:
+                            from live_scanner import send_telegram as _ks_tg
+                            _ks_tg(
+                                f'🛑 <b>APEX KILL SWITCH</b> — Account at ${_ks_balance:.0f}, '
+                                f'below ${_ks_threshold} threshold. All trading halted.'
+                            )
+                        except Exception:
+                            pass
+                else:
+                    if _kill_switch_active:
+                        _kill_switch_active = False
+                        logger.info(
+                            f'Kill switch cleared — balance ${_ks_balance:.0f} > ${_ks_threshold}'
+                            + (' (KILL_SWITCH_OVERRIDE)' if _ks_override else '')
+                        )
+            except Exception as _ks_e:
+                logger.warning(f'Kill switch check failed: {_ks_e}')
 
         # ── Clear _fired_today at midnight UTC ────────────────────
         _today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -3045,16 +3110,22 @@ def apex_equity():
             live_balance = round(balance, 2)
             unrealised_r = 0.0
 
+        from tradovate import get_risk_tier as _eq_get_tier
+        _eq_tier = _eq_get_tier(live_balance)
         return jsonify({
-            'ok':              True,
-            'points':          points,
-            'current_balance': round(balance, 2),
-            'live_balance':    live_balance,
-            'unrealised_r':    round(unrealised_r, 3),
-            'max_drawdown':    max_dd,
-            'today_r':         today_r,
-            'today_pnl':       today_pnl,
-            'total_return':    total_return,
+            'ok':                    True,
+            'points':                points,
+            'current_balance':       round(balance, 2),
+            'live_balance':          live_balance,
+            'unrealised_r':          round(unrealised_r, 3),
+            'max_drawdown':          max_dd,
+            'today_r':               today_r,
+            'today_pnl':             today_pnl,
+            'total_return':          total_return,
+            'kill_switch_active':    _kill_switch_active,
+            'kill_switch_balance':   _kill_switch_balance,
+            'kill_switch_threshold': _kill_switch_threshold,
+            'daily_limit':           _eq_tier['daily_limit'],
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})

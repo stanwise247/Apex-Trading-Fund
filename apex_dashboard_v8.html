@@ -193,6 +193,11 @@ tr:hover td{background:var(--bg2)}
     <span class="section-sub" id="overviewTime">—</span>
   </div>
 
+  <!-- Kill switch banner — shown only when active -->
+  <div id="killSwitchBanner" style="display:none;background:#7f1d1d;color:#fee2e2;padding:12px 18px;border-radius:8px;margin-bottom:14px;font-weight:700;font-size:1em;letter-spacing:0.02em">
+    🛑 KILL SWITCH ACTIVE — Trading halted. Account: <span id="ksBannerBalance">—</span>
+  </div>
+
   <!-- Metric cards -->
   <div class="cards">
     <div class="card">
@@ -216,7 +221,12 @@ tr:hover td{background:var(--bg2)}
       <div class="progress-wrap">
         <div class="progress-bar"><div class="progress-fill" id="limitBar" style="width:0%"></div></div>
       </div>
-      <div class="card-sub" id="metLimitSub">$150 daily limit</div>
+      <div class="card-sub" id="metLimitSub">— daily limit</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Kill Switch</div>
+      <div class="card-value" id="metKillSwitch" style="font-size:1em;padding-top:4px">—</div>
+      <div class="card-sub" id="metKillSub">—</div>
     </div>
   </div>
 
@@ -528,13 +538,37 @@ async function loadOverview() {
     const st = trades.stats || {};
     document.getElementById('metTrades').textContent = (st.total_trades ?? '—') + '';
     document.getElementById('metOpenTrades').textContent = `${st.open_trades ?? 0} open · ${st.win_rate ?? 0}% WR`;
-    // Daily loss limit (rough estimate: today_r × $100 risk)
-    const todayLoss = Math.abs(Math.min(0, (eq.today_r ?? 0) * 100));
-    const limitPct = Math.min(100, todayLoss / 150 * 100);
+  }
+
+  // Kill switch + daily loss (from equity endpoint)
+  if (eq.ok) {
+    const dailyLimit  = eq.daily_limit ?? 50;
+    const todayLoss   = Math.abs(Math.min(0, eq.today_pnl ?? 0));
+    const limitPct    = Math.min(100, todayLoss / dailyLimit * 100);
     document.getElementById('metDailyLoss').textContent = '-$' + todayLoss.toFixed(0) + ' today';
+    document.getElementById('metLimitSub').textContent  = `$${dailyLimit} daily limit`;
     const bar = document.getElementById('limitBar');
     bar.style.width = limitPct + '%';
     bar.className = 'progress-fill' + (limitPct >= 100 ? ' red' : limitPct >= 70 ? ' amber' : '');
+
+    const ksActive    = eq.kill_switch_active === true;
+    const ksBalance   = eq.kill_switch_balance ?? 0;
+    const ksThreshold = eq.kill_switch_threshold ?? 400;
+    const liveBalance = eq.live_balance ?? eq.current_balance ?? 10000;
+    const above = (liveBalance - ksThreshold).toFixed(0);
+
+    document.getElementById('killSwitchBanner').style.display = ksActive ? '' : 'none';
+    document.getElementById('ksBannerBalance').textContent = ksActive ? `$${ksBalance.toFixed(0)}` : '';
+
+    const ksEl  = document.getElementById('metKillSwitch');
+    const ksSub = document.getElementById('metKillSub');
+    if (ksActive) {
+      ksEl.innerHTML  = '<span style="color:var(--red);font-size:1.1em">🛑 ACTIVE</span>';
+      ksSub.textContent = `Balance $${ksBalance.toFixed(0)} ≤ $${ksThreshold}`;
+    } else {
+      ksEl.innerHTML  = `<span style="background:#14532d;color:#86efac;padding:3px 10px;border-radius:12px;font-size:0.85em">Protected</span>`;
+      ksSub.textContent = `$${above} above $${ksThreshold} threshold`;
+    }
   }
 
   // Open trades table

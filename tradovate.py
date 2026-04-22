@@ -68,6 +68,102 @@ POINT_VALUE = {
 MAX_CONTRACTS = 10
 MIN_CONTRACTS = 1
 
+# Risk tiers keyed on account balance — determines kill switch and daily loss limit
+RISK_TIERS = [
+    {'min_balance': 0,    'kill_switch': 400,   'daily_limit': 50},
+    {'min_balance': 750,  'kill_switch': 600,   'daily_limit': 75},
+    {'min_balance': 1000, 'kill_switch': 800,   'daily_limit': 100},
+    {'min_balance': 2500, 'kill_switch': 2000,  'daily_limit': 250},
+    {'min_balance': 5000, 'kill_switch': 4000,  'daily_limit': 500},
+]
+
+
+def get_risk_tier(balance: float) -> dict:
+    """Return the RISK_TIER that applies for the given account balance."""
+    tier = RISK_TIERS[0]
+    for t in RISK_TIERS:
+        if balance >= t['min_balance']:
+            tier = t
+    return tier
+
+
+def _get_today_dollar_pnl() -> float:
+    """Sum of dollar P&L for all closed trades today (midnight UTC onward)."""
+    try:
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT symbol, entry_price, stop, pnl_r FROM apex_trades "
+            "WHERE status='closed' AND DATE(entry_time)=?", (today,)
+        ).fetchall()
+        conn.close()
+        total = 0.0
+        for sym, entry, stop, pnl_r in rows:
+            if None in (entry, stop, pnl_r):
+                continue
+            stop_pts = abs(float(entry) - float(stop))
+            pv = POINT_VALUE.get(sym, 2.0)
+            total += float(pnl_r) * stop_pts * pv
+        return round(total, 2)
+    except Exception as e:
+        logger.warning(f'_get_today_dollar_pnl error: {e}')
+        return 0.0
+
+
+def _get_open_dollar_loss() -> float:
+    """Sum of unrealised dollar losses across all open trades (from Tradovate or DB)."""
+    try:
+        if TRADOVATE_ENABLED:
+            pos = get_positions()
+            if pos['ok']:
+                return round(sum(p['unrealised_pnl'] for p in pos['positions']
+                                 if p['unrealised_pnl'] < 0), 2)
+        # Fallback: estimate from apex_trades open rows (entry/stop distance as 1R max loss)
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT symbol, entry_price, stop FROM apex_trades WHERE status='open'"
+        ).fetchall()
+        conn.close()
+        total = 0.0
+        for sym, entry, stop in rows:
+            if None in (entry, stop):
+                continue
+            stop_pts = abs(float(entry) - float(stop))
+            pv = POINT_VALUE.get(sym, 2.0)
+            total -= stop_pts * pv  # worst-case: full 1R loss per open trade
+        return round(total, 2)
+    except Exception:
+        return 0.0
+
+
+def check_daily_loss_limit(balance: float) -> dict:
+    """
+    Check daily loss limit before any Tradovate order.
+    Returns {ok, blocked, reason, daily_loss, limit}.
+    """
+    tier = get_risk_tier(balance)
+    daily_loss = _get_today_dollar_pnl()            # negative = net loss today
+    daily_loss_abs = abs(min(0.0, daily_loss))
+
+    if daily_loss_abs >= tier['daily_limit']:
+        msg = f'daily_loss_limit_reached (${daily_loss_abs:.0f} >= ${tier["daily_limit"]} limit)'
+        logger.warning(f'Tradovate: order blocked — {msg}. No more trades today.')
+        return {'ok': False, 'blocked': True, 'reason': msg,
+                'daily_loss': daily_loss, 'limit': tier['daily_limit']}
+
+    # Block if open exposure already eats >=50% of remaining daily allowance
+    remaining = tier['daily_limit'] - daily_loss_abs
+    open_loss_abs = abs(min(0.0, _get_open_dollar_loss()))
+    if open_loss_abs >= remaining * 0.5:
+        msg = (f'open_exposure_limit (open=${open_loss_abs:.0f} >= '
+               f'50% of remaining ${remaining:.0f})')
+        logger.warning(f'Tradovate: order blocked — {msg}')
+        return {'ok': False, 'blocked': True, 'reason': msg,
+                'daily_loss': daily_loss, 'limit': tier['daily_limit']}
+
+    return {'ok': True, 'blocked': False, 'daily_loss': daily_loss,
+            'limit': tier['daily_limit'], 'remaining': round(remaining, 2)}
+
 
 def _front_month_suffix() -> str:
     """Return the current front-month contract suffix, e.g. 'M6' for June 2026.
@@ -536,6 +632,11 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
     balance  = acct['balance']
     stop_pts = abs(entry - stop)
 
+    # Daily loss limit check — must pass on EVERY order attempt
+    limit_check = check_daily_loss_limit(balance)
+    if limit_check['blocked']:
+        return {'ok': False, 'skipped_reason': limit_check['reason']}
+
     # Calculate size
     sizing = calculate_position_size(balance, risk_pct, stop_pts, sym)
     if sizing['contracts'] == 0:
@@ -663,6 +764,7 @@ def get_status() -> dict:
              positions, orders_today, account_name, demo, enabled}
     """
     instrument_now = _tradovate_symbol('MNQ')
+    today_pnl = _get_today_dollar_pnl()
     result = {
         'enabled':         TRADOVATE_ENABLED,
         'trading_enabled': TRADING_ENABLED,
@@ -671,6 +773,8 @@ def get_status() -> dict:
         'account_name':    TRADOVATE_ACCOUNT or 'Not configured',
         'live_instruments': LIVE_INSTRUMENTS,
         'front_month':     instrument_now,
+        'risk_tiers':      RISK_TIERS,
+        'today_dollar_pnl': today_pnl,
         'balance':         None,
         'available':       None,
         'unrealised_pnl':  None,
