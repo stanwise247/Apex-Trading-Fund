@@ -20,7 +20,7 @@ FVG_PARAMS = {
     'vol_multiplier':     1.0,
     'min_score':          60,   # validated: Score 60 = Sharpe 6.46 OOS
     'session_windows': {
-        'NQ': [{'start': 14, 'end': 18}],  # was 13-19: block 13:00 (bad first candle) and 18:00 (negative EV)
+        'MNQ': [{'start': 14, 'end': 18}],  # was 13-19: block 13:00 (bad first candle) and 18:00 (negative EV)
         # ES disabled — last 3 months negative, monitoring
         # GC disabled — failed walk-forward validation
     },
@@ -439,7 +439,7 @@ SETUP_D_PARAMS = {
     'fvg_lookback_bars': 96,
     'min_fvg_atr':       0.7,
     # GC disabled — only 32 bars in DB, feed unverified
-    'symbols':           ['NQ', 'ES'],
+    'symbols':           ['MNQ', 'ES'],
 }
 
 

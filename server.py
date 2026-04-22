@@ -61,7 +61,7 @@ SIGNAL_FILTERS = {
     'dual_htf_bias':                 True,   # A/B/C/D/E: 1h EMA20 must align with 4h direction
     'setup_e_min_atr':               True,   # E: skip if 5min ATR14 < minimum (slow markets)
 }
-SETUP_E_MIN_ATR = {'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
+SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
 INSTRUMENTS = {
     'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'databento': 'NQ.c.0',  'type': 'future', 'name': 'Nasdaq 100 Futures'},
@@ -1486,7 +1486,7 @@ def background_scheduler():
             from live_scanner import send_telegram
             from trade_tracker import log_trade
             now_utc = datetime.now(timezone.utc)
-            _fvg_windows = FVG_PARAMS.get('session_windows', {}).get('NQ', [{'start': 13, 'end': 19}])
+            _fvg_windows = FVG_PARAMS.get('session_windows', {}).get('MNQ', [{'start': 13, 'end': 19}])
             _in_fvg_session = any(w['start'] <= now_utc.hour < w['end'] for w in _fvg_windows)
             if _in_fvg_session:
                 if not hasattr(background_scheduler, '_risk_gate'):
@@ -1502,7 +1502,7 @@ def background_scheduler():
                         f'\n⚙️ <i>Regime: {_regime.label} | '
                         f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
                     )
-                    fvg_signals = scan_fvg('NQ', now_utc)
+                    fvg_signals = scan_fvg('MNQ', now_utc)
                     for sig in fvg_signals:
                         # ── FILTER 1: max 1 concurrent per instrument ─────
                         if SIGNAL_FILTERS['max_concurrent_per_instrument']:
@@ -1520,16 +1520,22 @@ def background_scheduler():
                             continue
                         if _is_signal_already_active(sig['symbol'], sig['direction'], sig.get('setup', 'FVG')):
                             continue
+                        _fvg_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
+                        _fvg_risk_usd = round(_fvg_stop_pts * 2, 0)
+                        logger.info(
+                            f'Signal: MNQ {sig["direction"]} {sig.get("setup","FVG")} | '
+                            f'stop={_fvg_stop_pts} pts | risk=${_fvg_risk_usd:.0f} | contracts=1'
+                        )
                         msg = format_fvg_alert(sig) + _risk_footer
                         send_telegram(msg)
                         _fvg_tid = log_trade(sig)
                         if not _fvg_tid:
-                            logger.error(f'CRITICAL: log_trade() returned None for FVG NQ {sig["direction"]} — trade NOT logged')
+                            logger.error(f'CRITICAL: log_trade() returned None for FVG MNQ {sig["direction"]} — trade NOT logged')
                         else:
-                            logger.info(f'Trade logged: id={_fvg_tid} NQ {sig["direction"]} {sig.get("setup","FVG")}')
+                            logger.info(f'Trade logged: id={_fvg_tid} MNQ {sig["direction"]} {sig.get("setup","FVG")}')
                         _execute_via_tradovate(sig, _fvg_tid)
                         logger.info(
-                            f'FVG signal: NQ {sig["direction"].upper()} entry={sig["entry"]} '
+                            f'FVG signal: MNQ {sig["direction"].upper()} entry={sig["entry"]} '
                             f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
                         )
         except Exception as e:
@@ -1612,6 +1618,13 @@ def background_scheduler():
                         continue
                     if _is_signal_already_active(_sym, _dirn, _setup):
                         continue
+                    if result.entry is not None and result.stop is not None:
+                        _apex_stop_pts = round(abs(result.entry - result.stop), 1)
+                        _apex_risk_usd = round(_apex_stop_pts * (2 if _sym == 'MNQ' else 50), 0)
+                        logger.info(
+                            f'Signal: {_sym} {_dirn} {_setup} | '
+                            f'stop={_apex_stop_pts} pts | risk=${_apex_risk_usd:.0f} | contracts=1'
+                        )
                     msg = (format_alert_e(result) if _setup == 'E_ema50_pullback'
                            else format_alert(result))
                     send_telegram(msg + _risk_footer)
@@ -1660,7 +1673,7 @@ def background_scheduler():
                     f'\n⚙️ <i>Regime: {_regime.label} | '
                     f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
                 )
-                for _sym in ['NQ', 'ES']:  # GC paper only — no live signals
+                for _sym in ['MNQ', 'ES']:  # GC paper only — no live signals
                     try:
                         # ── FILTER 1: max 1 concurrent per instrument ─────
                         if SIGNAL_FILTERS['max_concurrent_per_instrument']:
@@ -1679,6 +1692,12 @@ def background_scheduler():
                             if _has_opposite_swing_trade(_sym, sig['direction']):
                                 logger.info(f'Setup F {_sym} {sig["direction"]} suppressed — opposite swing trade open')
                                 continue
+                            _f_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
+                            _f_risk_usd = round(_f_stop_pts * (2 if _sym == 'MNQ' else 50), 0)
+                            logger.info(
+                                f'Signal: {_sym} {sig["direction"]} {sig["setup"]} | '
+                                f'stop={_f_stop_pts} pts | risk=${_f_risk_usd:.0f} | contracts=1'
+                            )
                             # Unified dedup: mark fired BEFORE telegram
                             # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
                             if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
@@ -1720,7 +1739,7 @@ def background_scheduler():
                 from live_scanner import send_telegram as _send_tg
                 from trade_tracker import log_trade as _log_trade
                 _now_utc_d = datetime.now(timezone.utc)
-                for _sym_d in ['NQ', 'ES']:  # GC disabled — feed unverified
+                for _sym_d in ['MNQ', 'ES']:  # GC disabled — feed unverified
                     try:
                         sig_d = scan_setup_d(_sym_d, _now_utc_d)
                         if not sig_d:
@@ -1747,6 +1766,12 @@ def background_scheduler():
                                 continue
                         if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
                             continue
+                        _d_stop_pts = round(abs(sig_d['entry'] - sig_d['stop']), 1)
+                        _d_risk_usd = round(_d_stop_pts * (2 if _sym_d == 'MNQ' else 50), 0)
+                        logger.info(
+                            f'Signal: {_sym_d} {sig_d["direction"]} {sig_d["setup"]} | '
+                            f'stop={_d_stop_pts} pts | risk=${_d_risk_usd:.0f} | contracts=1'
+                        )
                         _d_tid = None
                         try:
                             _d_tid = _log_trade(sig_d)
@@ -1832,14 +1857,14 @@ def background_scheduler():
                         logger.info('Setup H ES: daily limit hit — suppressed')
                 except Exception as _he:
                     logger.warning(f'Setup H ES error: {_he}')
-                # NQ — paper tracking only
+                # MNQ — paper tracking only
                 try:
-                    sig_nq = scan_setup_h('NQ', _now_utc, paper_only=True)
-                    if sig_nq:
-                        log_h_paper(sig_nq)
-                        logger.info(f'Setup H NQ paper: {sig_nq["direction"].upper()} @ {sig_nq["entry"]:.2f}')
-                except Exception as _hnq:
-                    logger.warning(f'Setup H NQ paper error: {_hnq}')
+                    sig_mnq = scan_setup_h('MNQ', _now_utc, paper_only=True)
+                    if sig_mnq:
+                        log_h_paper(sig_mnq)
+                        logger.info(f'Setup H MNQ paper: {sig_mnq["direction"].upper()} @ {sig_mnq["entry"]:.2f}')
+                except Exception as _hmnq:
+                    logger.warning(f'Setup H MNQ paper error: {_hmnq}')
             except Exception as e:
                 logger.warning(f'Setup H scanner error: {e}')
 
@@ -2304,11 +2329,11 @@ def _startup():
     # ── Strategy parameter summary — visible in Railway logs ──
     logger.info('  STRATEGY PARAMETERS')
     logger.info('  ─────────────────────────────────────────────────')
-    logger.info('  A/B/C  stop_atr=0.8  RR=4.0  NQ/ES London primary (7-11 UTC) / NY secondary (13-19 UTC)')
-    logger.info('  A/B/C  NQ day filter: Tue/Wed/Thu | ES: Mon/Tue/Thu | GC: Mon-Fri')
-    logger.info('  D      stop_atr=1.0  RR=2.5  NQ+ES  session=13-19 UTC  min_score=70')
-    logger.info('  E      stop_atr=1.5  RR=2.5  target=3.75×ATR  NQ only  session=13-18 UTC')
-    logger.info('  F      stop_atr=1.5  RR=2.5  target=3.75×ATR  NQ+ES    long>0.58  short<0.42')
+    logger.info('  A/B/C  stop_atr=0.8  RR=4.0  MNQ/ES London primary (7-11 UTC) / NY secondary (13-19 UTC)')
+    logger.info('  A/B/C  MNQ day filter: Tue/Wed/Thu | ES: Mon/Tue/Thu | GC: Mon-Fri')
+    logger.info('  D      stop_atr=1.0  RR=2.5  MNQ+ES  session=13-19 UTC  min_score=70')
+    logger.info('  E      stop_atr=1.5  RR=2.5  target=3.75×ATR  MNQ only  session=13-18 UTC')
+    logger.info('  F      stop_atr=1.5  RR=2.5  target=3.75×ATR  MNQ+ES   long>0.58  short<0.42')
     logger.info('  H      stop_atr=1.5  RR≥2.0  target=VWAP  ES live/NQ paper  session=13-19 UTC')
     logger.info('  ─────────────────────────────────────────────────')
     logger.info('  SIGNAL FILTERS')
@@ -2354,7 +2379,7 @@ def _startup():
             except Exception as e:
                 logger.warning(f'  {_sym} backfill check failed: ' + str(e))
         # Ensure sufficient 5min history for Setup F training (needs ~10000 bars / 6 months)
-        for _sym in ['NQ', 'ES']:
+        for _sym in ['MNQ', 'ES']:
             try:
                 conn = _db.connect()
                 count_5m = conn.execute(
@@ -2412,7 +2437,7 @@ def _startup():
         # Build 1h/4h aggregates from 5min bars — required by Setup F feature engineering
         try:
             from data_feed import build_htf_from_5min
-            for _sym in ['NQ', 'ES']:
+            for _sym in ['MNQ', 'ES']:
                 try:
                     htf = build_htf_from_5min(_sym)
                     logger.info(f'Setup F: {_sym} HTF built — {htf}')
@@ -2481,7 +2506,7 @@ def _startup():
         _t.sleep(5)
         try:
             from setup_f_ml import train_model, load_or_train_model
-            for _sym in ['NQ', 'ES']:
+            for _sym in ['MNQ', 'ES']:
                 try:
                     logger.info(f'Setup F: Training {_sym} model...')
                     acc = train_model(_sym)
@@ -2501,7 +2526,7 @@ def _startup():
             import numpy as _np
             _bias_labels = {1.0: 'BULLISH', -1.0: 'BEARISH', 0.0: 'NEUTRAL'}
             _bias_parts = []
-            for _sym in ['NQ', 'ES', 'GC']:
+            for _sym in ['MNQ', 'ES', 'GC']:
                 try:
                     _df = _load_ohlcv(_sym, '5min', limit=2000)
                     if not _df.empty:
@@ -2513,7 +2538,7 @@ def _startup():
                 except Exception:
                     _bias_parts.append(f'{_sym} bias=ERROR')
             _f_parts = []
-            for _sym in ['NQ', 'ES']:
+            for _sym in ['MNQ', 'ES']:
                 import os as _os
                 _pkl = f'apex_rf_{_sym}.pkl'
                 _f_parts.append(f'SetupF {_sym}={"loaded" if _os.path.exists(_pkl) else "MISSING"}')
@@ -2546,7 +2571,7 @@ def apex_scan():
     NY = ZoneInfo('America/New_York')
     now = datetime.now(timezone.utc)
     results = []
-    for sym in ('NQ', 'ES', 'GC'):
+    for sym in ('MNQ', 'ES', 'GC'):
         for direction in ('long', 'short'):
             for check_fn, setup_name in [
                 (lambda s,d: check_setup(s,d,'swing',now), 'B'),
@@ -2572,13 +2597,13 @@ def apex_scan():
                 except Exception as e:
                     logger.debug(f'Gate check error {sym} {direction} Setup {setup_name}: {e}')
 
-    # Setup E — EMA50 Pullback, NQ only
+    # Setup E — EMA50 Pullback, MNQ only
     for direction in ('long', 'short'):
         try:
-            r = check_setup_e('NQ', direction, now)
+            r = check_setup_e('MNQ', direction, now)
             gates = [{'gate': g.gate, 'name': g.name, 'passed': g.passed, 'detail': g.detail} for g in r.gates]
             results.append({
-                'symbol':    'NQ',
+                'symbol':    'MNQ',
                 'direction': direction,
                 'setup':     'E',
                 'valid':     r.valid,
@@ -2593,11 +2618,11 @@ def apex_scan():
         except Exception as e:
             logger.debug(f'Setup E scan error ({direction}): {e}')
 
-    # Setup D — FVG Fill (NQ + ES, GC disabled)
+    # Setup D — FVG Fill (MNQ + ES, GC disabled)
     fvg_signals = []
     try:
         from fvg_engine import scan_setup_d
-        for _d_sym in ['NQ', 'ES']:
+        for _d_sym in ['MNQ', 'ES']:
             s = scan_setup_d(_d_sym, now)
             if s:
                 fvg_signals.append({
@@ -2624,17 +2649,17 @@ def apex_scan():
     setup_f_predictions = []
     try:
         from setup_f_ml import get_current_prediction
-        for _sym in ('NQ', 'ES', 'GC'):
+        for _sym in ('MNQ', 'ES', 'GC'):
             pred = get_current_prediction(_sym)
             setup_f_predictions.append(pred)
     except Exception as e:
         logger.debug(f'Setup F prediction error: {e}')
 
-    # Setup H — VWAP band state for ES and NQ (dashboard display)
+    # Setup H — VWAP band state for ES and MNQ (dashboard display)
     setup_h_data = []
     try:
         from setup_h_vwap import get_h_state
-        for _sym in ('ES', 'NQ'):
+        for _sym in ('ES', 'MNQ'):
             setup_h_data.append(get_h_state(_sym))
     except Exception as e:
         logger.debug(f'Setup H state error: {e}')
@@ -2756,7 +2781,7 @@ def apex_market():
     import pandas as _pd
     NY = ZoneInfo('America/New_York')
     results = {}
-    for sym in ('NQ', 'ES', 'GC'):
+    for sym in ('MNQ', 'ES', 'GC'):
         try:
             # Load 5min bars and resample to 1hour in-memory — avoids broken HTF DB rows on PostgreSQL
             df_5m = load_bars(sym, '5min', limit=3000)

@@ -257,7 +257,7 @@ tr:hover td{background:var(--bg2)}
     </select>
     <select id="filterSymbol" onchange="renderTradesTable()">
       <option value="">All Symbols</option>
-      <option>NQ</option><option>ES</option><option>GC</option>
+      <option>MNQ</option><option>ES</option><option>GC</option>
     </select>
     <select id="filterStatus" onchange="renderTradesTable()">
       <option value="">All Status</option>
@@ -523,7 +523,7 @@ function renderHealthStrip(h) {
   strip.innerHTML = `
     <div class="health-item"><span class="dot ${hbDot}"></span>Scheduler <strong>${hbTxt}</strong></div>
     <div class="health-item"><span class="dot ${pgDot}"></span>PostgreSQL <strong>${pg.ok ? 'OK' : 'ERROR'}</strong></div>
-    <div class="health-item"><span class="dot ${feedDot('NQ')}"></span>NQ feed <strong>${feedTxt('NQ')}</strong></div>
+    <div class="health-item"><span class="dot ${feedDot('MNQ')}"></span>MNQ feed <strong>${feedTxt('MNQ')}</strong></div>
     <div class="health-item"><span class="dot ${feedDot('ES')}"></span>ES feed <strong>${feedTxt('ES')}</strong></div>
     <div class="health-item"><span class="dot ${feedDot('MNQ')}"></span>MNQ feed <strong>${feedTxt('MNQ')}</strong></div>
     <div class="health-item"><span class="dot ${tgDot}"></span>Telegram <strong>${h.telegram ? 'OK' : 'Not set'}</strong></div>
@@ -775,8 +775,8 @@ const SETUP_INFO = {
   A:{name:'Sweep + OB',       sub:'RR 4.0 · London/NY Primary'},
   B:{name:'CHoCH + Breaker',  sub:'RR 4.0 · Primary session only'},
   C:{name:'BOS + OB',         sub:'RR 4.0 · Primary session only'},
-  D:{name:'FVG Fill',         sub:'RR 2.5 · 13–19 UTC · NQ/ES'},
-  E:{name:'EMA50 Pullback',   sub:'RR 2.5 · 13–18 UTC · NQ'},
+  D:{name:'FVG Fill',         sub:'RR 2.5 · 13–19 UTC · MNQ/ES'},
+  E:{name:'EMA50 Pullback',   sub:'RR 2.5 · 13–18 UTC · MNQ'},
   F:{name:'Random Forest ML', sub:'RR 2.5 · P>58% Long / P<42% Short'},
   H:{name:'VWAP 2σ Reversal', sub:'RR ≥2.0 · 13–19 UTC · ES Live'},
 };
@@ -909,7 +909,7 @@ async function loadSetups() {
   const fPreds  = scan.setup_f_predictions || [];
   const hData   = scan.setup_h_data || [];
   const trades  = tradesResp.trades || [];
-  const SYMS    = ['NQ','ES','GC'];
+  const SYMS    = ['MNQ','ES','GC'];
 
   // Group results by setup key letter (A/B/C/E) and symbol
   function getRows(letter, sym) {
@@ -941,7 +941,7 @@ async function loadSetups() {
     const utcH = new Date().getUTCHours();
     const inSess = utcH >= 13 && utcH < 19;
     let bars = '';
-    ['NQ','ES'].forEach(sym => {
+    ['MNQ','ES'].forEach(sym => {
       const sig = fvgSigs.find(s => s.symbol === sym);
       let pct, st;
       if (sig && sig.valid) { pct = 100; st = 'Signal ' + (sig.direction==='long'?'Long':'Short'); }
@@ -956,12 +956,12 @@ async function loadSetups() {
   // ── E — EMA50 Pullback ────────────────────────────────────────
   {
     const MAX_G = 5;
-    const rows = getRows('E', 'NQ');
+    const rows = getRows('E', 'MNQ');
     // Best across both directions
     const best = bestResult(rows);
     const pct  = gateProximity(best, MAX_G);
     const st   = gateState(best, 'E');
-    let bars = proxBar('NQ', pct, st);
+    let bars = proxBar('MNQ', pct, st);
     bars += proxBar('ES', 0, 'Disabled');
     bars += proxBar('GC', 0, 'Disabled');
     cards.push(proxCard('E', bars, lastSignalText(trades, 'E')));
@@ -978,7 +978,7 @@ async function loadSetups() {
     const ring = ringProgress(ringPct, ringColor);
 
     let fBars = '';
-    ['NQ','ES'].forEach(sym => {
+    ['MNQ','ES'].forEach(sym => {
       const p = fPreds.find(x=>x.symbol===sym);
       const pct = p ? Math.round((p.probability||0)*100) : 20;
       const st  = p ? (p.signal_state||'Watching') : 'No data';
@@ -1028,7 +1028,7 @@ async function loadSetups() {
   // ── H — VWAP 2σ Reversal ─────────────────────────────────────
   {
     let bars = '';
-    ['ES','NQ'].forEach(sym => {
+    ['ES','MNQ'].forEach(sym => {
       const h = hData.find(x=>x.symbol===sym);
       let pct, st;
       if (!h) { pct=0; st='No data'; }
@@ -1036,7 +1036,7 @@ async function loadSetups() {
       else if (h.in_session && h.signal_state==='WATCHING') { pct=60; st='Watching'; }
       else if (h.in_session) { pct=30; st='Monitoring'; }
       else { pct=0; st='Off-session'; }
-      const lbl = sym + (sym==='NQ'?' (paper)':'');
+      const lbl = sym + (sym==='MNQ'?' (paper)':'');
       bars += proxBar(lbl, pct, st);
     });
     bars += proxBar('GC', 0, 'Disabled');
@@ -1092,9 +1092,9 @@ async function loadHealth() {
       ['swing_alerted_signals', db.swing_alerted_signals ?? '—', null],
     ]),
     diag('OHLCV Bar Counts', [
-      ['NQ 1min', ohlcv_d['NQ_1min'] ?? '—', null],
-      ['NQ 5min', ohlcv_d['NQ_5min'] ?? '—', null],
-      ['NQ 15min', ohlcv_d['NQ_15min'] ?? '—', null],
+      ['MNQ 1min', ohlcv_d['MNQ_1min'] ?? '—', null],
+      ['MNQ 5min', ohlcv_d['MNQ_5min'] ?? '—', null],
+      ['MNQ 15min', ohlcv_d['MNQ_15min'] ?? '—', null],
       ['ES 1min', ohlcv_d['ES_1min'] ?? '—', null],
       ['ES 5min', ohlcv_d['ES_5min'] ?? '—', null],
       ['GC 1min', ohlcv_d['GC_1min'] ?? '—', null],
@@ -1108,11 +1108,11 @@ async function loadHealth() {
       ['Bars today', feed.bars_today ?? '—', null],
     ]),
     diag('Setup F Model', [
-      ['NQ trained', sf.NQ?.trained_at?.slice(0,16) ?? '—', null],
+      ['MNQ trained', sf.MNQ?.trained_at?.slice(0,16) ?? '—', null],
       ['ES trained', sf.ES?.trained_at?.slice(0,16) ?? '—', null],
-      ['NQ state', sf.NQ?.signal_state ?? '—', null],
+      ['MNQ state', sf.MNQ?.signal_state ?? '—', null],
       ['ES state', sf.ES?.signal_state ?? '—', null],
-      ['NQ prob', sf.NQ?.probability != null ? (sf.NQ.probability*100).toFixed(1)+'%' : '—', null],
+      ['MNQ prob', sf.MNQ?.probability != null ? (sf.MNQ.probability*100).toFixed(1)+'%' : '—', null],
       ['ES prob', sf.ES?.probability != null ? (sf.ES.probability*100).toFixed(1)+'%' : '—', null],
     ]),
     diag('Integrations', [
@@ -1146,7 +1146,7 @@ async function loadDiagnostics() {
 
   // HTF Bias
   const mkt = market.market || {};
-  cards.push(diagCard('HTF Bias (4h EMA20)', ['NQ','ES','GC'].map(sym => {
+  cards.push(diagCard('HTF Bias (4h EMA20)', ['MNQ','ES','GC'].map(sym => {
     const m = mkt[sym] || {};
     const biasColor = m.bias === 'bullish' ? 'var(--green)' : m.bias === 'bearish' ? 'var(--red)' : 'var(--text2)';
     const detail = m.close != null ? `${m.bias?.toUpperCase()} | ${m.close} (${m.pct >= 0 ? '+' : ''}${m.pct}%)` : m.error || '—';
@@ -1163,7 +1163,7 @@ async function loadDiagnostics() {
 
   // Gate status per symbol per direction for A/B/C/E
   const results = scan.results || [];
-  ['NQ','ES','GC'].forEach(sym => {
+  ['MNQ','ES','GC'].forEach(sym => {
     const rows = results.filter(r => r.symbol === sym);
     if (!rows.length) return;
     cards.push(diagCard(`${sym} — Gate Status`, rows.map(r => {
@@ -1177,9 +1177,9 @@ async function loadDiagnostics() {
   const db = health.db_counts || {};
   const ohlcv_d = db.ohlcv_detail || {};
   cards.push(diagCard('OHLCV Bar Counts (ts>0)', [
-    ['NQ 1min', ohlcv_d['NQ_1min'] ?? '—', null],
-    ['NQ 5min', ohlcv_d['NQ_5min'] ?? '—', null],
-    ['NQ 15min', ohlcv_d['NQ_15min'] ?? '—', null],
+    ['MNQ 1min', ohlcv_d['MNQ_1min'] ?? '—', null],
+    ['MNQ 5min', ohlcv_d['MNQ_5min'] ?? '—', null],
+    ['MNQ 15min', ohlcv_d['MNQ_15min'] ?? '—', null],
     ['ES 1min', ohlcv_d['ES_1min'] ?? '—', null],
     ['ES 5min', ohlcv_d['ES_5min'] ?? '—', null],
     ['GC 1min', ohlcv_d['GC_1min'] ?? '—', null],
@@ -1200,7 +1200,7 @@ async function loadDiagnostics() {
     ['F RR',           '2.5',    null],
     ['H stop_atr',     '1.5',    null],
     ['H min RR',       '2.0',    null],
-    ['NQ days',        'Tue/Wed/Thu', null],
+    ['MNQ days',       'Tue/Wed/Thu', null],
     ['GC days',        'Mon–Fri', null],
   ]));
 

@@ -49,7 +49,11 @@ def _load_htf(symbol: str, tf: str, limit_htf: int) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────
 
 SESSION_WINDOWS = {
-    'NQ': [
+    'MNQ': [
+        {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},
+        {'name': 'NY Secondary',    'start': 13, 'end': 19, 'quality': 'secondary'},
+    ],
+    'NQ': [  # kept for legacy data reference
         {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},
         {'name': 'NY Secondary',    'start': 13, 'end': 19, 'quality': 'secondary'},
     ],
@@ -682,7 +686,7 @@ def scan_all(dt: datetime = None) -> list[SetupResult]:
     results   = []
     triggered = set()
 
-    for symbol in ('NQ', 'ES', 'GC'):
+    for symbol in ('MNQ', 'ES', 'GC'):
         for direction in ('long', 'short'):
             key = (symbol, direction)
             for mode in ('swing',):
@@ -696,10 +700,10 @@ def scan_all(dt: datetime = None) -> list[SetupResult]:
                 if r.valid and key not in triggered:
                     results.append(r); triggered.add(key)
 
-    # Setup E — EMA50 Pullback (NQ validated; independent of swing setups)
+    # Setup E — EMA50 Pullback (MNQ primary; independent of swing setups)
     for direction in ('long', 'short'):
         try:
-            r = check_setup_e('NQ', direction, dt)
+            r = check_setup_e('MNQ', direction, dt)
             if r.valid:
                 results.append(r)
         except Exception:
@@ -718,7 +722,7 @@ if __name__ == '__main__':
     print(f"  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC")
     print(f"{'='*60}")
 
-    for symbol in ('NQ', 'ES', 'GC'):
+    for symbol in ('MNQ', 'ES', 'GC'):
         print(f"\n  {symbol}")
         print(f"  {'-'*40}")
         for direction in ('long', 'short'):

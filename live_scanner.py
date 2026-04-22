@@ -29,15 +29,15 @@ logger = logging.getLogger('APEX.Scanner')
 NY_TZ = ZoneInfo('America/New_York')
 UTC   = ZoneInfo('UTC')
 
-INSTRUMENTS = ['NQ', 'ES', 'GC']
+INSTRUMENTS = ['MNQ', 'ES', 'GC']
 MODES       = ['swing']
 SCAN_EVERY  = 60
 BAR_MINUTES = 5
 
 DAY_FILTERS = {
-    'NQ': [1, 2, 3],        # Tue/Wed/Thu — spec: exclude Mon and Fri
-    'ES': [0, 1, 3],        # Mon/Tue/Thu — unchanged
-    'GC': [0, 1, 2, 3, 4],  # Mon–Fri all week — spec: no day exclusion for GC
+    'MNQ': [1, 2, 3],       # Tue/Wed/Thu — same as NQ (identical price action)
+    'ES':  [0, 1, 3],       # Mon/Tue/Thu — unchanged
+    'GC':  [0, 1, 2, 3, 4], # Mon–Fri all week — spec: no day exclusion for GC
 }
 
 
@@ -229,15 +229,15 @@ def run_scan(dt: datetime = None) -> list:
                 except Exception as e:
                     logger.error(f'Gate check failed {symbol} {direction}: {e}')
 
-    # Setup E — EMA50 Pullback, NQ only, session-gated internally
+    # Setup E — EMA50 Pullback, MNQ only, session-gated internally
     if dow < 5:
         for direction in ('long', 'short'):
             try:
-                result = check_setup_e('NQ', direction, dt)
+                result = check_setup_e('MNQ', direction, dt)
                 if result.valid:
                     results.append(result)
                     logger.info(
-                        f'SIGNAL: NQ {direction.upper()} E_ema50_pullback '
+                        f'SIGNAL: MNQ {direction.upper()} E_ema50_pullback '
                         f'entry={result.entry} stop={result.stop} target={result.target}'
                     )
             except Exception as e:
@@ -286,7 +286,7 @@ def main():
     send_telegram(
         '🚀 <b>APEX Scanner Online</b>\n'
         f'Monitoring: {", ".join(INSTRUMENTS)}\n'
-        f'Setups: A/B/C (swing) + E (EMA50 Pullback, NQ)\n'
+        f'Setups: A/B/C (swing) + E (EMA50 Pullback, MNQ)\n'
         f'<i>{datetime.now(timezone.utc).astimezone(NY_TZ).strftime("%Y-%m-%d %H:%M")} ET</i>'
     )
 
@@ -374,7 +374,7 @@ def main():
                 main._last_setup_f = _now_ts
                 try:
                     from setup_f_ml import scan_setup_f, format_f_alert, check_model_degradation
-                    for _sym in ['NQ', 'ES']:  # GC paper only
+                    for _sym in ['MNQ', 'ES']:  # GC paper only
                         try:
                             if check_model_degradation(_sym):
                                 logger.warning(f'Setup F {_sym} model degraded — skipping')

@@ -17,10 +17,14 @@ import db as _db
 logger  = logging.getLogger('APEX.SetupF')
 
 SESSION_WINDOWS = {
-    'NQ': (13, 19),
-    'ES': (13, 19),
-    'GC': (12, 17),
+    'MNQ': (13, 19),
+    'NQ':  (13, 19),  # kept for legacy reference
+    'ES':  (13, 19),
+    'GC':  (12, 17),
 }
+
+# Signal frequency tracking — warns if > 3 F signals fire per session per instrument
+_f_session_counts: dict = {}   # (symbol, date_str) -> int
 
 # Module-level caches
 _hurst_cache = {}   # symbol -> (computed_at, values_series)
@@ -435,6 +439,15 @@ def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
          'value': round(float(X_last[0, i]), 4)}
         for i in top_idx
     ]
+
+    # Signal frequency monitoring — warn if > 3 F signals fire per session per instrument
+    _date_key = (symbol, dt.strftime('%Y-%m-%d'))
+    _f_session_counts[_date_key] = _f_session_counts.get(_date_key, 0) + 1
+    if _f_session_counts[_date_key] > 3:
+        logger.warning(
+            f'Setup F: high signal frequency — {symbol} has fired '
+            f'{_f_session_counts[_date_key]} times today — possible over-triggering'
+        )
 
     return {
         'symbol':      symbol,

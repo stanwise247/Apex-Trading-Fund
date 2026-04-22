@@ -92,7 +92,7 @@ def _calc_htf_bias(df_5m: pd.DataFrame) -> str:
 # ─────────────────────────────────────────────────────────────
 
 def init_vwap_paper_log():
-    """Create vwap_paper_log table if it doesn't exist (NQ paper tracking)."""
+    """Create vwap_paper_log table if it doesn't exist (MNQ paper tracking)."""
     conn = _db.connect()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS vwap_paper_log (
@@ -115,7 +115,7 @@ def init_vwap_paper_log():
 
 
 def log_h_paper(signal: dict):
-    """Log a Setup H paper signal (NQ) to vwap_paper_log."""
+    """Log a Setup H paper signal (MNQ) to vwap_paper_log."""
     try:
         init_vwap_paper_log()
         conn = _db.connect()
@@ -135,7 +135,7 @@ def log_h_paper(signal: dict):
         )
         conn.commit()
         conn.close()
-        logger.info(f'Setup H NQ paper signal logged to vwap_paper_log')
+        logger.info(f'Setup H MNQ paper signal logged to vwap_paper_log')
     except Exception as e:
         logger.error(f'log_h_paper failed: {e}', exc_info=True)
 

@@ -29,13 +29,11 @@ from db import connect as _db_connect, IS_POSTGRES, read_sql as _db_read_sql, up
 logger = logging.getLogger('APEX.DataFeed')
 
 INSTRUMENTS = {
-    'NQ':  'NQ.c.0',
+    'MNQ': 'MNQ.c.0',  # primary trading instrument (replaces NQ — identical price action, $2/pt)
     'ES':  'ES.c.0',
     'GC':  'GC.c.0',
-    'MNQ': 'MNQ.c.0',  # data collection only — signals disabled
+    # NQ removed from live feed — historical bars retained in DB for reference
 }
-
-logger.info('LiveBarFeed: MNQ added for data collection (signals disabled)')
 
 
 
@@ -102,7 +100,7 @@ class LiveBarFeed:
                 target=self._run, name='LiveBarFeed', daemon=True
             )
             self._thread.start()
-        logger.info('LiveBarFeed: started — streaming ohlcv-1m for NQ/ES/GC/MNQ')
+        logger.info('LiveBarFeed: started — streaming ohlcv-1m for MNQ/ES/GC')
 
     def stop(self):
         self._stop_evt.set()

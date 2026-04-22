@@ -232,7 +232,7 @@ def gate5_pullback_bar(symbol: str, direction: str) -> EGateResult:
 #  MAIN CHECKER
 # ─────────────────────────────────────────────────────────────
 
-def check_setup_e(symbol: str = 'NQ', direction: str = 'long',
+def check_setup_e(symbol: str = 'MNQ', direction: str = 'long',
                   dt: datetime = None) -> ESetupResult:
     """
     Run all 5 gates for Setup E.
@@ -312,7 +312,7 @@ def check_setup_e(symbol: str = 'NQ', direction: str = 'long',
 
 def scan_setup_e(dt: datetime = None) -> list:
     """
-    Scan both directions for Setup E on NQ.
+    Scan both directions for Setup E on MNQ.
     Returns list of valid ESetupResult objects.
     """
     if dt is None:
@@ -320,7 +320,7 @@ def scan_setup_e(dt: datetime = None) -> list:
     results = []
     for direction in ('long', 'short'):
         try:
-            r = check_setup_e('NQ', direction, dt)
+            r = check_setup_e('MNQ', direction, dt)
             if r.valid:
                 results.append(r)
         except Exception as e:
@@ -366,9 +366,9 @@ if __name__ == '__main__':
     print(f"{'='*60}\n")
 
     for direction in ('long', 'short'):
-        print(f"  NQ {direction.upper()}")
+        print(f"  MNQ {direction.upper()}")
         print(f"  {'-'*40}")
-        r = check_setup_e('NQ', direction, now)
+        r = check_setup_e('MNQ', direction, now)
         for g in r.gates:
             print(f"    {g}")
         if r.valid:
