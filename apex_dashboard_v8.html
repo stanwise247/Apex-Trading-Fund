@@ -525,7 +525,7 @@ function renderHealthStrip(h) {
     <div class="health-item"><span class="dot ${pgDot}"></span>PostgreSQL <strong>${pg.ok ? 'OK' : 'ERROR'}</strong></div>
     <div class="health-item"><span class="dot ${feedDot('NQ')}"></span>NQ feed <strong>${feedTxt('NQ')}</strong></div>
     <div class="health-item"><span class="dot ${feedDot('ES')}"></span>ES feed <strong>${feedTxt('ES')}</strong></div>
-    <div class="health-item"><span class="dot ${feedDot('GC')}"></span>GC feed <strong>${feedTxt('GC')}</strong></div>
+    <div class="health-item"><span class="dot ${feedDot('MNQ')}"></span>MNQ feed <strong>${feedTxt('MNQ')}</strong></div>
     <div class="health-item"><span class="dot ${tgDot}"></span>Telegram <strong>${h.telegram ? 'OK' : 'Not set'}</strong></div>
     <div class="health-item">Dedup <strong>${fired} fired today</strong></div>
   `;
