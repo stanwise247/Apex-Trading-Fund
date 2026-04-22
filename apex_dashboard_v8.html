@@ -419,6 +419,12 @@ tr:hover td{background:var(--bg2)}
     <span class="section-title">System Health</span>
     <button class="refresh-btn" onclick="loadHealth()">↻ Refresh</button>
   </div>
+  <!-- Calendar status strip -->
+  <div id="calStatusStrip" style="margin-bottom:12px;padding:10px 16px;border-radius:6px;font-size:0.9em;background:var(--card);border:1px solid var(--border)">
+    <span id="calStatusDot" style="font-size:1.2em">⬜</span>
+    <strong id="calStatusLabel" style="margin-left:6px">Economic Calendar: Loading…</strong>
+    <span id="calNextEvent" style="margin-left:12px;color:var(--muted)"></span>
+  </div>
   <div class="diag-grid" id="healthGrid"><div class="loading">Loading…</div></div>
 </div>
 
@@ -1295,7 +1301,30 @@ async function loadSetups() {
 // ──────────────────────────────────────────────────────────────
 async function loadHealth() {
   document.getElementById('healthGrid').innerHTML = '<div class="loading">Loading…</div>';
-  const h = await api('/api/apex/health');
+  const [h, cal] = await Promise.all([
+    api('/api/apex/health'),
+    api('/api/apex/calendar'),
+  ]);
+
+  // Calendar status strip
+  const calStrip = document.getElementById('calStatusStrip');
+  const dot = document.getElementById('calStatusDot');
+  const lbl = document.getElementById('calStatusLabel');
+  const nxt = document.getElementById('calNextEvent');
+  if (cal.ok) {
+    const blocked = cal.status === 'BLACKOUT';
+    calStrip.style.background = blocked ? '#7f1d1d' : '#14532d';
+    calStrip.style.color = blocked ? '#fee2e2' : '#86efac';
+    calStrip.style.borderColor = 'transparent';
+    dot.textContent = blocked ? '🔴' : '🟢';
+    lbl.textContent = blocked ? `BLACKOUT ACTIVE — ${cal.reason}` : 'CLEAR — no active blackout';
+    const nev = cal.next_event;
+    nxt.textContent = nev ? `Next: ${nev.name} ${nev.utc_display} (${nev.minutes_until > 0 ? nev.minutes_until + ' min' : 'now'})` : 'No events in next 7 days';
+    nxt.style.color = blocked ? '#fca5a5' : '#4ade80';
+  } else {
+    lbl.textContent = 'Calendar: unavailable (fallback active)';
+  }
+
   if (!h.ok) {
     document.getElementById('healthGrid').innerHTML = `<div class="loading">Health check failed: ${h.error || '—'}</div>`;
     return;
@@ -1372,11 +1401,12 @@ async function loadHealth() {
 // ──────────────────────────────────────────────────────────────
 async function loadDiagnostics() {
   document.getElementById('diagGrid').innerHTML = '<div class="loading">Loading…</div>';
-  const [market, scan, health, regimeResp] = await Promise.all([
+  const [market, scan, health, regimeResp, calResp] = await Promise.all([
     api('/api/apex/market'),
     api('/api/apex/scan'),
     api('/api/apex/health'),
     api('/api/apex/regime'),
+    api('/api/apex/calendar?hours=168'),
   ]);
 
   function diagCard(title, rows) {
@@ -1483,6 +1513,28 @@ async function loadDiagnostics() {
       [`${h.symbol} state`, h.signal_state ?? '—',
        h.signal_state === 'ABOVE_UPPER' || h.signal_state === 'BELOW_LOWER' ? 'var(--amber)' : null],
     ])));
+  }
+
+  // Economic Calendar (7-day view)
+  if (calResp.ok || calResp.upcoming !== undefined) {
+    const calStatus = calResp.status || 'CLEAR';
+    const blocked   = calStatus === 'BLACKOUT';
+    const calRows   = [
+      ['Status', calStatus, blocked ? 'var(--red)' : 'var(--green)'],
+      ['Reason', calResp.reason || 'None', null],
+      ['Data source', calResp.using_fallback ? 'Hardcoded fallback' : 'FMP API', calResp.using_fallback ? 'var(--amber)' : 'var(--green)'],
+      ['Last refresh', calResp.last_refresh || '—', null],
+      ['Block window', '-30 min → +60 min (90 min total)', 'var(--muted)'],
+    ];
+    const upcoming7 = (calResp.upcoming || []).slice(0, 10);
+    if (upcoming7.length > 0) {
+      upcoming7.forEach(ev => {
+        calRows.push([ev.name, `${ev.utc_display} | block ${ev.blocked_window_start}–${ev.blocked_window_end}`, 'var(--amber)']);
+      });
+    } else {
+      calRows.push(['Upcoming events', 'None in next 7 days', 'var(--green)']);
+    }
+    cards.push(diagCard('Economic Calendar — Next 7 Days', calRows));
   }
 
   document.getElementById('diagGrid').innerHTML = cards.join('');

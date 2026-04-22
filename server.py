@@ -60,6 +60,7 @@ SIGNAL_FILTERS = {
     'primary_session_only_bcd':      True,   # B/C/D: require quality=='primary' session
     'dual_htf_bias':                 True,   # A/B/C/D/E: 1h EMA20 must align with 4h direction
     'setup_e_min_atr':               True,   # E: skip if 5min ATR14 < minimum (slow markets)
+    'economic_calendar':             True,   # block signals in ±30/60 min window around HIGH-impact events
 }
 SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
@@ -1201,6 +1202,25 @@ _kill_switch_balance:      float = 0.0
 _kill_switch_threshold:    float = 400.0
 
 
+def _cal_block(symbol: str, setup: str) -> bool:
+    """
+    Return True (and log) if economic calendar blackout is active.
+    Called before every signal fires. Single gate — protects all setups.
+    """
+    if not SIGNAL_FILTERS.get('economic_calendar', True):
+        return False
+    try:
+        from calendar_filter import get_filter as _gcf
+        _cf = _gcf()
+        _blocked, _reason = _cf.is_blocked(symbol, datetime.now(timezone.utc))
+        if _blocked:
+            logger.warning(f'{setup} {symbol}: skipped — economic calendar blackout: {_reason}')
+        return _blocked
+    except Exception as _e:
+        logger.debug(f'_cal_block check failed (allowing signal): {_e}')
+        return False
+
+
 def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
     """
     Return True if this signal is already active.
@@ -1381,6 +1401,33 @@ def background_scheduler():
                         )
             except Exception as _ks_e:
                 logger.warning(f'Kill switch check failed: {_ks_e}')
+
+        # ── Economic calendar refresh (every 6 hours) + 15-min warnings ─
+        if not hasattr(background_scheduler, '_last_cal_refresh') or \
+                now - background_scheduler._last_cal_refresh >= 21600:
+            background_scheduler._last_cal_refresh = now
+            try:
+                from calendar_filter import get_filter as _gcf_r
+                _gcf_r().refresh_calendar()
+            except Exception as _cre:
+                logger.warning(f'Calendar refresh failed: {_cre}')
+
+        # 15-min pre-event Telegram warnings (checked every scheduler tick)
+        try:
+            from calendar_filter import get_filter as _gcf_w
+            from live_scanner import send_telegram as _cal_tg
+            _cf_w = _gcf_w()
+            for _warn_ev in _cf_w.check_warnings():
+                _cal_tg(
+                    f'⚠️ <b>APEX Calendar Alert</b> — {_warn_ev["name"]} in 15 minutes '
+                    f'({_warn_ev["utc_time"]}). All signals blocked until {_warn_ev["block_end"]}.'
+                )
+                logger.info(f'Calendar warning sent: {_warn_ev["name"]}')
+            for _lifted_ev in _cf_w.check_blackout_lifted():
+                _cal_tg(f'✅ <b>APEX Calendar</b> — Blackout lifted ({_lifted_ev}). Normal trading resumed.')
+                logger.info(f'Calendar blackout lifted: {_lifted_ev}')
+        except Exception as _cwe:
+            logger.debug(f'Calendar warning check failed: {_cwe}')
 
         # ── Clear _fired_today at midnight UTC ────────────────────
         _today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -1593,6 +1640,8 @@ def background_scheduler():
                                 f'opposite swing trade open on {sig["symbol"]}'
                             )
                             continue
+                        if _cal_block(sig['symbol'], sig.get('setup', 'FVG')):
+                            continue
                         if _check_and_mark_fired(sig['symbol'], sig.get('setup', 'FVG'), sig['direction']):
                             continue
                         if _is_signal_already_active(sig['symbol'], sig['direction'], sig.get('setup', 'FVG')):
@@ -1690,6 +1739,9 @@ def background_scheduler():
                         if _has_opposite_swing_trade(_sym, _dirn):
                             logger.info(f'Setup E {_dirn} suppressed — opposite swing trade open on {_sym}')
                             continue
+                    # Economic calendar gate — skip if blackout active
+                    if _cal_block(_sym, _setup):
+                        continue
                     # Unified dedup: mark fired BEFORE telegram
                     if _check_and_mark_fired(_sym, _setup, _dirn):
                         continue
@@ -1775,6 +1827,9 @@ def background_scheduler():
                                 f'Signal: {_sym} {sig["direction"]} {sig["setup"]} | '
                                 f'stop={_f_stop_pts} pts | risk=${_f_risk_usd:.0f} | contracts=1'
                             )
+                            # Economic calendar gate
+                            if _cal_block(_sym, sig['setup']):
+                                continue
                             # Unified dedup: mark fired BEFORE telegram
                             # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
                             if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
@@ -1837,6 +1892,8 @@ def background_scheduler():
                             continue
                         sig = scan_setup_i(_sym, _now_utc_i)
                         if sig:
+                            if _cal_block(_sym, sig['setup']):
+                                continue
                             if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
                                 continue
                             if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
@@ -1978,22 +2035,23 @@ def background_scheduler():
                                     sig_es = None
                         if sig_es:
                             if not _has_opposite_swing_trade('ES', sig_es['direction']):
-                                if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
-                                    if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
-                                        msg = format_h_alert(sig_es) + _risk_footer
-                                        send_telegram(msg)
-                                        try:
-                                            _h_tid = log_trade(sig_es)
-                                            if not _h_tid:
-                                                logger.error('CRITICAL: log_trade() returned None for Setup H ES — trade NOT logged')
-                                            else:
-                                                logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
-                                        except Exception as _lte:
-                                            logger.error(f'CRITICAL: log_trade() FAILED for Setup H ES: {_lte}', exc_info=True)
-                                            _h_tid = None
-                                        if _h_tid:
-                                            _execute_via_tradovate(sig_es, _h_tid)
-                                        logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
+                                if not _cal_block('ES', sig_es['setup']):
+                                    if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
+                                        if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
+                                            msg = format_h_alert(sig_es) + _risk_footer
+                                            send_telegram(msg)
+                                            try:
+                                                _h_tid = log_trade(sig_es)
+                                                if not _h_tid:
+                                                    logger.error('CRITICAL: log_trade() returned None for Setup H ES — trade NOT logged')
+                                                else:
+                                                    logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
+                                            except Exception as _lte:
+                                                logger.error(f'CRITICAL: log_trade() FAILED for Setup H ES: {_lte}', exc_info=True)
+                                                _h_tid = None
+                                            if _h_tid:
+                                                _execute_via_tradovate(sig_es, _h_tid)
+                                            logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
                             else:
                                 logger.info('Setup H ES suppressed — opposite swing trade open')
                     else:
@@ -2746,6 +2804,18 @@ def _startup():
         except Exception as _re:
             logger.warning(f'APEX READY check failed: {_re}')
 
+        # Pre-load economic calendar on startup
+        try:
+            from calendar_filter import get_filter as _gcf_startup
+            _cf_startup = _gcf_startup()
+            _cal_upcoming = _cf_startup.get_upcoming_events(hours=24)
+            logger.info(
+                f'Economic calendar loaded — {len(_cal_upcoming)} events in next 24h'
+                + (f' | next: {_cal_upcoming[0]["name"]} {_cal_upcoming[0]["utc_display"]}' if _cal_upcoming else '')
+            )
+        except Exception as _cse:
+            logger.warning(f'Calendar startup load failed: {_cse}')
+
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info('  Server running at: http://localhost:5000')
@@ -2939,6 +3009,21 @@ def apex_wyckoff():
         return jsonify({'ok': True, **stats})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/calendar', methods=['GET'])
+def apex_calendar():
+    """Return economic calendar status and upcoming events."""
+    try:
+        from calendar_filter import get_filter as _gcf
+        _cf = _gcf()
+        status = _cf.get_current_status()
+        hours = int(request.args.get('hours', 24))
+        if hours != 24:
+            status['upcoming'] = _cf.get_upcoming_events(hours=hours)
+        return jsonify({'ok': True, **status})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e), 'status': 'CLEAR', 'reason': '', 'upcoming': []})
 
 
 @app.route('/api/apex/tradovate', methods=['GET'])
