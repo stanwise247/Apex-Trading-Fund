@@ -358,11 +358,23 @@ _PG_DDL = [
         partial      INTEGER DEFAULT 0,
         notes        TEXT
     )""",
+    """CREATE TABLE IF NOT EXISTS regime_log (
+        id         SERIAL PRIMARY KEY,
+        symbol     VARCHAR NOT NULL,
+        regime     VARCHAR NOT NULL,
+        hurst      FLOAT,
+        autocorr   FLOAT,
+        vol_ratio  FLOAT,
+        confidence FLOAT,
+        timestamp  TIMESTAMPTZ NOT NULL,
+        reason     TEXT
+    )""",
     # Indexes
     'CREATE INDEX IF NOT EXISTS idx_ohlcv_sym_tf_ts ON ohlcv (symbol, timeframe, ts)',
     'CREATE INDEX IF NOT EXISTS idx_apex_trades_status ON apex_trades (status)',
     'CREATE INDEX IF NOT EXISTS idx_wyckoff_sym_date ON wyckoff_log (symbol, date)',
     'CREATE INDEX IF NOT EXISTS idx_swing_alert ON swing_alerted_signals (symbol, direction, setup, date)',
+    'CREATE INDEX IF NOT EXISTS idx_regime_log_sym_ts ON regime_log (symbol, timestamp)',
 ]
 
 # Separate migration steps run after DDL — dedup then add unique index.

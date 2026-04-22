@@ -1391,6 +1391,15 @@ def background_scheduler():
             except Exception as e:
                 logger.warning(f'DataFeed refresh error: {e}')
             background_scheduler._last_feed = now
+
+            # REGIME RESEARCH — observation only, no signal impact
+            try:
+                from regime_engine import calculate_and_store as _regime_calc
+                for _reg_sym in ('MNQ', 'ES'):
+                    _regime_calc(_reg_sym)
+            except Exception as _re:
+                logger.warning(f'Regime engine error: {_re}')
+
         if now - last_macro_log > 14400:
             try:
                 m    = fetch_macro_live()
@@ -3179,6 +3188,27 @@ def apex_health():
         'db_counts':  db_counts,
         'setup_f':    setup_f_status,
     })
+
+
+@app.route('/api/apex/regime', methods=['GET'])
+def apex_regime():
+    """Current regime state for MNQ and ES — read-only, observation module."""
+    try:
+        from regime_engine import get_current_regime, get_regime_history
+        result = {}
+        for sym in ('MNQ', 'ES'):
+            result[sym] = get_current_regime(sym)
+        history = {}
+        limit = int(request.args.get('history', 0))
+        if limit > 0:
+            for sym in ('MNQ', 'ES'):
+                history[sym] = get_regime_history(sym, limit=min(limit, 500))
+        resp = {'ok': True, 'regime': result}
+        if history:
+            resp['history'] = history
+        return jsonify(resp)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 
 @app.route('/api/apex/telegram_test', methods=['POST'])
