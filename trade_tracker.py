@@ -270,7 +270,13 @@ def monitor_trades():
         mode      = t.get('mode', 'swing')
 
         is_fvg = t.get('setup', '').startswith('FVG')
-        price = get_current_price(sym, timeframe='1min' if is_fvg else '5min')
+        _tf = '1min' if is_fvg else '5min'
+        SYMBOL_ALIASES = {'NQ': 'MNQ'}
+        price = get_current_price(sym, timeframe=_tf)
+        if price is None and sym in SYMBOL_ALIASES:
+            price = get_current_price(SYMBOL_ALIASES[sym], timeframe=_tf)
+            if price is not None:
+                logger.info(f'monitor_trades: {sym} resolved via alias → {SYMBOL_ALIASES[sym]}')
         if price is None:
             logger.warning(f'monitor_trades: {sym} — could not get current price, skipping')
             continue

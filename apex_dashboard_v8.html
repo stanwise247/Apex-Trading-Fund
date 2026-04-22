@@ -473,6 +473,12 @@ async function loadOverview() {
   } else {
     body.innerHTML = open.map(t => {
       const pnl = t.current_pnl_r ?? null;
+      const entryMs = t.entry_time ? new Date(t.entry_time).getTime() : null;
+      const minsOpen = entryMs ? (Date.now() - entryMs) / 60000 : null;
+      const stale = (pnl === null || pnl === 0) && minsOpen !== null && minsOpen > 30;
+      const pnlCell = stale
+        ? `<strong>${fmtR(pnl)}R</strong> <span title="P&L not updating — check symbol mapping" style="color:var(--amber);font-size:0.8em">⚠</span>`
+        : `<strong>${fmtR(pnl)}R</strong>`;
       return `<tr>
         <td><strong>${t.symbol}</strong></td>
         <td>${dirPill(t.direction)}</td>
@@ -480,7 +486,7 @@ async function loadOverview() {
         <td>${fmt(t.entry_price)}</td>
         <td>${fmt(t.stop)}</td>
         <td>${fmt(t.target)}</td>
-        <td ${pnlColor(pnl)}><strong>${fmtR(pnl)}R</strong></td>
+        <td ${pnlColor(pnl)}>${pnlCell}</td>
       </tr>`;
     }).join('');
   }

@@ -2420,6 +2420,18 @@ def _startup():
         from trade_tracker import init_trades_table as _itt
         _itt()
         logger.info('  apex_trades table ready')
+        # Migrate legacy NQ open trades → MNQ (NQ was renamed to MNQ)
+        try:
+            _mc = _db.connect()
+            _migrated = _mc.execute(
+                "UPDATE apex_trades SET symbol='MNQ' WHERE symbol='NQ' AND status='open'"
+            ).rowcount
+            _mc.commit()
+            _mc.close()
+            if _migrated:
+                logger.info(f'  Migrated {_migrated} legacy NQ open trades to MNQ')
+        except Exception as _me:
+            logger.warning(f'  NQ→MNQ migration failed: {_me}')
     except Exception as e:
         logger.warning('  apex_trades init failed: ' + str(e))
     try:
