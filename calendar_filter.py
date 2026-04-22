@@ -202,7 +202,7 @@ class CalendarFilter:
                 })
         return result
 
-    def get_next_event(self) -> dict | None:
+    def get_next_event(self):
         """Return the next upcoming event, or None."""
         upcoming = self.get_upcoming_events(hours=168)  # next 7 days
         return upcoming[0] if upcoming else None

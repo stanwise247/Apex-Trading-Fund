@@ -7,3 +7,5 @@ pytz
 databento
 psycopg2-binary
 scikit-learn>=1.3.0
+xgboost
+python-dotenv

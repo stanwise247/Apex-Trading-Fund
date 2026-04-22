@@ -443,7 +443,7 @@ SETUP_D_PARAMS = {
 }
 
 
-def scan_setup_d(symbol: str, dt: datetime = None) -> dict | None:
+def scan_setup_d(symbol: str, dt: datetime = None) :
     """
     Setup D — FVG Fill.
     15min FVG + 4hour bias + 1min entry trigger.

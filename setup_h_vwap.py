@@ -145,7 +145,7 @@ def log_h_paper(signal: dict):
 # ─────────────────────────────────────────────────────────────
 
 def scan_setup_h(symbol: str = 'ES', dt: datetime = None,
-                 paper_only: bool = False) -> dict | None:
+                 paper_only: bool = False) :
     """
     Scan for VWAP 2σ band reversal signal.
     Returns signal dict or None if no edge.

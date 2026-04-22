@@ -617,7 +617,7 @@ def load_or_train_model_i(symbol: str):
 #  SCAN — combined signal gate
 # ─────────────────────────────────────────────────────────────
 
-def scan_setup_i(symbol: str, dt: datetime = None) -> dict | None:
+def scan_setup_i(symbol: str, dt: datetime = None) :
     """
     Check Setup I signal for symbol using direction-specific models.
     SHORT: xgb_short > 0.62 AND lr < 0.38 AND HTF BEARISH

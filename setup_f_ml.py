@@ -501,7 +501,7 @@ def load_or_train_model(symbol: str):
 #  SCAN
 # ─────────────────────────────────────────────────────────────
 
-def scan_setup_f(symbol: str, dt: datetime = None) -> dict | None:
+def scan_setup_f(symbol: str, dt: datetime = None) :
     """
     Check Setup F ML signal for symbol at current bar.
     Returns signal dict or None if no edge / cap reached / OOS gate failed.

@@ -266,7 +266,7 @@ def authenticate() -> dict:
         return {'ok': False, 'error': str(e)}
 
 
-def _resolve_account_id(token: str) -> int | None:
+def _resolve_account_id(token: str) :
     """Find the account ID matching TRADOVATE_ACCOUNT name."""
     try:
         resp = requests.get(
@@ -290,7 +290,7 @@ def _resolve_account_id(token: str) -> int | None:
         return None
 
 
-def _auth_header() -> dict | None:
+def _auth_header():
     """Get Authorization header dict, or None if auth fails."""
     result = authenticate()
     if not result['ok']:
