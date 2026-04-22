@@ -769,6 +769,7 @@ const BADGE_STYLE = {
   E:{bg:'#FAECE7',tx:'#712B13'},
   F:{bg:'#EAF3DE',tx:'#27500A'},
   H:{bg:'#FBEAF0',tx:'#72243E'},
+  I:{bg:'#2D1B69',tx:'#C4B5FD'},
 };
 const SETUP_INFO = {
   A:{name:'Sweep + OB',       sub:'RR 4.0 · London/NY Primary'},
@@ -778,6 +779,7 @@ const SETUP_INFO = {
   E:{name:'EMA50 Pullback',   sub:'RR 2.5 · 13–18 UTC · MNQ'},
   F:{name:'Random Forest ML', sub:'RR 2.5 · P>58% Long / P<42% Short'},
   H:{name:'VWAP 2σ Reversal', sub:'RR ≥2.0 · 13–19 UTC · ES Live'},
+  I:{name:'Mathematical Alpha',sub:'RR 2.5 · Regime Transition · MNQ/ES'},
 };
 
 // ── Proximity helpers ─────────────────────────────────────────
@@ -907,6 +909,7 @@ async function loadSetups() {
   const fvgSigs = scan.fvg_signals || [];
   const fPreds  = scan.setup_f_predictions || [];
   const hData   = scan.setup_h_data || [];
+  const iData   = scan.setup_i_data || [];
   const trades  = tradesResp.trades || [];
   const SYMS    = ['MNQ','ES','GC'];
 
@@ -1040,6 +1043,34 @@ async function loadSetups() {
     });
     bars += proxBar('GC', 0, 'Disabled');
     cards.push(proxCard('H', bars, lastSignalText(trades, 'H')));
+  }
+
+  // ── I — Mathematical Alpha ────────────────────────────────────
+  {
+    let bars = '';
+    ['MNQ','ES'].forEach(sym => {
+      const d = iData.find(x => x.symbol === sym);
+      let pct = 0, st = 'No data';
+      if (d && d.ok) {
+        const shortSig = d.short_enabled && d.short_xgb_prob > 0.62;
+        const longSig  = d.long_enabled  && d.long_xgb_prob  > 0.62;
+        if (shortSig || longSig) {
+          pct = 90;
+          st  = shortSig && longSig ? 'LONG + SHORT' : shortSig ? 'SHORT signal' : 'LONG signal';
+        } else if (d.transition) {
+          pct = 60; st = 'Regime transition';
+        } else if (d.short_enabled || d.long_enabled) {
+          pct = 30;
+          const dirs = [d.short_enabled?'S':null, d.long_enabled?'L':null].filter(Boolean).join('/');
+          st = `Scanning (${dirs})`;
+        } else {
+          pct = 5; st = 'Models disabled';
+        }
+      }
+      bars += proxBar(sym, pct, st);
+    });
+    bars += proxBar('GC', 0, 'Disabled');
+    cards.push(proxCard('I', bars, lastSignalText(trades, 'I')));
   }
 
   grid.innerHTML = cards.join('');

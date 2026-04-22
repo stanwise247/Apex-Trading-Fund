@@ -1738,6 +1738,72 @@ def background_scheduler():
             except Exception as e:
                 logger.warning(f'Setup F scanner error: {e}')
 
+        # ── Setup I — Mathematical Alpha (every 5 min) ─────────────
+        if not hasattr(background_scheduler, '_last_setup_i'):
+            background_scheduler._last_setup_i = 0
+        if now - background_scheduler._last_setup_i >= 300:
+            background_scheduler._last_setup_i = now
+            try:
+                from setup_i_mathematical import scan_setup_i, format_i_alert
+                from live_scanner import send_telegram
+                from trade_tracker import log_trade
+                _now_utc_i = datetime.now(timezone.utc)
+                if not hasattr(background_scheduler, '_risk_gate'):
+                    from risk_manager import RiskGate
+                    background_scheduler._risk_gate = RiskGate()
+                _rg_i = background_scheduler._risk_gate
+                _i_risk_footer = (
+                    f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
+                    f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
+                    f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
+                )
+                for _sym in ['MNQ', 'ES']:
+                    try:
+                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                            _i_has, _i_id = _has_open_trade_on_instrument(_sym)
+                            if _i_has:
+                                logger.info(f'Setup I: skipped — {_sym} already has open trade #{_i_id}')
+                                continue
+                        if _rg_i.daily.is_daily_limit_hit():
+                            logger.info(f'Setup I {_sym}: daily limit hit — suppressed')
+                            continue
+                        sig = scan_setup_i(_sym, _now_utc_i)
+                        if sig:
+                            if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
+                                continue
+                            if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
+                                continue
+                            _i_tid = None
+                            try:
+                                logger.info(f'Setup I: logging trade {_sym} {sig["direction"]} entry={sig["entry"]}')
+                                _i_tid = log_trade(sig)
+                                if _i_tid:
+                                    logger.info(f'Setup I: trade logged id={_i_tid} {_sym} {sig["direction"]}')
+                                else:
+                                    logger.error(
+                                        f'CRITICAL: Setup I log_trade() returned None — '
+                                        f'{_sym} {sig["direction"]} NOT in DB'
+                                    )
+                            except Exception as _i_lte:
+                                logger.error(
+                                    f'CRITICAL: Setup I log_trade() EXCEPTION — '
+                                    f'{_sym} {sig["direction"]}: {_i_lte}', exc_info=True
+                                )
+                            try:
+                                msg = format_i_alert(sig) + _i_risk_footer
+                                send_telegram(msg)
+                            except Exception as _i_te:
+                                logger.error(f'Setup I: send_telegram failed {_sym}: {_i_te}')
+                            logger.info(
+                                f'Setup I signal: {_sym} {sig["direction"].upper()} '
+                                f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
+                                f'h={sig.get("hurst","?"):.2f} db_id={_i_tid}'
+                            )
+                    except Exception as _i_sym_e:
+                        logger.warning(f'Setup I {_sym} error: {_i_sym_e}')
+            except Exception as _i_e:
+                logger.warning(f'Setup I scanner error: {_i_e}')
+
         # ── Setup D — FVG Fill (every 5 min, NQ+ES only) ─────────
         if not hasattr(background_scheduler, '_last_setup_d'):
             background_scheduler._last_setup_d = 0
@@ -2529,6 +2595,49 @@ def _startup():
         except Exception as e:
             logger.warning(f'Setup F startup training failed: {e}')
 
+        # Train Setup I direction models after data is ready
+        _t.sleep(2)
+        try:
+            from setup_i_mathematical import train_model_i, load_or_train_model_i
+            import os as _os_i
+            for _sym in ['MNQ', 'ES']:
+                try:
+                    short_pkl = f'apex_xi_{_sym}_short.pkl'
+                    long_pkl  = f'apex_xi_{_sym}_long.pkl'
+                    if not (_os_i.path.exists(short_pkl) and _os_i.path.exists(long_pkl)):
+                        logger.info(f'Setup I: Training {_sym} direction models...')
+                        result = train_model_i(_sym)
+                        logger.info(
+                            f'Setup I: {_sym} short AUC={result["short_auc"]:.3f} '
+                            f'deploying={result["short_ok"]} | '
+                            f'long AUC={result["long_auc"]:.3f} deploying={result["long_ok"]}'
+                        )
+                    else:
+                        # Load cached models and log AUC
+                        xgb_s, xgb_l, _, _ = load_or_train_model_i(_sym)
+                        import pickle as _pkl_i
+                        s_auc = l_auc = None
+                        if _os_i.path.exists(short_pkl):
+                            with open(short_pkl, 'rb') as _f:
+                                s_auc = _pkl_i.load(_f).get('oos_auc')
+                        if _os_i.path.exists(long_pkl):
+                            with open(long_pkl, 'rb') as _f:
+                                l_auc = _pkl_i.load(_f).get('oos_auc')
+                        logger.info(
+                            f'Setup I: {_sym} short AUC={s_auc or "?"} '
+                            f'deploying={xgb_s is not None} | '
+                            f'long AUC={l_auc or "?"} deploying={xgb_l is not None}'
+                        )
+                    logger.info(
+                        f'Setup I: {_sym} active directions — '
+                        f'SHORT={_sym not in __import__("setup_i_mathematical")._i_disabled_short} '
+                        f'LONG={_sym not in __import__("setup_i_mathematical")._i_disabled_long}'
+                    )
+                except Exception as _i_te:
+                    logger.warning(f'Setup I: {_sym} startup error: {_i_te}')
+        except Exception as e:
+            logger.warning(f'Setup I startup training failed: {e}')
+
         # ── APEX READY verification log ──────────────────────────
         try:
             from setup_f_ml import _load_ohlcv, calculate_features, FEATURE_NAMES
@@ -2673,12 +2782,22 @@ def apex_scan():
     except Exception as e:
         logger.debug(f'Setup H state error: {e}')
 
+    # Setup I — Mathematical Alpha state (dashboard display)
+    setup_i_data = []
+    try:
+        from setup_i_mathematical import get_setup_i_state
+        for _sym in ('MNQ', 'ES'):
+            setup_i_data.append(get_setup_i_state(_sym))
+    except Exception as e:
+        logger.debug(f'Setup I state error: {e}')
+
     return jsonify({
         'ok':                  True,
         'results':             results,
         'fvg_signals':         fvg_signals,
         'setup_f_predictions': setup_f_predictions,
         'setup_h_data':        setup_h_data,
+        'setup_i_data':        setup_i_data,
         'time':                now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')
     })
 
