@@ -176,6 +176,7 @@ tr:hover td{background:var(--bg2)}
   </div>
   <div class="nav-tabs">
     <button class="nav-tab active" onclick="showPage('overview')">Overview</button>
+    <button class="nav-tab" onclick="showPage('tradovate')">Tradovate</button>
     <button class="nav-tab" onclick="showPage('trades')">Trades</button>
     <button class="nav-tab" onclick="showPage('performance')">Performance</button>
     <button class="nav-tab" onclick="showPage('setups')">Setups</button>
@@ -243,6 +244,75 @@ tr:hover td{background:var(--bg2)}
 </div>
 
 <!-- ══════════ SECTION 2 — TRADES ══════════ -->
+<!-- ══════════ TRADOVATE ══════════ -->
+<div id="page-tradovate" class="page">
+  <div class="section-header">
+    <span class="section-title">Tradovate</span>
+    <button class="refresh-btn" onclick="loadTradovate()">↻ Refresh</button>
+    <span class="section-sub" id="tvTime">—</span>
+  </div>
+  <div id="tv-demo-banner" style="display:none;background:#78350f;color:#fef3c7;padding:10px 18px;border-radius:6px;margin-bottom:14px;font-weight:600;font-size:0.95em">
+    ⚠ DEMO MODE — orders go to Tradovate demo account, not live
+  </div>
+  <div id="tv-kill-banner" style="display:none;background:#7f1d1d;color:#fee2e2;padding:10px 18px;border-radius:6px;margin-bottom:14px;font-weight:600;font-size:0.95em">
+    🔴 KILL SWITCH ACTIVE — TRADING_ENABLED=false, all orders blocked
+  </div>
+
+  <!-- Section 1: Account -->
+  <div class="diag-card" style="margin-bottom:16px">
+    <div class="diag-title">Account</div>
+    <div id="tv-account-cards" class="cards" style="margin-top:10px"></div>
+    <div style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;font-size:0.82em;color:var(--muted);margin-bottom:4px">
+        <span>Daily P&L vs Limit</span>
+        <span id="tv-daily-label">— / $400 limit</span>
+      </div>
+      <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden">
+        <div id="tv-daily-bar" style="height:100%;width:0%;background:var(--green);border-radius:4px;transition:width 0.4s"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:12px;flex-wrap:wrap;font-size:0.83em">
+      <span>Status: <span id="tv-conn-badge">—</span></span>
+      <span>Account: <span id="tv-acct-name" style="color:var(--muted)">—</span></span>
+      <span>Contract: <span id="tv-front-month" style="color:var(--muted)">—</span></span>
+      <span>Live instruments: <span id="tv-live-inst" style="color:var(--green)">—</span></span>
+    </div>
+  </div>
+
+  <!-- Section 2: Open Positions -->
+  <div class="diag-card" style="margin-bottom:16px">
+    <div class="diag-title">Open Positions <span style="font-size:0.8em;color:var(--muted)">(from Tradovate /position)</span></div>
+    <table class="trades-table" style="margin-top:8px">
+      <thead><tr><th>Symbol</th><th>Direction</th><th>Qty</th><th>Avg Price</th><th>Unrealised P&L</th></tr></thead>
+      <tbody id="tv-positions-body"><tr><td colspan="5" class="empty">—</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Section 3: Recent Orders -->
+  <div class="diag-card" style="margin-bottom:16px">
+    <div class="diag-title">Recent Orders <span style="font-size:0.8em;color:var(--muted)">(today's fills from Tradovate)</span></div>
+    <table class="trades-table" style="margin-top:8px">
+      <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Fill Price</th><th>Status</th></tr></thead>
+      <tbody id="tv-orders-body"><tr><td colspan="6" class="empty">—</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Section 4: Execution Log -->
+  <div class="diag-card" style="margin-bottom:16px">
+    <div class="diag-title">Execution Log <span style="font-size:0.8em;color:var(--muted)">(APEX signal → Tradovate order, last 20)</span></div>
+    <table class="trades-table" style="margin-top:8px">
+      <thead><tr><th>Time</th><th>Signal</th><th>Contract</th><th>Qty</th><th>Fill</th><th>Slippage</th><th>Status</th></tr></thead>
+      <tbody id="tv-execlog-body"><tr><td colspan="7" class="empty">No executions yet</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Section 5: Connection Status -->
+  <div class="diag-card">
+    <div class="diag-title">Connection Status</div>
+    <div id="tv-conn-detail" style="margin-top:8px;font-size:0.88em;display:grid;grid-template-columns:1fr 1fr;gap:6px 20px"></div>
+  </div>
+</div>
+
 <div id="page-trades" class="page">
   <div class="section-header">
     <span class="section-title">Trades Journal</span>
@@ -372,10 +442,12 @@ function toggleTheme() {
 //  NAVIGATION
 // ──────────────────────────────────────────────────────────────
 function showPage(id) {
+  if (id !== 'tradovate') { clearTimeout(_tvTimer); _tvTimer = null; }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.getElementById('page-' + id).classList.add('active');
   event.currentTarget.classList.add('active');
+  if (id === 'tradovate') loadTradovate();
   if (id === 'trades') loadTrades();
   if (id === 'performance') loadPerformance();
   if (id === 'setups') loadSetups();
@@ -539,6 +611,107 @@ function renderHealthStrip(h) {
 // ──────────────────────────────────────────────────────────────
 //  TRADES
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+//  TRADOVATE
+// ──────────────────────────────────────────────────────────────
+let _tvTimer = null;
+
+async function loadTradovate() {
+  document.getElementById('tvTime').textContent = 'Loading…';
+  const tv = await api('/api/apex/tradovate');
+  document.getElementById('tvTime').textContent = 'Updated ' + new Date().toUTCString().slice(17,22) + ' UTC';
+
+  const demo = tv.demo === true;
+  const killActive = tv.trading_enabled === false;
+  document.getElementById('tv-demo-banner').style.display = demo ? '' : 'none';
+  document.getElementById('tv-kill-banner').style.display = killActive ? '' : 'none';
+
+  // Account cards
+  const acctCards = document.getElementById('tv-account-cards');
+  function tvCard(label, val, color) {
+    return `<div class="card" style="min-width:120px"><div class="card-label">${label}</div><div class="card-value" style="font-size:1.3em;${color?'color:'+color:''}">${val ?? '—'}</div></div>`;
+  }
+  const upnl = tv.unrealised_pnl;
+  const rpnl = tv.realised_pnl;
+  acctCards.innerHTML = [
+    tvCard('Balance', tv.balance != null ? '$' + tv.balance.toLocaleString() : '—'),
+    tvCard('Available', tv.available != null ? '$' + tv.available.toLocaleString() : '—'),
+    tvCard('Open P&L', upnl != null ? (upnl >= 0 ? '+' : '') + '$' + upnl.toFixed(2) : '—', upnl != null ? (upnl >= 0 ? 'var(--green)' : 'var(--red)') : null),
+    tvCard('Day P&L', rpnl != null ? (rpnl >= 0 ? '+' : '') + '$' + rpnl.toFixed(2) : '—', rpnl != null ? (rpnl >= 0 ? 'var(--green)' : 'var(--red)') : null),
+  ].join('');
+
+  // Daily loss progress bar ($400 limit)
+  const DAILY_LIMIT = 400;
+  const dailyLoss = rpnl != null && rpnl < 0 ? Math.abs(rpnl) : 0;
+  const barPct = Math.min(dailyLoss / DAILY_LIMIT * 100, 100);
+  document.getElementById('tv-daily-label').textContent = `$${dailyLoss.toFixed(0)} / $${DAILY_LIMIT} daily limit`;
+  const bar = document.getElementById('tv-daily-bar');
+  bar.style.width = barPct + '%';
+  bar.style.background = barPct > 75 ? 'var(--red)' : barPct > 40 ? 'var(--amber)' : 'var(--green)';
+
+  // Connection badge
+  const conn = tv.connected;
+  document.getElementById('tv-conn-badge').innerHTML = conn
+    ? '<span style="color:var(--green)">● Connected</span>'
+    : '<span style="color:var(--red)">● Disconnected</span>';
+  document.getElementById('tv-acct-name').textContent = tv.account_name || '—';
+  document.getElementById('tv-front-month').textContent = tv.front_month || '—';
+  document.getElementById('tv-live-inst').textContent = (tv.live_instruments || []).join(', ') || '—';
+
+  // Open positions
+  const posBody = document.getElementById('tv-positions-body');
+  const positions = tv.positions || [];
+  posBody.innerHTML = positions.length === 0
+    ? '<tr><td colspan="5" class="empty">No open positions</td></tr>'
+    : positions.map(p => {
+        const upnlColor = p.unrealised_pnl >= 0 ? 'color:var(--green)' : 'color:var(--red)';
+        const dir = p.contracts > 0 ? 'Long' : 'Short';
+        return `<tr><td>${p.symbol}</td><td>${dir}</td><td>${Math.abs(p.contracts)}</td><td>${p.avg_price?.toFixed(2) ?? '—'}</td><td style="${upnlColor}"><strong>${p.unrealised_pnl >= 0 ? '+' : ''}$${p.unrealised_pnl?.toFixed(2) ?? '—'}</strong></td></tr>`;
+      }).join('');
+
+  // Recent orders
+  const ordBody = document.getElementById('tv-orders-body');
+  const orders = tv.orders_today || [];
+  ordBody.innerHTML = orders.length === 0
+    ? '<tr><td colspan="6" class="empty">No orders today</td></tr>'
+    : orders.slice(0, 10).map(o => {
+        const t = o.time ? o.time.slice(11,16) + ' UTC' : '—';
+        return `<tr><td>${t}</td><td>${o.symbol}</td><td>${o.side}</td><td>${o.contracts}</td><td>${o.fill_price?.toFixed(2) ?? '—'}</td><td>${o.status}</td></tr>`;
+      }).join('');
+
+  // Execution log
+  const logBody = document.getElementById('tv-execlog-body');
+  const execLog = tv.exec_log || [];
+  logBody.innerHTML = execLog.length === 0
+    ? '<tr><td colspan="7" class="empty">No executions yet</td></tr>'
+    : execLog.map(e => {
+        const slip = e.slippage_pts != null ? e.slippage_pts.toFixed(2) + 'pts' : '—';
+        const fill = e.fill_price != null ? e.fill_price.toFixed(2) : '—';
+        const status = e.ok
+          ? '<span style="color:var(--green)">Filled</span>'
+          : `<span style="color:var(--red)">Failed: ${e.error || e.skipped_reason || ''}</span>`;
+        return `<tr><td>${e.time}</td><td>${e.symbol} ${e.direction?.toUpperCase()} Setup ${e.setup}</td><td>${e.instrument || '—'}</td><td>${e.contracts || '—'}</td><td>${fill}</td><td>${slip}</td><td>${status}</td></tr>`;
+      }).join('');
+
+  // Connection detail
+  const detail = document.getElementById('tv-conn-detail');
+  const rows = [
+    ['API mode', tv.demo ? '⚠ DEMO (tradovateapi demo)' : '🔴 LIVE (tradovateapi live)'],
+    ['TRADING_ENABLED', tv.trading_enabled !== false ? '✓ true' : '✗ false (kill switch)'],
+    ['TRADOVATE_ENABLED', tv.enabled ? '✓ true' : '✗ false'],
+    ['Last execution', tv.last_heartbeat || 'None this session'],
+    ['Live instruments', (tv.live_instruments || []).join(', ') || 'None'],
+    ['Front-month contract', tv.front_month || '—'],
+  ];
+  detail.innerHTML = rows.map(([k,v]) =>
+    `<div><span style="color:var(--muted)">${k}</span></div><div>${v}</div>`
+  ).join('');
+
+  // Auto-refresh every 30s
+  clearTimeout(_tvTimer);
+  _tvTimer = setTimeout(loadTradovate, 30000);
+}
+
 let _allTrades = [];
 let _tradeSort = { col: 'entry_time', asc: false };
 

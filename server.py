@@ -1144,8 +1144,11 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
     Updates broker_order_id on the apex_trades row if execution succeeds.
     """
     try:
-        from tradovate import execute_apex_signal, TRADOVATE_ENABLED
+        from tradovate import execute_apex_signal, TRADOVATE_ENABLED, TRADING_ENABLED
         if not TRADOVATE_ENABLED:
+            return
+        if not TRADING_ENABLED:
+            logger.warning('_execute_via_tradovate: TRADING_ENABLED=false — order blocked')
             return
         result = execute_apex_signal(signal)
         if result['ok'] and trade_id:

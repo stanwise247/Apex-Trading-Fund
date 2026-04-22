@@ -47,6 +47,10 @@ TRADOVATE_CID      = os.environ.get('TRADOVATE_CID',      '')
 TRADOVATE_SECRET   = os.environ.get('TRADOVATE_SECRET',   '')
 TRADOVATE_DEVICE   = os.environ.get('TRADOVATE_DEVICE_ID','apex-trader-001')
 TRADOVATE_ACCOUNT  = os.environ.get('TRADOVATE_ACCOUNT',  '')  # e.g. DUP560700
+TRADING_ENABLED    = os.environ.get('TRADING_ENABLED',    'true').lower() == 'true'
+
+# Instruments allowed to send live Tradovate orders — all others paper-trade only
+LIVE_INSTRUMENTS = ['MNQ']
 
 BASE_URL = (
     'https://demo.tradovateapi.com/v1'
@@ -54,20 +58,38 @@ BASE_URL = (
     'https://live.tradovateapi.com/v1'
 )
 
-# Micro contract symbol mapping (APEX symbol → Tradovate)
-SYMBOL_MAP = {
-    'NQ': 'MNQH5',   # MNQ front-month — update as contracts roll
-    'ES': 'MESH5',   # MES front-month
-    'GC': 'MGCJ5',   # MGC front-month
-}
-# Point values per contract
+# Point values per micro contract
 POINT_VALUE = {
-    'NQ': 2.0,   # MNQ $2/pt
-    'ES': 5.0,   # MES $5/pt
-    'GC': 10.0,  # MGC $10/pt (Gold micro)
+    'MNQ': 2.0,   # MNQ $2/pt
+    'NQ':  2.0,   # legacy alias
+    'ES':  5.0,   # MES $5/pt
+    'GC':  10.0,  # MGC $10/pt
 }
 MAX_CONTRACTS = 10
 MIN_CONTRACTS = 1
+
+
+def _front_month_suffix() -> str:
+    """Return the current front-month contract suffix, e.g. 'M6' for June 2026.
+    Rolls to next quarter ~2 weeks before expiry (day 15 of expiry month).
+    Quarterly codes: H=Mar, M=Jun, U=Sep, Z=Dec."""
+    now = datetime.now(timezone.utc)
+    yr  = str(now.year)[-1]
+    for q_month, q_code in [(3, 'H'), (6, 'M'), (9, 'U'), (12, 'Z')]:
+        if now.month < q_month or (now.month == q_month and now.day < 15):
+            return f'{q_code}{yr}'
+    return f'H{str(now.year + 1)[-1]}'
+
+
+def _tradovate_symbol(apex_sym: str) -> str:
+    """Map APEX symbol to current Tradovate front-month micro contract."""
+    base = {'MNQ': 'MNQ', 'NQ': 'MNQ', 'ES': 'MES', 'GC': 'MGC'}.get(apex_sym, apex_sym)
+    return base + _front_month_suffix()
+
+
+# Execution log — last 20 APEX signal→order events, shown on Tradovate dashboard tab
+_exec_log: list = []
+_last_heartbeat: str = ''
 
 # ─────────────────────────────────────────────────────────────
 #  TOKEN STORE (module-level, survives across calls)
@@ -292,7 +314,7 @@ def calculate_position_size(
     Returns {contracts, dollar_risk, instrument, point_value}
     """
     pv         = POINT_VALUE.get(symbol, 2.0)
-    instrument = SYMBOL_MAP.get(symbol, symbol)
+    instrument = _tradovate_symbol(symbol)
     stop_pts   = abs(stop_pts)
 
     if stop_pts <= 0 or account_balance <= 0:
@@ -401,7 +423,8 @@ def place_bracket_order(
     if not account_id:
         return {'ok': False, 'error': 'no_account_id'}
 
-    instrument = SYMBOL_MAP.get(symbol, symbol)
+    instrument = _tradovate_symbol(symbol)
+    logger.info(f'Tradovate: executing on {instrument} (front month)')
     action     = 'Buy' if direction == 'long' else 'Sell'
     stop_action  = 'Sell' if direction == 'long' else 'Buy'
 
@@ -486,14 +509,23 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
     if not TRADOVATE_ENABLED:
         return {'ok': False, 'skipped_reason': 'disabled'}
 
+    if not TRADING_ENABLED:
+        return {'ok': False, 'skipped_reason': 'trading_disabled_kill_switch'}
+
     sym       = signal.get('symbol', '')
     direction = signal.get('direction', '')
     entry     = float(signal.get('entry', 0))
     stop      = float(signal.get('stop', 0))
     target    = float(signal.get('target', 0))
+    setup     = signal.get('setup', '')
 
     if not sym or not direction or not entry or not stop:
         return {'ok': False, 'skipped_reason': 'invalid_signal_fields'}
+
+    # LIVE_INSTRUMENTS whitelist — only MNQ executes live; others are paper-only
+    if sym not in LIVE_INSTRUMENTS:
+        logger.info(f'Tradovate: {sym} signal — paper only (not in LIVE_INSTRUMENTS {LIVE_INSTRUMENTS})')
+        return {'ok': False, 'skipped_reason': 'paper_only', 'detail': f'{sym} not in LIVE_INSTRUMENTS'}
 
     # Get live account balance
     acct = get_account()
@@ -522,12 +554,25 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
         target=target,
     )
 
+    global _last_heartbeat
+    _last_heartbeat = datetime.now(timezone.utc).strftime('%H:%M UTC')
+    ts_str = datetime.now(timezone.utc).strftime('%H:%M UTC')
+
     if result['ok']:
+        slippage = round(abs(result['fill_price'] - entry), 2)
         logger.info(
             f'Signal executed: {sym} {direction.upper()} {sizing["contracts"]} '
             f'{sizing["instrument"]} @ {result["fill_price"]:.2f} '
-            f'risk=${sizing["dollar_risk"]:.0f} orderId={result["order_id"]}'
+            f'slippage={slippage:.2f}pts risk=${sizing["dollar_risk"]:.0f} orderId={result["order_id"]}'
         )
+        _exec_log.append({
+            'time': ts_str, 'symbol': sym, 'setup': setup, 'direction': direction,
+            'instrument': sizing['instrument'], 'contracts': sizing['contracts'],
+            'fill_price': result['fill_price'], 'entry': entry,
+            'slippage_pts': slippage, 'order_id': result['order_id'], 'ok': True, 'error': None,
+        })
+        if len(_exec_log) > 20:
+            _exec_log.pop(0)
         return {
             'ok':          True,
             'contracts':   sizing['contracts'],
@@ -537,8 +582,17 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
             'order_id':    result['order_id'],
         }
     else:
-        logger.error(f'execute_apex_signal: order failed — {result.get("error")}')
-        return {'ok': False, 'skipped_reason': f'order_failed: {result.get("error")}'}
+        err = result.get('error', 'unknown')
+        logger.error(f'execute_apex_signal: order failed — {err}')
+        _exec_log.append({
+            'time': ts_str, 'symbol': sym, 'setup': setup, 'direction': direction,
+            'instrument': sizing.get('instrument', ''), 'contracts': 0,
+            'fill_price': None, 'entry': entry,
+            'slippage_pts': None, 'order_id': None, 'ok': False, 'error': str(err),
+        })
+        if len(_exec_log) > 20:
+            _exec_log.pop(0)
+        return {'ok': False, 'skipped_reason': f'order_failed: {err}'}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -608,17 +662,23 @@ def get_status() -> dict:
     Returns {connected, balance, available, unrealised_pnl, realised_pnl,
              positions, orders_today, account_name, demo, enabled}
     """
+    instrument_now = _tradovate_symbol('MNQ')
     result = {
-        'enabled':     TRADOVATE_ENABLED,
-        'demo':        TRADOVATE_DEMO,
-        'connected':   False,
-        'account_name': TRADOVATE_ACCOUNT or 'Not configured',
-        'balance':     None,
-        'available':   None,
-        'unrealised_pnl': None,
-        'realised_pnl':   None,
-        'positions':   [],
-        'orders_today': [],
+        'enabled':         TRADOVATE_ENABLED,
+        'trading_enabled': TRADING_ENABLED,
+        'demo':            TRADOVATE_DEMO,
+        'connected':       False,
+        'account_name':    TRADOVATE_ACCOUNT or 'Not configured',
+        'live_instruments': LIVE_INSTRUMENTS,
+        'front_month':     instrument_now,
+        'balance':         None,
+        'available':       None,
+        'unrealised_pnl':  None,
+        'realised_pnl':    None,
+        'positions':       [],
+        'orders_today':    [],
+        'exec_log':        list(reversed(_exec_log)),
+        'last_heartbeat':  _last_heartbeat or None,
     }
 
     if not TRADOVATE_ENABLED:
