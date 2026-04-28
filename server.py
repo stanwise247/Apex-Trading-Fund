@@ -62,6 +62,10 @@ SIGNAL_FILTERS = {
     'setup_e_min_atr':               True,   # E: skip if 5min ATR14 < minimum (slow markets)
     'economic_calendar':             True,   # block signals in ±30/60 min window around HIGH-impact events
 }
+
+# Setup-level enable flags — set to False to fully disable a setup's signal path.
+# Checked at the top of each scheduler block before any model/feature work.
+setup_f_enabled: bool = False   # Disabled: dedup/log_trade gap under investigation
 SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
 INSTRUMENTS = {
@@ -1783,83 +1787,96 @@ def background_scheduler():
             logger.warning(f'APEX scanner error: {e}', exc_info=True)
 
         # ── Setup F — Random Forest ML (every 5 min) ─────────────
-        if not hasattr(background_scheduler, '_last_setup_f'):
-            background_scheduler._last_setup_f = 0
-        if now - background_scheduler._last_setup_f >= 300:
-            background_scheduler._last_setup_f = now
-            try:
-                from setup_f_ml import scan_setup_f, format_f_alert, check_model_degradation
-                from live_scanner import send_telegram
-                from trade_tracker import log_trade
-                _now_utc = datetime.now(timezone.utc)
-                if not hasattr(background_scheduler, '_risk_gate'):
-                    from risk_manager import RiskGate
-                    background_scheduler._risk_gate = RiskGate()
-                _rg = background_scheduler._risk_gate
-                _regime  = _rg.regime.get_regime()
-                _dd_mult = _rg.dd.get_risk_multiplier()
-                _risk_footer = (
-                    f'\n⚙️ <i>Regime: {_regime.label} | '
-                    f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
-                )
-                for _sym in ['MNQ', 'ES']:  # GC paper only — no live signals
-                    try:
-                        # ── FILTER 1: max 1 concurrent per instrument ─────
-                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
-                            _f1f_has, _f1f_id = _has_open_trade_on_instrument(_sym)
-                            if _f1f_has:
-                                logger.info(f'Setup F: skipped — {_sym} already has open trade #{_f1f_id}')
+        # setup_f_enabled=False: fully disabled, dedup/log_trade gap under investigation
+        if not setup_f_enabled:
+            logger.debug('Setup F: disabled (setup_f_enabled=False) — skipping')
+        else:
+            if not hasattr(background_scheduler, '_last_setup_f'):
+                background_scheduler._last_setup_f = 0
+            if now - background_scheduler._last_setup_f >= 300:
+                background_scheduler._last_setup_f = now
+                try:
+                    from setup_f_ml import scan_setup_f, format_f_alert, check_model_degradation
+                    from live_scanner import send_telegram
+                    from trade_tracker import log_trade
+                    _now_utc = datetime.now(timezone.utc)
+                    if not hasattr(background_scheduler, '_risk_gate'):
+                        from risk_manager import RiskGate
+                        background_scheduler._risk_gate = RiskGate()
+                    _rg = background_scheduler._risk_gate
+                    _regime  = _rg.regime.get_regime()
+                    _dd_mult = _rg.dd.get_risk_multiplier()
+                    _risk_footer = (
+                        f'\n⚙️ <i>Regime: {_regime.label} | '
+                        f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
+                    )
+                    for _sym in ['MNQ', 'ES']:  # GC paper only — no live signals
+                        try:
+                            # ── FILTER 1: max 1 concurrent per instrument ─────
+                            if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                _f1f_has, _f1f_id = _has_open_trade_on_instrument(_sym)
+                                if _f1f_has:
+                                    logger.info(f'Setup F: skipped — {_sym} already has open trade #{_f1f_id}')
+                                    continue
+                            if check_model_degradation(_sym):
+                                logger.warning(f'Setup F {_sym} model degraded — skipping')
                                 continue
-                        if check_model_degradation(_sym):
-                            logger.warning(f'Setup F {_sym} model degraded — skipping')
-                            continue
-                        if _rg.daily.is_daily_limit_hit():
-                            logger.info(f'Setup F {_sym}: daily limit hit — suppressed')
-                            continue
-                        sig = scan_setup_f(_sym, _now_utc)
-                        if sig:
-                            if _has_opposite_swing_trade(_sym, sig['direction']):
-                                logger.info(f'Setup F {_sym} {sig["direction"]} suppressed — opposite swing trade open')
+                            if _rg.daily.is_daily_limit_hit():
+                                logger.info(f'Setup F {_sym}: daily limit hit — suppressed')
                                 continue
-                            _f_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
-                            _f_risk_usd = round(_f_stop_pts * (2 if _sym == 'MNQ' else 50), 0)
-                            logger.info(
-                                f'Signal: {_sym} {sig["direction"]} {sig["setup"]} | '
-                                f'stop={_f_stop_pts} pts | risk=${_f_risk_usd:.0f} | contracts=1'
-                            )
-                            # Economic calendar gate
-                            if _cal_block(_sym, sig['setup']):
-                                continue
-                            # Unified dedup: mark fired BEFORE telegram
-                            # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
-                            if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
-                                continue
-                            if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
-                                continue
-                            _f_tid = None
-                            try:
-                                logger.info(f'Setup F: logging trade {_sym} {sig["direction"]} entry={sig["entry"]}')
-                                _f_tid = log_trade(sig)
-                                if _f_tid:
-                                    logger.info(f'Setup F: trade logged id={_f_tid} {_sym} {sig["direction"]}')
-                                else:
-                                    logger.error(
-                                        f'CRITICAL: Setup F log_trade() returned None — {_sym} {sig["direction"]} NOT in DB'
+                            sig = scan_setup_f(_sym, _now_utc)
+                            if sig:
+                                if _has_opposite_swing_trade(_sym, sig['direction']):
+                                    logger.info(f'Setup F {_sym} {sig["direction"]} suppressed — opposite swing trade open')
+                                    continue
+                                _f_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
+                                _f_risk_usd = round(_f_stop_pts * (2 if _sym == 'MNQ' else 50), 0)
+                                logger.info(
+                                    f'Signal: {_sym} {sig["direction"]} {sig["setup"]} | '
+                                    f'stop={_f_stop_pts} pts | risk=${_f_risk_usd:.0f} | contracts=1'
+                                )
+                                # Economic calendar gate
+                                if _cal_block(_sym, sig['setup']):
+                                    continue
+                                # Unified dedup: mark fired BEFORE telegram
+                                # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
+                                if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
+                                    continue
+                                if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
+                                    continue
+                                _f_tid = None
+                                try:
+                                    logger.info(
+                                        f'Setup F: attempting log_trade {_sym} {sig["direction"]} '
+                                        f'entry={sig["entry"]} sig_keys={list(sig.keys())}'
                                     )
-                            except Exception as _lte:
-                                logger.error(f'CRITICAL: Setup F log_trade() EXCEPTION — {_sym} {sig["direction"]}: {_lte}', exc_info=True)
-                            try:
-                                msg = format_f_alert(sig) + _risk_footer
-                                send_telegram(msg)
-                            except Exception as _te:
-                                logger.error(f'Setup F: send_telegram failed {_sym}: {_te}')
-                            if _f_tid:
-                                _execute_via_tradovate(sig, _f_tid)
-                            logger.info(f'Setup F signal: {_sym} {sig["direction"].upper()} conf={sig["confidence"]:.0%} regime={_regime.label} db_id={_f_tid}')
-                    except Exception as _fe:
-                        logger.warning(f'Setup F {_sym} error: {_fe}')
-            except Exception as e:
-                logger.warning(f'Setup F scanner error: {e}')
+                                    _f_tid = log_trade(sig)
+                                    if _f_tid:
+                                        logger.info(f'Setup F: trade logged id={_f_tid} {_sym} {sig["direction"]}')
+                                    else:
+                                        logger.error(
+                                            f'CRITICAL: Setup F log_trade() returned None — {_sym} {sig["direction"]} NOT in DB'
+                                        )
+                                except Exception as _lte:
+                                    logger.error(
+                                        f'CRITICAL: Setup F log_trade() EXCEPTION — {_sym} {sig["direction"]}: {_lte}',
+                                        exc_info=True
+                                    )
+                                try:
+                                    msg = format_f_alert(sig) + _risk_footer
+                                    send_telegram(msg)
+                                except Exception as _te:
+                                    logger.error(f'Setup F: send_telegram failed {_sym}: {_te}')
+                                if _f_tid:
+                                    _execute_via_tradovate(sig, _f_tid)
+                                logger.info(
+                                    f'Setup F signal: {_sym} {sig["direction"].upper()} '
+                                    f'conf={sig["confidence"]:.0%} regime={_regime.label} db_id={_f_tid}'
+                                )
+                        except Exception as _fe:
+                            logger.warning(f'Setup F {_sym} error: {_fe}')
+                except Exception as e:
+                    logger.warning(f'Setup F scanner error: {e}')
 
         # ── Setup I — Mathematical Alpha (every 5 min) ─────────────
         if not hasattr(background_scheduler, '_last_setup_i'):
@@ -3069,36 +3086,39 @@ def apex_tradovate_order():
 @app.route('/api/apex/market', methods=['GET'])
 def apex_market():
     """Return current market structure per instrument."""
+    # Uses get_htf_bias (4h EMA20 resample from 5min) — same source as the scan gates
+    # so this endpoint and /api/apex/scan always agree on HTF direction.
+    from fvg_engine import get_htf_bias
     from market_structure import load_bars, find_swings, detect_structure, compute_bias
     from zoneinfo import ZoneInfo
-    import pandas as _pd
     NY = ZoneInfo('America/New_York')
     results = {}
     for sym in ('MNQ', 'ES', 'GC'):
         try:
-            # Load 5min bars and resample to 1hour in-memory — avoids broken HTF DB rows on PostgreSQL
+            # 4h EMA20 bias — identical calculation to the scan's Gate 1 HTF check
+            bias = get_htf_bias(sym)
+
+            # Load 5min bars → resample to 1h for price / structure display only
             df_5m = load_bars(sym, '5min', limit=3000)
-            df = df_5m[['open','high','low','close','volume']].resample('1h').agg({
+            df_1h = df_5m[['open','high','low','close','volume']].resample('1h').agg({
                 'open': 'first', 'high': 'max', 'low': 'min',
                 'close': 'last', 'volume': 'sum',
             }).dropna()
-            if len(df) < 3:
-                raise ValueError(f'Insufficient 1h bars after resample ({len(df)})')
-            sh, sl = find_swings(df, lookback=5)
-            events, _ = detect_structure(df, sh, sl)
-            bias, strength = compute_bias(events)
-            last = df.iloc[-1]
-            prev = df.iloc[-2]
+            if len(df_1h) < 3:
+                raise ValueError(f'Insufficient 1h bars after resample ({len(df_1h)})')
+            sh, sl = find_swings(df_1h, lookback=5)
+            events, _ = detect_structure(df_1h, sh, sl)
+            last = df_1h.iloc[-1]
+            prev = df_1h.iloc[-2]
             chg  = round(float(last['close']) - float(prev['close']), 2)
             pct  = round(chg / float(prev['close']) * 100, 2)
-            last_bar_time = df.index[-1].astimezone(NY).strftime('%H:%M ET')
+            last_bar_time = df_1h.index[-1].astimezone(NY).strftime('%H:%M ET')
             results[sym] = {
-                'bias':      bias,
-                'strength':  strength,
-                'close':     round(float(last['close']), 2),
-                'change':    chg,
-                'pct':       pct,
-                'last_bar':  last_bar_time,
+                'bias':       bias,        # 4h EMA20 — matches scan gates
+                'close':      round(float(last['close']), 2),
+                'change':     chg,
+                'pct':        pct,
+                'last_bar':   last_bar_time,
                 'last_event': str(events[-1]) if events else None,
             }
         except Exception as e:

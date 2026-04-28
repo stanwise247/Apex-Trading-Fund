@@ -572,25 +572,34 @@ def load_or_train_model_i(symbol: str):
 
     def _load_pkl(path):
         if not os.path.exists(path):
+            logger.warning(f'Setup I model not found: {path} — will trigger training')
             return None
         mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
         if (now - mtime).days >= 30:
+            logger.warning(f'Setup I model stale (>{(now-mtime).days}d): {path} — will retrain')
             return None
         try:
             with open(path, 'rb') as fh:
                 d = pickle.load(fh)
             if d.get('n_features') != len(FEATURE_NAMES_I):
-                raise ValueError('feature count mismatch')
+                raise ValueError(
+                    f'feature count mismatch: pkl has {d.get("n_features")}, '
+                    f'expected {len(FEATURE_NAMES_I)}'
+                )
             return d
         except Exception as e:
-            logger.warning(f'Failed to load {path}: {e}')
+            logger.error(f'Setup I failed to load {path}: {e}')
             return None
 
     short_d = _load_pkl(f'apex_xi_{symbol}_short.pkl')
     long_d  = _load_pkl(f'apex_xi_{symbol}_long.pkl')
 
     if short_d is None and long_d is None:
-        train_model_i(symbol)
+        logger.warning(f'Setup I {symbol}: no models loaded — triggering train_model_i()')
+        try:
+            train_model_i(symbol)
+        except Exception as _train_err:
+            logger.error(f'Setup I {symbol}: train_model_i() failed: {_train_err}', exc_info=True)
         short_d = _load_pkl(f'apex_xi_{symbol}_short.pkl')
         long_d  = _load_pkl(f'apex_xi_{symbol}_long.pkl')
 
@@ -601,10 +610,12 @@ def load_or_train_model_i(symbol: str):
     scaler    = ref['scaler'] if ref else None
 
     if xgb_short is None:
+        logger.error(f'Setup I {symbol}: xgb_short model unavailable after load/train')
         _i_disabled_short.add(symbol)
     else:
         _i_disabled_short.discard(symbol)
     if xgb_long is None:
+        logger.error(f'Setup I {symbol}: xgb_long model unavailable after load/train')
         _i_disabled_long.add(symbol)
     else:
         _i_disabled_long.discard(symbol)
@@ -845,12 +856,24 @@ def get_setup_i_state(symbol: str) -> dict:
             'lr_prob':        None,
         }
 
-        if (xgb_short or xgb_long) and scaler is not None:
+        if not (xgb_short or xgb_long):
+            logger.error(f'Setup I {symbol}: both XGB models are None — probabilities unavailable')
+        elif scaler is None:
+            logger.error(f'Setup I {symbol}: scaler is None — cannot compute probabilities')
+        else:
             df_5m = _load_5min(symbol, limit=200)
-            if not df_5m.empty:
+            if df_5m.empty:
+                logger.error(f'Setup I {symbol}: _load_5min returned empty DataFrame — probabilities unavailable')
+            else:
                 X_all  = calculate_features_i(df_5m)
                 X_last = X_all[-1:]
-                if not np.isnan(X_last).any():
+                nan_cols = int(np.isnan(X_last).sum())
+                if nan_cols > 0:
+                    logger.error(
+                        f'Setup I {symbol}: {nan_cols}/{X_last.shape[1]} feature(s) are NaN '
+                        f'in last row — probabilities unavailable'
+                    )
+                else:
                     X_s = scaler.transform(X_last)
                     result['lr_prob'] = round(float(lr_clf.predict_proba(X_s)[0, 1]), 4)
                     if xgb_short:
