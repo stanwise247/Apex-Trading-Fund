@@ -271,7 +271,7 @@ class CalendarFilter:
 #  SINGLETON
 # ─────────────────────────────────────────────────────────────
 
-_filter_instance: CalendarFilter | None = None
+_filter_instance = None  # type: CalendarFilter
 
 
 def get_filter() -> CalendarFilter:
