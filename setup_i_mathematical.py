@@ -658,12 +658,11 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
         logger.debug(f'Setup I {symbol}: both directions disabled')
         return None
 
-    # ── Component 1: Regime Transition ────────────────────────
-    transition, _ = detect_regime_transition(symbol)
-    if not transition:
-        return None
-
-    logger.info(f'Setup I {symbol}: regime transition detected — running ML gate')
+    # ── Component 1: ML dual confirmation is primary gate ─────
+    # Transition gate removed — XGB model incorporates regime features (hurst, vol_ratio,
+    # autocorr) so hard-gating on regime double-counts it and blocks valid CHOPPY-market alpha.
+    # Risk control: XGB > 0.62 AND LR confirmation + HTF bias gate below.
+    logger.debug(f'Setup I {symbol}: transition gate removed — ML dual confirmation is primary gate')
 
     xgb_short, xgb_long, lr_clf, scaler = load_or_train_model_i(symbol)
     if xgb_short is None and xgb_long is None:

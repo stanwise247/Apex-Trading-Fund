@@ -130,7 +130,7 @@ def gate1_session(dt: datetime) -> EGateResult:
 
 def gate2_htf_bias(symbol: str, direction: str) -> tuple:
     """Returns (EGateResult, bias_str). Resamples 5min bars in-memory — no broken HTF DB rows."""
-    df_5m = _load_bars(symbol, '5min', limit=1500)
+    df_5m = _load_bars(symbol, '5min', limit=5000)  # 5000 bars = ~104 4h bars; needed for EMA20 convergence
     if df_5m.empty:
         return (EGateResult(False, 2, 'HTF Bias', 'No 5min data'), 'neutral')
     df_4h = df_5m['close'].resample('4h').last().dropna().to_frame('close')
