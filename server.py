@@ -3528,6 +3528,44 @@ def apex_regime():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/test_log', methods=['POST'])
+def apex_test_log():
+    """
+    Test endpoint: call log_trade() directly with provided signal dict.
+    Lets us verify DB writes work independently of the signal pipeline.
+    Immediately closes the trade as 'test' after verifying the insert.
+    """
+    try:
+        from trade_tracker import log_trade
+        import db as _tl_db
+        data = request.get_json(force=True) or {}
+        sig = {
+            'symbol':    data.get('symbol', 'MNQ'),
+            'direction': data.get('direction', 'short'),
+            'setup':     data.get('setup', 'I_mathematical_alpha'),
+            'mode':      data.get('mode', 'intraday'),
+            'entry':     float(data.get('entry', 0)),
+            'stop':      float(data.get('stop', 0)),
+            'target':    float(data.get('target', 0)),
+            'rr':        float(data.get('rr', 1.5)),
+            'session':   data.get('session', 'NY Primary'),
+            'quality':   data.get('quality', 'test'),
+        }
+        trade_id = log_trade(sig)
+        # Mark it closed immediately so it doesn't pollute open trades
+        conn = _tl_db.connect()
+        conn.execute(
+            "UPDATE apex_trades SET status='closed', exit_reason='test_endpoint', exit_time=? WHERE id=?",
+            (datetime.now(timezone.utc).isoformat(), trade_id)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True, 'trade_id': trade_id, 'signal': sig})
+    except Exception as e:
+        logger.error(f'test_log endpoint failed: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e), 'type': type(e).__name__}), 500
+
+
 @app.route('/api/apex/telegram_test', methods=['POST'])
 def apex_telegram_test():
     """Send a test Telegram message."""

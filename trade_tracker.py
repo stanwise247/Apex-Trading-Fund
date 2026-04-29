@@ -76,36 +76,54 @@ def init_trades_table():
 def log_trade(signal: dict) -> int:
     """
     Log a new trade when a signal fires.
-    Returns the trade ID.
+    Returns the trade ID (always an int — raises RuntimeError if INSERT fails).
     signal dict keys: symbol, direction, setup, mode, entry,
                       stop, target, rr, session, quality
     """
+    sym = signal.get('symbol')
+    dirn = signal.get('direction')
+    setup = signal.get('setup')
+    entry = signal.get('entry')
+    logger.info(f'log_trade: {sym} {dirn} {setup} entry={entry}')
+
     init_trades_table()
     conn = _db.connect()
     now  = datetime.now(timezone.utc).isoformat()
 
-    trade_id = _db.insert_returning_id(conn, '''
-        INSERT INTO apex_trades
-        (symbol, direction, setup, mode, entry_price, stop, target,
-         rr_planned, session, quality, entry_time, status, broker_order_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
-    ''', (
-        signal.get('symbol'),
-        signal.get('direction'),
-        signal.get('setup'),
-        signal.get('mode', 'swing'),
-        signal.get('entry'),
-        signal.get('stop'),
-        signal.get('target'),
-        signal.get('rr'),
-        signal.get('session', ''),
-        signal.get('quality', ''),
-        now,
-        signal.get('broker_order_id'),
-    ))
-    conn.commit()
+    try:
+        trade_id = _db.insert_returning_id(conn, '''
+            INSERT INTO apex_trades
+            (symbol, direction, setup, mode, entry_price, stop, target,
+             rr_planned, session, quality, entry_time, status, broker_order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+        ''', (
+            sym,
+            dirn,
+            setup,
+            signal.get('mode', 'swing'),
+            entry,
+            signal.get('stop'),
+            signal.get('target'),
+            signal.get('rr'),
+            signal.get('session', ''),
+            signal.get('quality', ''),
+            now,
+            signal.get('broker_order_id'),
+        ))
+        if not trade_id:
+            raise RuntimeError(
+                f'INSERT returned no id for {sym} {dirn} {setup} entry={entry} — row may not have committed'
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        raise
     conn.close()
-    logger.info(f'Trade logged: #{trade_id} {signal.get("symbol")} {signal.get("direction").upper()}')
+    logger.info(f'Trade logged: #{trade_id} {sym} {dirn.upper() if dirn else "?"}')
     return trade_id
 
 
