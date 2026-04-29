@@ -145,15 +145,19 @@ def detect_fvgs(df, atr, min_atr_mult=0.3, lookback=96):
 
 
 def get_htf_bias(symbol):
-    """Get 4hour bias using EMA. Resamples 5min bars in-memory — no broken HTF DB rows."""
+    """Get 4hour bias using EMA20 — identical calculation to setup_engine.gate1_htf_bias().
+    Loads 5000 5min bars (~104 4h bars) so EMA20 is fully converged.
+    Uses adjust=False (recursive EMA) to match setup_engine exactly."""
     try:
-        df_5m = load_bars(symbol, '5min', limit=2000)
+        df_5m = load_bars(symbol, '5min', limit=5000)
         if df_5m.empty or len(df_5m) < 20:
             return 'neutral'
-        df_4h = df_5m['close'].resample('4h').last().dropna().to_frame('close')
-        if len(df_4h) < 20:
+        df_4h = df_5m[['open', 'high', 'low', 'close', 'volume']].resample('4h').agg(
+            {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+        ).dropna()
+        if len(df_4h) < 21:
             return 'neutral'
-        ema        = df_4h['close'].ewm(span=20).mean()
+        ema        = df_4h['close'].ewm(span=20, adjust=False).mean()
         last_close = float(df_4h['close'].iloc[-1])
         last_ema   = float(ema.iloc[-1])
         if last_close > last_ema * 1.001:

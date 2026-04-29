@@ -861,7 +861,7 @@ def get_setup_i_state(symbol: str) -> dict:
         elif scaler is None:
             logger.error(f'Setup I {symbol}: scaler is None — cannot compute probabilities')
         else:
-            df_5m = _load_5min(symbol, limit=200)
+            df_5m = _load_5min(symbol, limit=600)  # 600 bars = ~50 1h bars; needed for htf_momentum (requires >=20 1h bars)
             if df_5m.empty:
                 logger.error(f'Setup I {symbol}: _load_5min returned empty DataFrame — probabilities unavailable')
             else:
