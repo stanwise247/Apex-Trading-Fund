@@ -20,7 +20,7 @@ FVG_PARAMS = {
     'vol_multiplier':     1.0,
     'min_score':          60,   # validated: Score 60 = Sharpe 6.46 OOS
     'session_windows': {
-        'MNQ': [{'start': 14, 'end': 18}],  # was 13-19: block 13:00 (bad first candle) and 18:00 (negative EV)
+        'MNQ': [{'start': 14, 'end': 20}],  # MNQ trades until 20:00 UTC; block 13:00 (bad first candle)
         # ES disabled — last 3 months negative, monitoring
         # GC disabled — failed walk-forward validation
     },

@@ -51,11 +51,11 @@ def _load_htf(symbol: str, tf: str, limit_htf: int) -> pd.DataFrame:
 SESSION_WINDOWS = {
     'MNQ': [
         {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},
-        {'name': 'NY Secondary',    'start': 13, 'end': 19, 'quality': 'secondary'},
+        {'name': 'NY Secondary',    'start': 13, 'end': 20, 'quality': 'secondary'},
     ],
     'NQ': [  # kept for legacy data reference
         {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},
-        {'name': 'NY Secondary',    'start': 13, 'end': 19, 'quality': 'secondary'},
+        {'name': 'NY Secondary',    'start': 13, 'end': 20, 'quality': 'secondary'},
     ],
     'ES': [
         {'name': 'London Primary',  'start':  7, 'end': 11, 'quality': 'primary'},

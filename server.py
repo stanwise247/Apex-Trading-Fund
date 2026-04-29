@@ -1917,19 +1917,26 @@ def background_scheduler():
                                 continue
                             _i_tid = None
                             try:
-                                logger.info(f'Setup I: logging trade {_sym} {sig["direction"]} entry={sig["entry"]}')
+                                logger.info(
+                                    f'Setup I: PRE log_trade {_sym} {sig["direction"]} '
+                                    f'entry={sig.get("entry")} stop={sig.get("stop")} '
+                                    f'target={sig.get("target")} rr={sig.get("rr")} '
+                                    f'session={sig.get("session")} quality={sig.get("quality")} '
+                                    f'setup={sig.get("setup")} keys={list(sig.keys())}'
+                                )
                                 _i_tid = log_trade(sig)
                                 if _i_tid:
                                     logger.info(f'Setup I: trade logged id={_i_tid} {_sym} {sig["direction"]}')
                                 else:
                                     logger.error(
                                         f'CRITICAL: Setup I log_trade() returned None — '
-                                        f'{_sym} {sig["direction"]} NOT in DB'
+                                        f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
                                     )
                             except Exception as _i_lte:
                                 logger.error(
                                     f'CRITICAL: Setup I log_trade() EXCEPTION — '
-                                    f'{_sym} {sig["direction"]}: {_i_lte}', exc_info=True
+                                    f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
+                                    exc_info=True
                                 )
                             try:
                                 msg = format_i_alert(sig) + _i_risk_footer

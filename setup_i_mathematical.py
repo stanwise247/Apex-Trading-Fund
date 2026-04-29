@@ -642,7 +642,8 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
         return None
     if dt.weekday() not in ALLOWED_DAYS:
         return None
-    if not (SESSION_START <= dt.hour < SESSION_END):
+    _sess_end = 20 if symbol == 'MNQ' else SESSION_END
+    if not (SESSION_START <= dt.hour < _sess_end):
         return None
 
     date_str = dt.strftime('%Y-%m-%d')

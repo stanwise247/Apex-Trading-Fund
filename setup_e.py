@@ -47,7 +47,7 @@ ATR_PERIOD    = 14
 STOP_ATR      = 1.50
 TARGET_ATR    = 3.75  # 1.5 stop × 2.5 RR = 3.75 ATR target
 SESSION_START = 13     # UTC inclusive
-SESSION_END   = 19     # UTC exclusive (last entry at 18:xx)
+SESSION_END   = 20     # UTC exclusive — MNQ trades until 20:00 UTC (last entry at 19:xx)
 BIAS_EMA      = 20     # 4hour EMA period
 BIAS_THRESH   = 0.001  # ±0.1% neutral zone
 MIN_GAP_BARS  = 12     # 60 min minimum between trades
