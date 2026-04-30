@@ -497,14 +497,14 @@ def place_bracket_order(
     target: float,
 ) -> dict:
     """
-    Place a bracket order: market entry + stop loss + take profit.
+    Place a market entry order via /order/placeMarket.
+    Stop and target are managed internally by APEX monitor_trades().
 
-    symbol:    APEX symbol (NQ / ES / GC)
+    symbol:    APEX symbol (MNQ / ES / GC)
     direction: 'long' or 'short'
     contracts: number of micro contracts
-    entry:     reference entry price (used for logging)
-    stop:      stop loss price
-    target:    take profit price
+    entry:     reference entry price (used for logging/slippage calc)
+    stop/target: logged but not sent to exchange (APEX manages exits)
 
     Returns {ok, order_id, fill_price, contracts, instrument}
     """
@@ -520,11 +520,8 @@ def place_bracket_order(
         return {'ok': False, 'error': 'no_account_id'}
 
     instrument = _tradovate_symbol(symbol)
-    logger.info(f'Tradovate: executing on {instrument} (front month)')
     action     = 'Buy' if direction == 'long' else 'Sell'
-    stop_action  = 'Sell' if direction == 'long' else 'Buy'
 
-    # Tradovate bracket order payload
     payload = {
         'accountSpec': TRADOVATE_ACCOUNT,
         'accountId':   account_id,
@@ -533,35 +530,37 @@ def place_bracket_order(
         'orderQty':    contracts,
         'orderType':   'Market',
         'isAutomated': True,
-        'bracket1': {
-            'action':    stop_action,
-            'orderType': 'Stop',
-            'stopPrice': round(stop, 2),
-        },
-        'bracket2': {
-            'action':    stop_action,
-            'orderType': 'Limit',
-            'price':     round(target, 2),
-        },
     }
+
+    logger.info(
+        f'Tradovate: placing market order {contracts}x {instrument} '
+        f'{action} (entry≈{entry:.2f} SL={stop:.2f} TP={target:.2f})'
+    )
 
     try:
         resp = requests.post(
-            f'{BASE_URL}/order/placeOCO',
+            f'{BASE_URL}/order/placeMarket',
             json=payload,
             headers=headers,
             timeout=15,
         )
-        resp.raise_for_status()
-        data = resp.json()
+        if not resp.ok:
+            err_body = resp.text
+            try:
+                err_body = resp.json()
+            except Exception:
+                pass
+            logger.error(f'placeMarket {resp.status_code}: {err_body}')
+            return {'ok': False, 'error': f'HTTP {resp.status_code}: {err_body}'}
 
-        order_id   = data.get('orderId') or data.get('p-ticket') or str(data)
-        fill_price = float(data.get('fillPrice', entry))
+        data       = resp.json()
+        order_id   = (data.get('orderId') or data.get('orderStatus', {}).get('orderId')
+                      or data.get('p-ticket') or str(data))
+        fill_price = float(data.get('fillPrice') or data.get('price') or entry)
 
         logger.info(
-            f'Bracket order placed: {contracts} {instrument} '
-            f'{direction.upper()} @ {fill_price:.2f} '
-            f'SL={stop:.2f} TP={target:.2f} orderId={order_id}'
+            f'Market order placed: {contracts} {instrument} {action} '
+            f'@ {fill_price:.2f} orderId={order_id}'
         )
 
         return {
@@ -572,15 +571,8 @@ def place_bracket_order(
             'instrument': instrument,
         }
 
-    except requests.exceptions.HTTPError as e:
-        try:
-            err_body = e.response.json()
-        except Exception:
-            err_body = str(e)
-        logger.error(f'place_bracket_order HTTP error: {err_body}')
-        return {'ok': False, 'error': str(err_body)}
-    except Exception as e:
-        logger.error(f'place_bracket_order error: {e}')
+    except requests.exceptions.RequestException as e:
+        logger.error(f'placeMarket request failed: {e}')
         return {'ok': False, 'error': str(e)}
 
 
@@ -731,7 +723,7 @@ def sync_positions() -> list:
         return events
 
     for trade_id, sym, direction, setup, entry, stop, target in trades:
-        instrument = SYMBOL_MAP.get(sym, sym)
+        instrument = _tradovate_symbol(sym)
         # Check if Tradovate has a matching open position
         tv_match = next((p for p in tv_positions
                          if p['symbol'] == instrument), None)
