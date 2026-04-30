@@ -14,6 +14,12 @@ ISOLATION RULE:
   Do NOT use .asi8 anywhere.
 
 MODEL FILES: apex_xi_MNQ_short.pkl / apex_xi_MNQ_long.pkl (direction-specific)
+
+LOG_TRADE CONTRACT (enforced in server.py):
+  Required signal keys: symbol, direction, setup, mode, entry, stop, target, rr, session, quality
+  Order:  log_trade(sig) FIRST — then send_telegram()
+  On failure: raises RuntimeError (trade_tracker.py) → caught as CRITICAL with exc_info=True
+  setup name: 'I_mathematical_alpha'
 """
 
 import os

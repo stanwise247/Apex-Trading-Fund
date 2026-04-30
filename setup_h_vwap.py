@@ -5,6 +5,12 @@ ES primary (live signals) | NQ secondary (paper tracking only)
 
 Edge: OOS Sharpe 6.03 on ES | WR 76.5% | n=268 trades (5.5-month OOS)
 Signal: price reverts from 2σ session VWAP band with 1h SMA20 HTF confirmation bar
+
+LOG_TRADE CONTRACT (enforced in server.py):
+  Required signal keys: symbol, direction, setup, mode, entry, stop, target, rr, session, quality
+  Order:  log_trade(sig) FIRST — then send_telegram()
+  On failure: raises RuntimeError (trade_tracker.py) → caught as CRITICAL with exc_info=True
+  setup name: 'H_vwap_rev'
 """
 
 import logging

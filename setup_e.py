@@ -1,6 +1,12 @@
 """
 APEX Setup E — EMA50 Pullback
 ==============================
+LOG_TRADE CONTRACT (enforced in server.py):
+  Required signal keys: symbol, direction, setup, mode, entry, stop, target, rr, session, quality
+  Order:  log_trade(sig) FIRST — then send_telegram()
+  On failure: raises RuntimeError (trade_tracker.py) → caught as CRITICAL with exc_info=True
+  setup name: 'E_ema50_pullback'
+-------------------------------
 5min bar retraces to EMA50 in a 4-hour trend, then closes back in
 the trend direction — a momentum resumption entry.
 

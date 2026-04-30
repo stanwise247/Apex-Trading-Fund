@@ -1656,13 +1656,20 @@ def background_scheduler():
                             f'Signal: MNQ {sig["direction"]} {sig.get("setup","FVG")} | '
                             f'stop={_fvg_stop_pts} pts | risk=${_fvg_risk_usd:.0f} | contracts=1'
                         )
-                        msg = format_fvg_alert(sig) + _risk_footer
-                        send_telegram(msg)
-                        _fvg_tid = log_trade(sig)
-                        if not _fvg_tid:
-                            logger.error(f'CRITICAL: log_trade() returned None for FVG MNQ {sig["direction"]} — trade NOT logged')
-                        else:
-                            logger.info(f'Trade logged: id={_fvg_tid} MNQ {sig["direction"]} {sig.get("setup","FVG")}')
+                        _fvg_tid = None
+                        try:
+                            _fvg_tid = log_trade(sig)
+                            if _fvg_tid:
+                                logger.info(f'Trade logged: id={_fvg_tid} MNQ {sig["direction"]} {sig.get("setup","FVG")}')
+                            else:
+                                logger.error(f'CRITICAL: FVG log_trade() returned None — MNQ {sig["direction"]} NOT in DB')
+                        except Exception as _fvg_lte:
+                            logger.error(f'CRITICAL: FVG log_trade() EXCEPTION — MNQ {sig["direction"]}: {_fvg_lte}', exc_info=True)
+                        try:
+                            msg = format_fvg_alert(sig) + _risk_footer
+                            send_telegram(msg)
+                        except Exception as _fvg_te:
+                            logger.error(f'FVG send_telegram failed MNQ {sig["direction"]}: {_fvg_te}')
                         _execute_via_tradovate(sig, _fvg_tid)
                         logger.info(
                             f'FVG signal: MNQ {sig["direction"].upper()} entry={sig["entry"]} '
@@ -1758,9 +1765,6 @@ def background_scheduler():
                             f'Signal: {_sym} {_dirn} {_setup} | '
                             f'stop={_apex_stop_pts} pts | risk=${_apex_risk_usd:.0f} | contracts=1'
                         )
-                    msg = (format_alert_e(result) if _setup == 'E_ema50_pullback'
-                           else format_alert(result))
-                    send_telegram(msg + _risk_footer)
                     tracker.mark_sent(result)
                     _sig_dict = {
                         'symbol':    _sym,
@@ -1774,11 +1778,21 @@ def background_scheduler():
                         'session':   getattr(result, 'session', 'NY Primary'),
                         'quality':   getattr(result, 'quality', 'primary'),
                     }
-                    _apex_tid = log_trade(_sig_dict)
-                    if not _apex_tid:
-                        logger.error(f'CRITICAL: log_trade() returned None for {_sym} {_dirn} {_setup} — trade NOT logged')
-                    else:
-                        logger.info(f'Trade logged: id={_apex_tid} {_sym} {_dirn} {_setup}')
+                    _apex_tid = None
+                    try:
+                        _apex_tid = log_trade(_sig_dict)
+                        if _apex_tid:
+                            logger.info(f'Trade logged: id={_apex_tid} {_sym} {_dirn} {_setup}')
+                        else:
+                            logger.error(f'CRITICAL: log_trade() returned None — {_sym} {_dirn} {_setup} NOT in DB')
+                    except Exception as _apex_lte:
+                        logger.error(f'CRITICAL: log_trade() EXCEPTION — {_sym} {_dirn} {_setup}: {_apex_lte}', exc_info=True)
+                    try:
+                        msg = (format_alert_e(result) if _setup == 'E_ema50_pullback'
+                               else format_alert(result))
+                        send_telegram(msg + _risk_footer)
+                    except Exception as _apex_te:
+                        logger.error(f'{_setup} send_telegram failed {_sym}: {_apex_te}')
                     _execute_via_tradovate(_sig_dict, _apex_tid)
                     logger.info(f'APEX signal: {_sym} {_dirn} {_setup} regime={_regime.label} dd_mult={_dd_mult:.2f}×')
                 if not signals:
@@ -2062,20 +2076,23 @@ def background_scheduler():
                                 if not _cal_block('ES', sig_es['setup']):
                                     if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
                                         if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
-                                            msg = format_h_alert(sig_es) + _risk_footer
-                                            send_telegram(msg)
+                                            _h_tid = None
                                             try:
                                                 _h_tid = log_trade(sig_es)
-                                                if not _h_tid:
-                                                    logger.error('CRITICAL: log_trade() returned None for Setup H ES — trade NOT logged')
-                                                else:
+                                                if _h_tid:
                                                     logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
+                                                else:
+                                                    logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
                                             except Exception as _lte:
-                                                logger.error(f'CRITICAL: log_trade() FAILED for Setup H ES: {_lte}', exc_info=True)
-                                                _h_tid = None
+                                                logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
+                                            try:
+                                                msg = format_h_alert(sig_es) + _risk_footer
+                                                send_telegram(msg)
+                                            except Exception as _h_te:
+                                                logger.error(f'Setup H send_telegram failed ES: {_h_te}')
                                             if _h_tid:
                                                 _execute_via_tradovate(sig_es, _h_tid)
-                                            logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired')
+                                            logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
                             else:
                                 logger.info('Setup H ES suppressed — opposite swing trade open')
                     else:

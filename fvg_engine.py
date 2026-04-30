@@ -3,6 +3,12 @@ APEX FVG Engine — fvg_engine.py
 ================================
 Fair Value Gap detection and scanning.
 Setup D — 15min FVG + 4hour bias + 1min entry trigger.
+
+LOG_TRADE CONTRACT (enforced in server.py):
+  Required signal keys: symbol, direction, setup, mode, entry, stop, target, rr, session, quality
+  Order:  log_trade(sig) FIRST — then send_telegram()
+  On failure: raises RuntimeError (trade_tracker.py) → caught as CRITICAL with exc_info=True
+  setup names: 'D_fvg_fill', 'FVG_bullish', 'FVG_bearish'
 """
 
 import logging

@@ -13,6 +13,12 @@ Gates:
 
 Run directly to verify on real data:
   python3 setup_engine.py
+
+LOG_TRADE CONTRACT (enforced in server.py):
+  Required signal keys: symbol, direction, setup, mode, entry, stop, target, rr, session, quality
+  Order:  log_trade(sig) FIRST — then send_telegram()
+  On failure: raises RuntimeError (trade_tracker.py) → caught as CRITICAL with exc_info=True
+  setup names: 'A_sweep_ob', 'B_choch_breaker', 'C_bos_ob'
 """
 
 import pandas as pd
