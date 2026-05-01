@@ -1455,11 +1455,11 @@ def background_scheduler():
             background_scheduler._last_feed = 0
             background_scheduler._last_htf  = 0
 
-        # Live bar feed — start at session open, stop at session close
-        # MNQ session: 13:00–20:00 UTC. Feed runs 13:00–21:00 UTC (1h buffer).
+        # Live bar feed — covers both London (07:00–11:00) and NY (13:00–20:00) sessions.
+        # Feed runs 07:00–21:00 UTC (1h buffer after NY close).
         # Databento Live streams ohlcv-1m bars as they close.
         _now_utc_hr = datetime.now(timezone.utc).hour
-        _in_session = 13 <= _now_utc_hr < 21
+        _in_session = 7 <= _now_utc_hr < 21
         try:
             from data_feed import start_live_feed, stop_live_feed, is_live_feed_running, \
                                   get_live_feed_stats, restart_live_feed
