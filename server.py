@@ -1456,10 +1456,10 @@ def background_scheduler():
             background_scheduler._last_htf  = 0
 
         # Live bar feed — start at session open, stop at session close
-        # During session (13:00-19:00 UTC), Databento Live streams ohlcv-1m
-        # bars as they close (zero archive lag vs 15-20 min for historical API).
+        # MNQ session: 13:00–20:00 UTC. Feed runs 13:00–21:00 UTC (1h buffer).
+        # Databento Live streams ohlcv-1m bars as they close.
         _now_utc_hr = datetime.now(timezone.utc).hour
-        _in_session = 13 <= _now_utc_hr < 19
+        _in_session = 13 <= _now_utc_hr < 21
         try:
             from data_feed import start_live_feed, stop_live_feed, is_live_feed_running, \
                                   get_live_feed_stats, restart_live_feed
