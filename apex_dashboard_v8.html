@@ -120,25 +120,16 @@ tr:hover td{background:var(--bg2)}
 .prox-name{font-size:13px;font-weight:600;color:var(--text);letter-spacing:-0.01em;line-height:1.3}
 .prox-sub{font-size:10px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:0.04em}
 .prox-status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:3px}
-.prox-bars{display:flex;flex-direction:column;gap:9px;flex:1;margin-bottom:10px}
-.prox-inst-row{display:flex;flex-direction:column;gap:3px}
-.prox-inst-top{display:flex;justify-content:space-between;align-items:center}
-.prox-inst-label{font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em}
-.prox-inst-state{font-size:10px;color:var(--text2)}
-.prox-track{height:4px;background:var(--border);border-radius:2px;overflow:hidden;position:relative}
-.prox-fill{height:100%;border-radius:2px;transition:width 0.5s ease}
-.prox-fill-grey{background:#9ca3af}
-.prox-fill-amber{background:#f59e0b}
-.prox-fill-green{background:#22c55e}
 .prox-footer{font-size:10px;color:var(--text2);border-top:0.5px solid var(--border);padding-top:8px;margin-top:auto}
-/* Setup F special */
-.prox-f-inner{display:flex;gap:18px;align-items:flex-start}
-.prox-ring-wrap{display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0}
+/* Unified ring layout */
+.ring-row{display:flex;justify-content:space-around;flex:1;margin-bottom:8px;align-items:flex-start}
+.ring-item{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:60px}
+.ring-inst-lbl{font-size:9px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;text-align:center}
+.ring-state-lbl{font-size:9px;color:var(--text2);text-align:center;max-width:72px;line-height:1.3}
+.ring-next{font-size:9px;color:var(--text2);margin-bottom:6px;text-align:center;min-height:12px;padding:0 4px;line-height:1.3}
 .prox-ring{position:relative;width:56px;height:56px}
 .prox-ring svg{position:absolute;top:0;left:0;transform:rotate(-90deg)}
-.prox-ring-val{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:11px;font-weight:700;color:var(--text)}
-.prox-ring-lbl{font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:0.05em}
-.prox-f-bars{flex:1;display:flex;flex-direction:column;gap:9px}
+.prox-ring-val{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:10px;font-weight:700;color:var(--text);white-space:nowrap}
 @media(max-width:768px){.prox-grid{grid-template-columns:1fr 1fr}.prox-card-f{grid-column:span 2}}
 /* ── Diagnostics ── */
 .diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:20px}
@@ -978,7 +969,7 @@ function rebuildCharts() {
 }
 
 // ──────────────────────────────────────────────────────────────
-//  SETUPS SCANNER — CCTV PROXIMITY VIEW
+//  SETUPS SCANNER — UNIFIED READINESS SCORE VIEW
 // ──────────────────────────────────────────────────────────────
 const BADGE_STYLE = {
   A:{bg:'#E6F1FB',tx:'#0C447C'},
@@ -995,86 +986,55 @@ const SETUP_INFO = {
   B:{name:'CHoCH + Breaker',  sub:'RR 4.0 · Primary session only'},
   C:{name:'BOS + OB',         sub:'RR 4.0 · Primary session only'},
   D:{name:'FVG Fill',         sub:'RR 2.5 · 13–19 UTC · MNQ/ES'},
-  E:{name:'EMA50 Pullback',   sub:'RR 2.5 · 13–18 UTC · MNQ'},
-  F:{name:'Random Forest ML', sub:'RR 2.5 · P>58% Long / P<42% Short'},
+  E:{name:'EMA50 Pullback',   sub:'RR 2.5 · 13–19:30 UTC · MNQ'},
+  F:{name:'Random Forest ML', sub:'RR 2.5 · P>65% Long / P<35% Short'},
   H:{name:'VWAP 2σ Reversal', sub:'RR ≥2.0 · 13–19 UTC · ES Live'},
-  I:{name:'Mathematical Alpha',sub:'RR 2.5 · Regime Transition · MNQ/ES'},
+  I:{name:'Mathematical Alpha',sub:'RR 2.5 · XGB>58% · MNQ/ES'},
 };
 
-// ── Proximity helpers ─────────────────────────────────────────
-function gateProximity(result, maxGates) {
-  if (!result) return 20;
-  if (result.valid) return 100;
-  const fa = result.failed_at;
-  if (fa === 'Session' || fa === 'TimeFilter') return 0;
-  const passed = (result.gates || []).filter(g => g.passed).length;
-  if (passed === 0) return fa ? 5 : 20;
-  return Math.min(95, Math.round(passed / maxGates * 100));
+// ── Ring color: 4-tier ────────────────────────────────────────
+function ringColor(pct) {
+  if (pct >= 100) return '#22c55e'; // green
+  if (pct >= 70)  return '#f97316'; // orange
+  if (pct >= 40)  return '#f59e0b'; // amber
+  return '#9ca3af';                  // grey
 }
 
-function gateState(result, letter) {
-  if (!result) return 'Scanning';
-  if (result.valid) return 'Signal ' + (result.direction === 'long' ? 'Long' : 'Short');
-  const fa = result.failed_at;
-  if (!fa) return 'Scanning';
-  if (fa === 'Session' || fa === 'TimeFilter') return 'Off-session';
-  if (fa === 'HTF Bias') return 'Bias blocked';
-  if (fa === 'Structure')    return 'No structure';
-  if (fa === 'Confirmation') return 'Awaiting confirm';
-  if (fa === 'Entry Trigger') return 'Awaiting entry';
-  if (fa === 'POI') {
-    if (letter === 'A') return 'No sweep';
-    if (letter === 'B') return 'No CHoCH';
-    if (letter === 'C') return 'No BOS+OB';
-    return 'No pattern';
-  }
-  return fa;
+// ── SVG ring ─────────────────────────────────────────────────
+function ringProgress(pct, color) {
+  const r = 22, cx = 28, cy = 28;
+  const circ = 2 * Math.PI * r;
+  const dash = Math.max(0, Math.min(pct, 100)) / 100 * circ;
+  const gap  = circ - dash;
+  return `<svg width="56" height="56" viewBox="0 0 56 56">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="5"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="5"
+      stroke-dasharray="${dash.toFixed(1)} ${gap.toFixed(1)}" stroke-linecap="round"/>
+  </svg>`;
 }
 
-function bestResult(rows) {
-  // Return the result with the most gates passed (prefer valid)
-  if (!rows.length) return null;
-  return rows.reduce((best, r) => {
-    if (r.valid) return r;
-    const bp = (best.gates||[]).filter(g=>g.passed).length;
-    const rp = (r.gates||[]).filter(g=>g.passed).length;
-    return rp > bp ? r : best;
-  });
-}
-
-function fillClass(pct) {
-  if (pct >= 80) return 'prox-fill-green';
-  if (pct >= 40) return 'prox-fill-amber';
-  return 'prox-fill-grey';
-}
-
-function dotClass(symBars) {
-  const pcts = Object.values(symBars);
-  if (pcts.some(p => p >= 80)) return 'dot-green';
-  if (pcts.some(p => p >= 40)) return 'dot-amber';
-  return 'dot-grey';
-}
-
-function proxBar(label, pct, state) {
-  const fc = fillClass(pct);
-  return `<div class="prox-inst-row">
-    <div class="prox-inst-top">
-      <span class="prox-inst-label">${label}</span>
-      <span class="prox-inst-state">${state}</span>
-    </div>
-    <div class="prox-track"><div class="prox-fill ${fc}" style="width:${pct}%"></div></div>
+// ── Single instrument ring ────────────────────────────────────
+function instRing(sym, score, centerLabel, stateLabel, {disabled=false, dimmed=false}={}) {
+  const color = (disabled || dimmed) ? '#9ca3af' : ringColor(score);
+  const ring  = ringProgress(disabled ? 0 : score, color);
+  const opacity = (dimmed || disabled) ? 'opacity:0.45' : '';
+  return `<div class="ring-item" style="${opacity}">
+    <div class="prox-ring">${ring}<div class="prox-ring-val">${centerLabel}</div></div>
+    <div class="ring-inst-lbl">${sym}</div>
+    <div class="ring-state-lbl">${stateLabel}</div>
   </div>`;
 }
 
-function proxCard(letter, barsHtml, footerText, extraClass) {
-  const b = BADGE_STYLE[letter];
+// ── Unified card ──────────────────────────────────────────────
+function unifiedCard(letter, ringsHtml, nextGate, footerText, extraClass='') {
+  const b    = BADGE_STYLE[letter];
   const info = SETUP_INFO[letter];
-  // Determine dot from bar html text — parse pct values
-  const pcts = [...barsHtml.matchAll(/width:(\d+)%/g)].map(m=>+m[1]);
-  const maxPct = pcts.length ? Math.max(...pcts) : 0;
-  const dc = maxPct>=80 ? 'dot-green' : maxPct>=40 ? 'dot-amber' : 'dot-grey';
-  const dotAnim = maxPct>=40 ? 'animation:pulse 2s infinite' : '';
-  return `<div class="prox-card${extraClass?' '+extraClass:''}">
+  const scores = [...ringsHtml.matchAll(/prox-ring-val[^>]*>([^<]+)/g)]
+    .map(m => parseInt(m[1])).filter(n => !isNaN(n));
+  const maxS = scores.length ? Math.max(...scores) : 0;
+  const dc = maxS >= 100 ? 'dot-green' : maxS >= 40 ? 'dot-amber' : 'dot-grey';
+  const da = maxS >= 70 ? 'animation:pulse 2s infinite' : '';
+  return `<div class="prox-card${extraClass ? ' '+extraClass : ''}">
     <div class="prox-header">
       <div style="display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0">
         <div class="prox-badge" style="background:${b.bg};color:${b.tx}">${letter}</div>
@@ -1083,38 +1043,66 @@ function proxCard(letter, barsHtml, footerText, extraClass) {
           <div class="prox-sub">${info.sub}</div>
         </div>
       </div>
-      <div class="prox-status-dot dot ${dc}" style="${dotAnim}"></div>
+      <div class="prox-status-dot dot ${dc}" style="${da}"></div>
     </div>
-    <div class="prox-bars">${barsHtml}</div>
+    <div class="ring-row">${ringsHtml}</div>
+    <div class="ring-next">${nextGate || '—'}</div>
     <div class="prox-footer">${footerText}</div>
   </div>`;
 }
 
-function lastSignalText(trades, letter) {
-  // Find most recent trade with matching setup letter
-  const match = (trades||[]).find(t => {
-    const s = (t.setup||'').charAt(0).toUpperCase();
-    return s === letter;
+// ── Best result (most gates passed, prefer valid) ─────────────
+function bestResult(rows) {
+  if (!rows || !rows.length) return null;
+  return rows.reduce((best, r) => {
+    if (r.valid) return r;
+    const bp = (best.gates||[]).filter(g=>g.passed).length;
+    const rp = (r.gates||[]).filter(g=>g.passed).length;
+    return rp > bp ? r : best;
   });
+}
+
+// ── Check if a trade fired today for this setup+symbol ────────
+function firedToday(trades, setupLetter, sym) {
+  const today = new Date().toISOString().slice(0, 10);
+  return (trades||[]).find(t => {
+    const s = (t.setup||'').charAt(0).toUpperCase();
+    return s === setupLetter && t.symbol === sym && (t.entry_time||'').startsWith(today);
+  });
+}
+
+// ── Gate setup ring: apply fired-today override ───────────────
+function gateRing(sym, result, maxGates, trades, setupLetter) {
+  const fired = firedToday(trades, setupLetter, sym);
+  if (fired) {
+    const t = new Date(fired.entry_time);
+    const timeStr = t.toUTCString().slice(17, 22) + ' UTC';
+    return instRing(sym, 100, '✓', 'Fired ' + timeStr);
+  }
+  if (!result) return instRing(sym, 0, '—', 'Scanning');
+  if (result.valid) {
+    const dir = result.direction === 'long' ? 'Long ↑' : 'Short ↓';
+    return instRing(sym, 100, '✓', 'Signal ' + dir);
+  }
+  const score = result.readiness_score ?? 0;
+  const passed = (result.gates||[]).filter(g=>g.passed).length;
+  const total  = (result.gates||[]).length || maxGates;
+  const fa = result.failed_at;
+  const state = fa === 'Session' ? 'Off-session'
+              : fa === 'HTF Bias' ? 'Bias blocked'
+              : fa === 'POI' ? 'No pattern'
+              : fa || 'Scanning';
+  return instRing(sym, score, `${passed}/${total}`, state);
+}
+
+function lastSignalText(trades, letter) {
+  const match = (trades||[]).find(t => (t.setup||'').charAt(0).toUpperCase() === letter);
   if (!match) return 'Last signal: —';
   const d = new Date(match.entry_time);
-  const mo = d.toLocaleString('en-US',{month:'short',day:'numeric'});
+  const mo = d.toLocaleString('en-US', {month:'short', day:'numeric'});
   const dir = match.direction?.toUpperCase()||'';
   const pnl = match.pnl_r != null ? (match.pnl_r>0?'+':'')+match.pnl_r+'R' : '—';
   return `Last: ${mo} ${match.symbol} ${dir} ${pnl}`;
-}
-
-// ── Setup ring SVG for F ──────────────────────────────────────
-function ringProgress(pct, color) {
-  const r=22, cx=28, cy=28;
-  const circ = 2*Math.PI*r;
-  const dash  = (pct/100)*circ;
-  const gap   = circ - dash;
-  return `<svg width="56" height="56" viewBox="0 0 56 56">
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="5"/>
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="5"
-      stroke-dasharray="${dash.toFixed(1)} ${gap.toFixed(1)}" stroke-linecap="round"/>
-  </svg>`;
 }
 
 async function loadSetups() {
@@ -1123,16 +1111,14 @@ async function loadSetups() {
     api('/api/apex/scan'),
     api('/api/apex/trades'),
   ]);
-  const grid   = document.getElementById('setupGrid');
+  const grid    = document.getElementById('setupGrid');
   const results = scan.results || [];
   const fvgSigs = scan.fvg_signals || [];
   const fPreds  = scan.setup_f_predictions || [];
   const hData   = scan.setup_h_data || [];
   const iData   = scan.setup_i_data || [];
-  const trades  = tradesResp.trades || [];
-  const SYMS    = ['MNQ','ES','GC'];
+  const trades  = (tradesResp.open_trades || tradesResp.trades || []);
 
-  // Group results by setup key letter (A/B/C/E) and symbol
   function getRows(letter, sym) {
     const key = letter === 'A' ? 'A_sweep_ob'
               : letter === 'B' ? 'B_choch_breaker'
@@ -1143,153 +1129,134 @@ async function loadSetups() {
 
   const cards = [];
 
-  // ── A, B, C ──────────────────────────────────────────────────
+  // ── A, B, C — gate-based, 3 instruments ──────────────────────
   ['A','B','C'].forEach(letter => {
-    const MAX_G = 6;
-    let bars = '';
-    SYMS.forEach(sym => {
+    let rings = '';
+    let nextGate = '—';
+    let bestScore = 0;
+    ['MNQ','ES','GC'].forEach(sym => {
       const rows = getRows(letter, sym);
       const best = bestResult(rows);
-      const pct  = gateProximity(best, MAX_G);
-      const st   = gateState(best, letter);
-      bars += proxBar(sym, pct, st);
+      rings += gateRing(sym, best, 6, trades, letter);
+      const sc = best?.readiness_score ?? 0;
+      if (sc > bestScore) {
+        bestScore = sc;
+        if (best && !best.valid && best.next_gate_description) nextGate = best.next_gate_description;
+      }
     });
-    cards.push(proxCard(letter, bars, lastSignalText(trades, letter)));
+    cards.push(unifiedCard(letter, rings, nextGate, lastSignalText(trades, letter)));
   });
 
-  // ── D — FVG Fill ─────────────────────────────────────────────
+  // ── D — FVG Fill, 2 instruments + GC disabled ─────────────────
   {
-    const utcH = new Date().getUTCHours();
-    const inSess = utcH >= 13 && utcH < 19;
-    let bars = '';
+    let rings = '';
+    let nextGate = '—';
     ['MNQ','ES'].forEach(sym => {
       const sig = fvgSigs.find(s => s.symbol === sym);
-      let pct, st;
-      if (sig && sig.valid) { pct = 100; st = 'Signal ' + (sig.direction==='long'?'Long':'Short'); }
-      else if (!inSess)     { pct = 0;   st = 'Off-session'; }
-      else                  { pct = 20;  st = 'Scanning'; }
-      bars += proxBar(sym, pct, st);
+      const fired = firedToday(trades, 'D', sym);
+      if (fired) {
+        const t = new Date(fired.entry_time);
+        rings += instRing(sym, 100, '✓', 'Fired ' + t.toUTCString().slice(17,22)+' UTC');
+      } else if (sig && sig.valid) {
+        rings += instRing(sym, 100, '✓', 'Signal ' + (sig.direction==='long'?'Long ↑':'Short ↓'));
+      } else if (sig) {
+        const score  = sig.readiness_score ?? 0;
+        const passed = (sig.gates||[]).filter(g=>g.passed).length;
+        const total  = (sig.gates||[]).length || 5;
+        const state  = sig.signal_state ?? 'Scanning';
+        rings += instRing(sym, score, `${passed}/${total}`, state);
+        if (sig.next_gate_description && nextGate === '—') nextGate = sig.next_gate_description;
+      } else {
+        rings += instRing(sym, 0, '0/5', 'No data');
+      }
     });
-    bars += proxBar('GC', 0, 'Disabled');
-    cards.push(proxCard('D', bars, lastSignalText(trades, 'D')));
+    rings += instRing('GC', 0, '—', 'Disabled', {disabled:true});
+    cards.push(unifiedCard('D', rings, nextGate, lastSignalText(trades, 'D')));
   }
 
-  // ── E — EMA50 Pullback ────────────────────────────────────────
+  // ── E — EMA50 Pullback, MNQ only ─────────────────────────────
   {
-    const MAX_G = 5;
     const rows = getRows('E', 'MNQ');
-    // Best across both directions
     const best = bestResult(rows);
-    const pct  = gateProximity(best, MAX_G);
-    const st   = gateState(best, 'E');
-    let bars = proxBar('MNQ', pct, st);
-    bars += proxBar('ES', 0, 'Disabled');
-    bars += proxBar('GC', 0, 'Disabled');
-    cards.push(proxCard('E', bars, lastSignalText(trades, 'E')));
+    let rings = gateRing('MNQ', best, 5, trades, 'E');
+    rings += instRing('ES', 0, '—', 'Disabled', {disabled:true});
+    rings += instRing('GC', 0, '—', 'Disabled', {disabled:true});
+    const nextGate = (best && !best.valid) ? (best.next_gate_description || '—') : '—';
+    cards.push(unifiedCard('E', rings, nextGate, lastSignalText(trades, 'E')));
   }
 
-  // ── F — Random Forest ML (spans 2 cols) ──────────────────────
+  // ── F — Random Forest ML (wide card, 2 cols) ─────────────────
   {
-    const b = BADGE_STYLE['F'];
-    const info = SETUP_INFO['F'];
-    // Ring for highest probability instrument
-    const best_p = fPreds.reduce((a,b) => (b.probability||0) > (a.probability||0) ? b : a, {probability:0});
-    const ringPct = Math.round((best_p.probability||0)*100);
-    const ringColor = ringPct >= 80 ? '#22c55e' : ringPct >= 58 ? '#f59e0b' : '#9ca3af';
-    const ring = ringProgress(ringPct, ringColor);
-
-    let fBars = '';
+    let rings = '';
+    let nextGate = '—';
     ['MNQ','ES'].forEach(sym => {
-      const p = fPreds.find(x=>x.symbol===sym);
-      const pct = p ? Math.round((p.probability||0)*100) : 20;
-      const st  = p ? (p.signal_state||'Watching') : 'No data';
-      // Threshold markers at 58% long, 42% short
-      const barHtml = `<div class="prox-track" style="position:relative">
-        <div class="prox-fill ${fillClass(pct)}" style="width:${pct}%"></div>
-        <div style="position:absolute;top:-2px;bottom:-2px;left:58%;width:1.5px;background:var(--text3);border-radius:1px"></div>
-        <div style="position:absolute;top:-2px;bottom:-2px;left:42%;width:1.5px;background:var(--text3);border-radius:1px;opacity:0.5"></div>
-      </div>`;
-      fBars += `<div class="prox-inst-row">
-        <div class="prox-inst-top">
-          <span class="prox-inst-label">${sym}</span>
-          <span class="prox-inst-state">${st} <span style="color:var(--text);font-weight:600">${pct}%</span></span>
-        </div>
-        ${barHtml}
-      </div>`;
+      const p = fPreds.find(x => x.symbol === sym);
+      if (!p) { rings += instRing(sym, 0, '—', 'No data'); return; }
+      const score = p.readiness_score ?? Math.round((p.probability||0)*100);
+      const pct   = Math.round((p.probability||0)*100);
+      const state = p.signal_state ?? 'Watching';
+      rings += instRing(sym, score, pct+'%', state);
+      if (p.next_gate_description && nextGate === '—') nextGate = p.next_gate_description;
     });
-
-    const maxFPct = Math.max(...fPreds.map(p=>Math.round((p.probability||0)*100)), 0);
-    const dc = maxFPct>=80?'dot-green':maxFPct>=58?'dot-amber':'dot-grey';
-    const dotAnim = maxFPct>=58?'animation:pulse 2s infinite':'';
-
-    cards.push(`<div class="prox-card prox-card-f">
-      <div class="prox-header">
-        <div style="display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0">
-          <div class="prox-badge" style="background:${b.bg};color:${b.tx}">F</div>
-          <div class="prox-title">
-            <div class="prox-name">${info.name}</div>
-            <div class="prox-sub">${info.sub}</div>
-          </div>
-        </div>
-        <div class="prox-status-dot dot ${dc}" style="${dotAnim}"></div>
-      </div>
-      <div class="prox-bars">
-        <div class="prox-f-inner">
-          <div class="prox-ring-wrap">
-            <div class="prox-ring">${ring}<div class="prox-ring-val">${ringPct}%</div></div>
-            <div class="prox-ring-lbl">${best_p.symbol||'—'}</div>
-          </div>
-          <div class="prox-f-bars">${fBars}</div>
-        </div>
-      </div>
-      <div class="prox-footer">${lastSignalText(trades,'F')}</div>
-    </div>`);
+    const gcP = fPreds.find(x => x.symbol === 'GC');
+    if (gcP) {
+      const score = gcP.readiness_score ?? Math.round((gcP.probability||0)*100);
+      rings += instRing('GC', score, Math.round((gcP.probability||0)*100)+'%', 'Paper', {dimmed:true});
+    } else {
+      rings += instRing('GC', 0, '—', 'Disabled', {disabled:true});
+    }
+    if (nextGate === '—') nextGate = 'Long threshold 65% · Short threshold 35%';
+    cards.push(unifiedCard('F', rings, nextGate, lastSignalText(trades, 'F'), 'prox-card-f'));
   }
 
-  // ── H — VWAP 2σ Reversal ─────────────────────────────────────
+  // ── H — VWAP 2σ Reversal, ES live + MNQ paper ────────────────
   {
-    let bars = '';
+    let rings = '';
+    let nextGate = '—';
     ['ES','MNQ'].forEach(sym => {
-      const h = hData.find(x=>x.symbol===sym);
-      let pct, st;
-      if (!h) { pct=0; st='No data'; }
-      else if (h.signal_state==='ABOVE_UPPER'||h.signal_state==='BELOW_LOWER') { pct=90; st=h.signal_state==='ABOVE_UPPER'?'Above 2σ':'Below 2σ'; }
-      else if (h.in_session && h.signal_state==='WATCHING') { pct=60; st='Watching'; }
-      else if (h.in_session) { pct=30; st='Monitoring'; }
-      else { pct=0; st='Off-session'; }
-      const lbl = sym + (sym==='MNQ'?' (paper)':'');
-      bars += proxBar(lbl, pct, st);
+      const h = hData.find(x => x.symbol === sym);
+      const fired = firedToday(trades, 'H', sym);
+      if (fired) {
+        const t = new Date(fired.entry_time);
+        rings += instRing(sym, 100, '✓', 'Fired '+t.toUTCString().slice(17,22)+' UTC', {dimmed: sym==='MNQ'});
+      } else if (!h) {
+        rings += instRing(sym, 0, '—', 'No data', {dimmed: sym==='MNQ'});
+      } else {
+        const score  = h.readiness_score ?? 0;
+        const passed = (h.gates||[]).filter(g=>g.passed).length;
+        const total  = (h.gates||[]).length || 4;
+        const state  = h.signal_state_label ?? (h.in_session ? 'Watching' : 'Off-session');
+        const lbl    = h.signal_state_label === 'SIGNAL READY' ? '✓' : `${passed}/${total}`;
+        rings += instRing(sym, score, lbl, state, {dimmed: sym==='MNQ'});
+        if (h.next_gate_description && nextGate === '—') nextGate = h.next_gate_description;
+      }
     });
-    bars += proxBar('GC', 0, 'Disabled');
-    cards.push(proxCard('H', bars, lastSignalText(trades, 'H')));
+    rings += instRing('GC', 0, '—', 'Disabled', {disabled:true});
+    cards.push(unifiedCard('H', rings, nextGate, lastSignalText(trades, 'H')));
   }
 
-  // ── I — Mathematical Alpha ────────────────────────────────────
+  // ── I — Mathematical Alpha, ML score by XGB prob ─────────────
   {
-    let bars = '';
+    let rings = '';
+    let nextGate = '—';
     ['MNQ','ES'].forEach(sym => {
       const d = iData.find(x => x.symbol === sym);
-      let pct = 0, st = 'No data';
-      if (d && d.ok) {
-        const shortSig = d.short_enabled && d.short_xgb_prob > 0.62;
-        const longSig  = d.long_enabled  && d.long_xgb_prob  > 0.62;
-        if (shortSig || longSig) {
-          pct = 90;
-          st  = shortSig && longSig ? 'LONG + SHORT' : shortSig ? 'SHORT signal' : 'LONG signal';
-        } else if (d.transition) {
-          pct = 60; st = 'Regime transition';
-        } else if (d.short_enabled || d.long_enabled) {
-          pct = 30;
-          const dirs = [d.short_enabled?'S':null, d.long_enabled?'L':null].filter(Boolean).join('/');
-          st = `Scanning (${dirs})`;
-        } else {
-          pct = 5; st = 'Models disabled';
-        }
+      const fired = firedToday(trades, 'I', sym);
+      if (fired) {
+        const t = new Date(fired.entry_time);
+        rings += instRing(sym, 100, '✓', 'Fired '+t.toUTCString().slice(17,22)+' UTC');
+      } else if (!d || !d.ok) {
+        rings += instRing(sym, 0, '—', d ? 'No model' : 'No data');
+      } else {
+        const score = d.readiness_score ?? 0;
+        const state = d.signal_state_label ?? 'Scanning';
+        rings += instRing(sym, score, score+'%', state);
+        if (d.next_gate_description && nextGate === '—') nextGate = d.next_gate_description;
       }
-      bars += proxBar(sym, pct, st);
     });
-    bars += proxBar('GC', 0, 'Disabled');
-    cards.push(proxCard('I', bars, lastSignalText(trades, 'I')));
+    rings += instRing('GC', 0, '—', 'Disabled', {disabled:true});
+    if (nextGate === '—') nextGate = 'Threshold: 58% XGB · 58% LR';
+    cards.push(unifiedCard('I', rings, nextGate, lastSignalText(trades, 'I')));
   }
 
   grid.innerHTML = cards.join('');

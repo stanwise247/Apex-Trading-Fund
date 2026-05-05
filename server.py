@@ -2905,6 +2905,8 @@ def apex_scan():
                 try:
                     r = check_fn(sym, direction)
                     gates = [{'gate': g.gate, 'name': g.name, 'passed': g.passed, 'detail': g.detail} for g in r.gates]
+                    _gp = sum(1 for g in gates if g['passed'])
+                    _gt = len(gates)
                     results.append({
                         'symbol':    sym,
                         'direction': direction,
@@ -2917,6 +2919,11 @@ def apex_scan():
                         'rr':        r.rr,
                         'quality':   r.quality,
                         'failed_at': next((g['name'] for g in gates if not g['passed']), None),
+                        'readiness_score': 100 if r.valid else (round(_gp / _gt * 100) if _gt else 0),
+                        'next_gate_description': (
+                            'All gates passed — signal ready' if r.valid
+                            else next((f"{g['name']}: {g['detail']}" for g in gates if not g['passed']), '—')
+                        ),
                     })
                 except Exception as e:
                     logger.debug(f'Gate check error {sym} {direction} Setup {setup_name}: {e}')
@@ -2926,6 +2933,8 @@ def apex_scan():
         try:
             r = check_setup_e('MNQ', direction, now)
             gates = [{'gate': g.gate, 'name': g.name, 'passed': g.passed, 'detail': g.detail} for g in r.gates]
+            _gp = sum(1 for g in gates if g['passed'])
+            _gt = len(gates)
             results.append({
                 'symbol':    'MNQ',
                 'direction': direction,
@@ -2938,6 +2947,11 @@ def apex_scan():
                 'rr':        r.rr,
                 'quality':   getattr(r, 'quality', 'primary'),
                 'failed_at': next((g['name'] for g in gates if not g['passed']), None),
+                'readiness_score': 100 if r.valid else (round(_gp / _gt * 100) if _gt else 0),
+                'next_gate_description': (
+                    'All gates passed — signal ready' if r.valid
+                    else next((f"{g['name']}: {g['detail']}" for g in gates if not g['passed']), '—')
+                ),
             })
         except Exception as e:
             logger.debug(f'Setup E scan error ({direction}): {e}')
@@ -2966,6 +2980,8 @@ def apex_scan():
                     'bias':      s.get('bias'),
                     'failed_at': None,
                     'signal_state': 'SIGNAL READY',
+                    'readiness_score': 100,
+                    'next_gate_description': 'Signal ready',
                 })
             else:
                 # No signal — show gate-by-gate progress
@@ -2973,6 +2989,7 @@ def apex_scan():
                     _d_state = get_setup_d_state(_d_sym)
                     _d_gates = _d_state.get('gates', [])
                     _d_passed = sum(1 for g in _d_gates if g['passed'])
+                    _d_total  = len(_d_gates)
                     fvg_signals.append({
                         'symbol':       _d_sym,
                         'direction':    _d_state.get('bias', 'neutral'),
@@ -2987,6 +3004,10 @@ def apex_scan():
                         'bias':         _d_state.get('bias'),
                         'failed_at':    next((g['name'] for g in _d_gates if not g['passed']), None),
                         'signal_state': 'SCANNING' if _d_passed >= 2 else 'DEVELOPING',
+                        'readiness_score': round(_d_passed / _d_total * 100) if _d_total else 0,
+                        'next_gate_description': next(
+                            (f"{g['name']}: {g['detail']}" for g in _d_gates if not g['passed']), '—'
+                        ),
                     })
                 except Exception as _dse:
                     logger.debug(f'Setup D state error {_d_sym}: {_dse}')
@@ -2999,6 +3020,20 @@ def apex_scan():
         from setup_f_ml import get_current_prediction
         for _sym in ('MNQ', 'ES', 'GC'):
             pred = get_current_prediction(_sym)
+            _f_prob   = pred.get('probability', 0) or 0
+            _f_long_t = pred.get('long_threshold', 0.65)
+            _f_short_t= pred.get('short_threshold', 0.35)
+            if _f_prob > _f_long_t:
+                _f_score = round(_f_prob * 100)
+                _f_desc  = f"Signal LONG — {_f_prob*100:.1f}% (threshold {_f_long_t*100:.0f}%)"
+            elif _f_prob < _f_short_t:
+                _f_score = round((1 - _f_prob) * 100)
+                _f_desc  = f"Signal SHORT — {(1-_f_prob)*100:.1f}% (threshold {(1-_f_short_t)*100:.0f}%)"
+            else:
+                _f_score = round(max(_f_prob, 1 - _f_prob) * 100)
+                _f_desc  = f"P={_f_prob*100:.1f}% — long >{_f_long_t*100:.0f}%, short <{_f_short_t*100:.0f}%"
+            pred['readiness_score']       = _f_score
+            pred['next_gate_description'] = _f_desc
             setup_f_predictions.append(pred)
     except Exception as e:
         logger.debug(f'Setup F prediction error: {e}')
@@ -3051,6 +3086,14 @@ def apex_scan():
             _h['gates'] = _h_gates
             _h['signal_state_label'] = _h_state_label
             _h['failed_at'] = next((g['name'] for g in _h_gates if not g['passed']), None)
+            _h_total = len(_h_gates)
+            _h['readiness_score'] = 100 if _h_state_label == 'SIGNAL READY' else (
+                round(_h_passed / _h_total * 100) if _h_total else 0
+            )
+            _h['next_gate_description'] = (
+                'All gates passed — signal ready' if _h_state_label == 'SIGNAL READY'
+                else next((f"{g['name']}: {g['detail']}" for g in _h_gates if not g['passed']), '—')
+            )
             setup_h_data.append(_h)
     except Exception as e:
         logger.debug(f'Setup H state error: {e}')
@@ -3112,6 +3155,12 @@ def apex_scan():
             _i['gates'] = _i_gates
             _i['signal_state_label'] = _i_label
             _i['failed_at'] = next((g['name'] for g in _i_gates if not g['passed']), None)
+            _i_max_xgb = max(filter(None, [_i.get('short_xgb_prob'), _i.get('long_xgb_prob')]), default=0)
+            _i['readiness_score'] = round((_i_max_xgb or 0) * 100)
+            _i['next_gate_description'] = (
+                'All gates passed — signal ready' if _i_label == 'SIGNAL READY'
+                else next((f"{g['name']}: {g['detail']}" for g in _i_gates if not g['passed']), '—')
+            )
             setup_i_data.append(_i)
     except Exception as e:
         logger.debug(f'Setup I state error: {e}')
