@@ -1150,7 +1150,14 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
     """
     try:
         from tradovate import execute_apex_signal, TRADOVATE_ENABLED, TRADING_ENABLED
+        logger.info(
+            f'_execute_via_tradovate: CALLED — {signal.get("symbol")} {signal.get("direction")} '
+            f'{signal.get("setup")} trade_id={trade_id} '
+            f'TRADOVATE_ENABLED={TRADOVATE_ENABLED} TRADING_ENABLED={TRADING_ENABLED} '
+            f'kill_switch={_kill_switch_active}'
+        )
         if not TRADOVATE_ENABLED:
+            logger.info('_execute_via_tradovate: TRADOVATE_ENABLED=false — skipping')
             return
         if not TRADING_ENABLED:
             logger.warning('_execute_via_tradovate: TRADING_ENABLED=false — order blocked')
@@ -1160,6 +1167,7 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
                 f'_execute_via_tradovate: kill switch active (balance=${_kill_switch_balance:.0f}) — order blocked'
             )
             return
+        logger.info(f'_execute_via_tradovate: calling execute_apex_signal for {signal.get("symbol")} {signal.get("direction")}')
         result = execute_apex_signal(signal)
         if result['ok'] and trade_id:
             try:
@@ -1187,7 +1195,7 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
                 f'Tradovate execution skipped: {result.get("skipped_reason")} — {result.get("detail","")}'
             )
     except Exception as e:
-        logger.debug(f'_execute_via_tradovate error: {e}')
+        logger.error(f'_execute_via_tradovate EXCEPTION: {e}', exc_info=True)
 
 
 # Module-level in-memory dedup set — survives DB write failures, resets on redeploy.
@@ -1957,6 +1965,11 @@ def background_scheduler():
                                 send_telegram(msg)
                             except Exception as _i_te:
                                 logger.error(f'Setup I: send_telegram failed {_sym}: {_i_te}')
+                            logger.info(f'Setup I: calling _execute_via_tradovate for {_sym} trade_id={_i_tid}')
+                            if _i_tid:
+                                _execute_via_tradovate(sig, _i_tid)
+                            else:
+                                logger.warning(f'Setup I: skipping _execute_via_tradovate — no trade_id logged for {_sym}')
                             logger.info(
                                 f'Setup I signal: {_sym} {sig["direction"].upper()} '
                                 f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
@@ -2023,6 +2036,8 @@ def background_scheduler():
                             _send_tg(format_d_alert(sig_d))
                         except Exception as _d_te:
                             logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
+                        if _d_tid:
+                            _execute_via_tradovate(sig_d, _d_tid)
                         logger.info(f'Setup D signal: {_sym_d} {sig_d["direction"].upper()} score={sig_d.get("fvg_score")} db_id={_d_tid}')
                     except Exception as _de:
                         logger.warning(f'Setup D {_sym_d} error: {_de}')
@@ -2930,7 +2945,7 @@ def apex_scan():
     # Setup D — FVG Fill (MNQ + ES, GC disabled)
     fvg_signals = []
     try:
-        from fvg_engine import scan_setup_d
+        from fvg_engine import scan_setup_d, get_setup_d_state
         for _d_sym in ['MNQ', 'ES']:
             s = scan_setup_d(_d_sym, now)
             if s:
@@ -2939,7 +2954,7 @@ def apex_scan():
                     'direction': s['direction'],
                     'setup':     'D_fvg_fill',
                     'valid':     True,
-                    'gates':     [{'gate': i+1, 'name': f'Gate {i+1}', 'passed': True, 'detail': ''} for i in range(4)],
+                    'gates':     [{'gate': i+1, 'name': f'Gate {i+1}', 'passed': True, 'detail': ''} for i in range(5)],
                     'entry':     s['entry'],
                     'stop':      s['stop'],
                     'target':    s['target'],
@@ -2950,7 +2965,31 @@ def apex_scan():
                     'fvg_bottom':s.get('fvg_bottom'),
                     'bias':      s.get('bias'),
                     'failed_at': None,
+                    'signal_state': 'SIGNAL READY',
                 })
+            else:
+                # No signal — show gate-by-gate progress
+                try:
+                    _d_state = get_setup_d_state(_d_sym)
+                    _d_gates = _d_state.get('gates', [])
+                    _d_passed = sum(1 for g in _d_gates if g['passed'])
+                    fvg_signals.append({
+                        'symbol':       _d_sym,
+                        'direction':    _d_state.get('bias', 'neutral'),
+                        'setup':        'D_fvg_fill',
+                        'valid':        False,
+                        'gates':        _d_gates,
+                        'entry':        None,
+                        'stop':         None,
+                        'target':       None,
+                        'rr':           None,
+                        'quality':      'primary',
+                        'bias':         _d_state.get('bias'),
+                        'failed_at':    next((g['name'] for g in _d_gates if not g['passed']), None),
+                        'signal_state': 'SCANNING' if _d_passed >= 2 else 'DEVELOPING',
+                    })
+                except Exception as _dse:
+                    logger.debug(f'Setup D state error {_d_sym}: {_dse}')
     except Exception as e:
         logger.debug(f'Setup D scan error in apex_scan: {e}')
 
@@ -2969,7 +3008,50 @@ def apex_scan():
     try:
         from setup_h_vwap import get_h_state
         for _sym in ('ES', 'MNQ'):
-            setup_h_data.append(get_h_state(_sym))
+            _h = get_h_state(_sym)
+            # Build gate-by-gate structure from state data
+            _h_gates = [
+                {
+                    'gate': 1, 'name': 'Session',
+                    'passed': bool(_h.get('in_session')),
+                    'detail': 'in session' if _h.get('in_session') else 'out of session',
+                },
+                {
+                    'gate': 2, 'name': 'VWAP Bands Available',
+                    'passed': _h.get('vwap') is not None,
+                    'detail': f'VWAP={_h.get("vwap")} upper={_h.get("upper_band")} lower={_h.get("lower_band")}' if _h.get('vwap') else f'{_h.get("signal_state")}',
+                },
+                {
+                    'gate': 3, 'name': 'Outside 2σ Band',
+                    'passed': _h.get('signal_state') in ('ABOVE_UPPER', 'BELOW_LOWER'),
+                    'detail': (
+                        f'ABOVE upper={_h.get("upper_band")} price={_h.get("price")} dist={_h.get("dist_upper_atr")}×ATR'
+                        if _h.get('signal_state') == 'ABOVE_UPPER' else
+                        f'BELOW lower={_h.get("lower_band")} price={_h.get("price")} dist={_h.get("dist_lower_atr")}×ATR'
+                        if _h.get('signal_state') == 'BELOW_LOWER' else
+                        f'price={_h.get("price")} upper={_h.get("upper_band")} lower={_h.get("lower_band")}'
+                    ),
+                },
+                {
+                    'gate': 4, 'name': 'HTF Bias',
+                    'passed': _h.get('htf_bias') in ('bullish', 'bearish'),
+                    'detail': f'4h bias={_h.get("htf_bias")}',
+                },
+            ]
+            _h_passed = sum(1 for g in _h_gates if g['passed'])
+            _h_state_label = _h.get('signal_state', 'WATCHING')
+            if not _h.get('in_session'):
+                _h_state_label = 'OFF SESSION'
+            elif _h_passed == len(_h_gates):
+                _h_state_label = 'SIGNAL READY'
+            elif _h_passed >= 2:
+                _h_state_label = 'SCANNING'
+            else:
+                _h_state_label = 'DEVELOPING'
+            _h['gates'] = _h_gates
+            _h['signal_state_label'] = _h_state_label
+            _h['failed_at'] = next((g['name'] for g in _h_gates if not g['passed']), None)
+            setup_h_data.append(_h)
     except Exception as e:
         logger.debug(f'Setup H state error: {e}')
 
@@ -2977,8 +3059,60 @@ def apex_scan():
     setup_i_data = []
     try:
         from setup_i_mathematical import get_setup_i_state
+        from datetime import datetime as _dt_cls
+        from zoneinfo import ZoneInfo as _ZI
+        _i_now = _dt_cls.now(__import__('datetime').timezone.utc)
         for _sym in ('MNQ', 'ES'):
-            setup_i_data.append(get_setup_i_state(_sym))
+            _i = get_setup_i_state(_sym)
+            _i_sess_end = 20 if _sym == 'MNQ' else 19
+            _i_in_sess = (not _i_now.weekday() >= 5) and (13 <= _i_now.hour < _i_sess_end)
+            _s_xgb = _i.get('short_xgb_prob')
+            _l_xgb = _i.get('long_xgb_prob')
+            _lr = _i.get('lr_prob')
+            _long_xgb_ok  = _l_xgb is not None and _l_xgb > 0.58
+            _long_lr_ok   = _lr is not None and _lr > 0.58
+            _short_xgb_ok = _s_xgb is not None and _s_xgb > 0.58
+            _short_lr_ok  = _lr is not None and _lr < 0.42
+            _i_gates = [
+                {
+                    'gate': 1, 'name': 'Models Trained',
+                    'passed': bool(_i.get('ok')),
+                    'detail': f'short_model={_i.get("short_enabled")} long_model={_i.get("long_enabled")}',
+                },
+                {
+                    'gate': 2, 'name': 'Session',
+                    'passed': _i_in_sess,
+                    'detail': f'{_i_now.hour:02d}:00 UTC session 13-{_i_sess_end} UTC',
+                },
+                {
+                    'gate': 3, 'name': 'XGB Probability > 0.58',
+                    'passed': _long_xgb_ok or _short_xgb_ok,
+                    'detail': f'long_xgb={_l_xgb} short_xgb={_s_xgb} (need >0.58)',
+                },
+                {
+                    'gate': 4, 'name': 'LogReg Confirmation',
+                    'passed': _long_lr_ok or _short_lr_ok,
+                    'detail': (
+                        f'lr={_lr:.3f} (long needs >0.58, short needs <0.42)'
+                        if _lr is not None else 'lr=None'
+                    ),
+                },
+            ]
+            _i_passed = sum(1 for g in _i_gates if g['passed'])
+            if not _i_in_sess:
+                _i_label = 'OFF SESSION'
+            elif not _i.get('ok'):
+                _i_label = 'DEVELOPING'
+            elif _i_passed == len(_i_gates):
+                _i_label = 'SIGNAL READY'
+            elif _i_passed >= 2:
+                _i_label = 'SCANNING'
+            else:
+                _i_label = 'DEVELOPING'
+            _i['gates'] = _i_gates
+            _i['signal_state_label'] = _i_label
+            _i['failed_at'] = next((g['name'] for g in _i_gates if not g['passed']), None)
+            setup_i_data.append(_i)
     except Exception as e:
         logger.debug(f'Setup I state error: {e}')
 

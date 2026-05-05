@@ -272,12 +272,12 @@ def gate3_poi_setup_a(symbol: str, direction: str) -> tuple:
         if direction == 'long'  and sweep.kind != 'bull': continue
         if direction == 'short' and sweep.kind != 'bear': continue
 
-        # Find active OB in same direction within 1 ATR
+        # Find active OB in same direction within 1.5 ATR (widened from 1.0 to reduce signal drought)
         target_kind = 'bull' if direction == 'long' else 'bear'
         nearby_obs = [o for o in obs
                       if not o.broken
                       and o.kind == target_kind
-                      and abs((o.high + o.low) / 2 - price) < atr_val]
+                      and abs((o.high + o.low) / 2 - price) < atr_val * 1.5]
 
         if nearby_obs:
             ob = min(nearby_obs, key=lambda o: abs((o.high + o.low) / 2 - price))

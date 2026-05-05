@@ -607,6 +607,119 @@ def format_d_alert(signal: dict) -> str:
     return chr(10).join(parts)
 
 
+def get_setup_d_state(symbol: str) -> dict:
+    """
+    Return gate-by-gate state for Setup D dashboard display.
+    Unlike scan_setup_d(), always returns a result dict with individual gate states
+    so the dashboard can show progress even when no signal fires.
+    """
+    params = SETUP_D_PARAMS
+    dt = datetime.now(timezone.utc)
+    gates = []
+
+    # Gate 1: Session time
+    in_session = (dt.weekday() < 5) and (params['session_start'] <= dt.hour < params['session_end'])
+    gates.append({
+        'gate': 1, 'name': 'Session (13-19 UTC)',
+        'passed': in_session,
+        'detail': f'{dt.hour:02d}:00 UTC — {"in" if in_session else "out of"} session'
+    })
+    if not in_session:
+        return {'symbol': symbol, 'gates': gates, 'signal': None, 'furthest_gate': 1}
+
+    # Gate 2: HTF bias
+    try:
+        bias = get_htf_bias(symbol)
+    except Exception:
+        bias = 'neutral'
+    bias_ok = bias != 'neutral'
+    gates.append({
+        'gate': 2, 'name': 'HTF Bias',
+        'passed': bias_ok,
+        'detail': f'4h bias={bias}'
+    })
+    if not bias_ok:
+        return {'symbol': symbol, 'gates': gates, 'signal': None, 'furthest_gate': 2, 'bias': bias}
+
+    # Gate 3: FVG detected in 15min bars
+    try:
+        df_15m = load_bars(symbol, '15min', limit=200)
+        atr_15m = calc_atr(df_15m, 14)
+        fvgs = detect_fvgs(df_15m, atr_15m, params['min_fvg_atr'], params['fvg_lookback_bars'])
+        fvg_count = len(fvgs) if fvgs else 0
+    except Exception:
+        fvgs = []
+        fvg_count = 0
+    fvg_ok = fvg_count > 0
+    gates.append({
+        'gate': 3, 'name': 'FVG Detected (15min)',
+        'passed': fvg_ok,
+        'detail': f'{fvg_count} FVG(s) found'
+    })
+    if not fvg_ok:
+        return {'symbol': symbol, 'gates': gates, 'signal': None, 'furthest_gate': 3, 'bias': bias}
+
+    # Gate 4: Price in FVG range (1min trigger)
+    try:
+        df_1m = load_bars(symbol, '1min', limit=50)
+        last_bar = df_1m.iloc[-1]
+        last_close = float(last_bar['close'])
+        last_open = float(last_bar['open'])
+        last_high = float(last_bar['high'])
+        last_low = float(last_bar['low'])
+        # Check if any FVG has price inside it
+        triggered_fvg = None
+        for fvg in fvgs:
+            if fvg['formed_at'] >= df_1m.index[-1]:
+                continue
+            if fvg['type'] == 'bullish' and bias == 'bullish' and last_low <= fvg['top'] and last_close >= fvg['mid'] and last_close > last_open:
+                triggered_fvg = fvg
+                break
+            elif fvg['type'] == 'bearish' and bias == 'bearish' and last_high >= fvg['bottom'] and last_close <= fvg['mid'] and last_close < last_open:
+                triggered_fvg = fvg
+                break
+        price_in_fvg = triggered_fvg is not None
+        nearest_fvg = fvgs[0] if fvgs else None
+        if nearest_fvg:
+            dist = min(abs(last_close - nearest_fvg['top']), abs(last_close - nearest_fvg['bottom']))
+            detail_4 = f'price={last_close:.2f} nearest FVG {nearest_fvg["bottom"]:.2f}-{nearest_fvg["top"]:.2f} dist={dist:.1f}'
+        else:
+            detail_4 = f'price={last_close:.2f}'
+    except Exception as e:
+        price_in_fvg = False
+        detail_4 = f'error: {e}'
+    gates.append({
+        'gate': 4, 'name': 'Price in FVG Range',
+        'passed': price_in_fvg,
+        'detail': detail_4
+    })
+    if not price_in_fvg:
+        return {'symbol': symbol, 'gates': gates, 'signal': None, 'furthest_gate': 4, 'bias': bias}
+
+    # Gate 5: FVG score ≥ 70
+    try:
+        vol_baseline_15m = float(df_15m['volume'].tail(20).mean())
+        fvg_score = score_fvg(triggered_fvg, df_15m, df_1m.index[-1], vol_baseline_15m)
+        score_ok = fvg_score >= params['min_score']
+    except Exception:
+        fvg_score = 0
+        score_ok = False
+    gates.append({
+        'gate': 5, 'name': f'FVG Score ≥ {params["min_score"]}',
+        'passed': score_ok,
+        'detail': f'score={fvg_score}'
+    })
+
+    return {
+        'symbol': symbol,
+        'gates': gates,
+        'signal': None if not score_ok else 'SIGNAL READY',
+        'furthest_gate': 5,
+        'bias': bias,
+        'fvg_count': fvg_count,
+    }
+
+
 if __name__ == '__main__':
     import os
     # API key loaded from environment variable — never hardcode keys

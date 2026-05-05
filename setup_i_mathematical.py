@@ -49,10 +49,10 @@ SESSION_START = 13
 SESSION_END   = 19
 ALLOWED_DAYS  = {1, 2, 3}           # Tue / Wed / Thu
 
-XGB_LONG_THRESHOLD  = 0.62
-XGB_SHORT_THRESHOLD = 0.38
-LR_LONG_THRESHOLD   = 0.55
-LR_SHORT_THRESHOLD  = 0.45
+XGB_LONG_THRESHOLD  = 0.58   # lowered from 0.62 — market strongly trending, need wider gate
+XGB_SHORT_THRESHOLD = 0.42   # raised from 0.38 — symmetric with long threshold
+LR_LONG_THRESHOLD   = 0.58
+LR_SHORT_THRESHOLD  = 0.42
 OOS_AUC_GATE        = 0.54
 
 FEATURE_NAMES_I = [
@@ -702,13 +702,14 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
 
     logger.info(
         f'Setup I {symbol}: short_xgb={short_prob} long_xgb={long_prob} lr={lr_prob:.3f} | '
-        f'short gate: xgb>0.62 AND lr<0.38 | long gate: xgb>0.62 AND lr>0.62'
+        f'short gate: xgb>{XGB_LONG_THRESHOLD} AND lr<{LR_SHORT_THRESHOLD} | '
+        f'long gate: xgb>{XGB_LONG_THRESHOLD} AND lr>{LR_LONG_THRESHOLD}'
     )
 
     # ── Component 2: Direction-specific gate ──────────────────
-    if short_prob is not None and short_prob > 0.62 and lr_prob < 0.38:
+    if short_prob is not None and short_prob > XGB_LONG_THRESHOLD and lr_prob < LR_SHORT_THRESHOLD:
         direction = 'short'
-    elif long_prob is not None and long_prob > 0.62 and lr_prob > 0.62:
+    elif long_prob is not None and long_prob > XGB_LONG_THRESHOLD and lr_prob > LR_LONG_THRESHOLD:
         direction = 'long'
     else:
         return None
