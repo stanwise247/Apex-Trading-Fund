@@ -53,7 +53,7 @@ ATR_PERIOD    = 14
 STOP_ATR      = 1.50
 TARGET_ATR    = 3.75  # 1.5 stop × 2.5 RR = 3.75 ATR target
 SESSION_START = 13     # UTC inclusive
-SESSION_END   = 20     # UTC exclusive — MNQ trades until 20:00 UTC (last entry at 19:xx)
+SESSION_END   = 20     # UTC exclusive — MNQ last entry at 19:29 (cutoff enforced at :30 below)
 BIAS_EMA      = 20     # 4hour EMA period
 BIAS_THRESH   = 0.001  # ±0.1% neutral zone
 MIN_GAP_BARS  = 12     # 60 min minimum between trades
@@ -129,7 +129,10 @@ def gate1_session(dt: datetime) -> EGateResult:
         return EGateResult(False, 1, 'Session', 'Weekend — no trading')
     if not (SESSION_START <= dt.hour < SESSION_END):
         return EGateResult(False, 1, 'Session',
-                           f'Hour {dt.hour:02d}:00 UTC outside 13-18 UTC window')
+                           f'Hour {dt.hour:02d}:00 UTC outside 13-19:30 UTC window')
+    if dt.hour == 19 and dt.minute >= 30:
+        return EGateResult(False, 1, 'Session',
+                           f'MNQ session ended at 19:30 UTC ({dt.hour:02d}:{dt.minute:02d})')
     return EGateResult(True, 1, 'Session',
                        f'NY session {dt.hour:02d}:{dt.minute:02d} UTC')
 

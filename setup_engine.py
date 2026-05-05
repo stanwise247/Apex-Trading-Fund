@@ -308,15 +308,20 @@ def gate4_session(symbol: str, dt: datetime = None) -> tuple[GateResult, str]:
     windows = SESSION_WINDOWS.get(symbol, SESSION_WINDOWS['NQ'])
     for w in windows:
         if w['start'] <= hour < w['end']:
+            # MNQ/NQ: session ends at 19:30 UTC — liquidity thins after this
+            if symbol in ('MNQ', 'NQ') and hour == 19 and dt.minute >= 30:
+                continue
             return (
                 GateResult(True, 4, 'Session',
-                           f"{w['name']} ({w['start']}:00-{w['end']}:00 UTC) [{w['quality'].upper()}]"),
+                           f"{w['name']} ({w['start']}:00-19:30 UTC) [{w['quality'].upper()}]"
+                           if (symbol in ('MNQ', 'NQ') and w['end'] == 20)
+                           else f"{w['name']} ({w['start']}:00-{w['end']}:00 UTC) [{w['quality'].upper()}]"),
                 w['quality']
             )
 
     return (
         GateResult(False, 4, 'Session',
-                   f'Hour {hour:02d}:00 UTC outside all trading windows'),
+                   f'Hour {hour:02d}:{dt.minute:02d} UTC outside all trading windows'),
         'none'
     )
 

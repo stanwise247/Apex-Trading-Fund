@@ -649,7 +649,10 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
     if dt.weekday() not in ALLOWED_DAYS:
         return None
     _sess_end = 20 if symbol == 'MNQ' else SESSION_END
-    if not (SESSION_START <= dt.hour < _sess_end):
+    _in_sess = (SESSION_START <= dt.hour < _sess_end)
+    if symbol == 'MNQ' and dt.hour == 19 and dt.minute >= 30:
+        _in_sess = False  # MNQ session ends at 19:30 — liquidity thins after this
+    if not _in_sess:
         return None
 
     date_str = dt.strftime('%Y-%m-%d')

@@ -26,7 +26,7 @@ FVG_PARAMS = {
     'vol_multiplier':     1.0,
     'min_score':          60,   # validated: Score 60 = Sharpe 6.46 OOS
     'session_windows': {
-        'MNQ': [{'start': 14, 'end': 20}],  # MNQ trades until 20:00 UTC; block 13:00 (bad first candle)
+        'MNQ': [{'start': 14, 'end': 20}],  # MNQ session ends 19:30 UTC (minute check below)
         # ES disabled — last 3 months negative, monitoring
         # GC disabled — failed walk-forward validation
     },
@@ -269,6 +269,9 @@ def scan_fvg(symbol, dt=None):
     hour = dt.hour
     sessions = params['session_windows'].get(symbol, [])
     in_session = any(s['start'] <= hour < s['end'] for s in sessions)
+    # MNQ: hard cutoff at 19:30 UTC — liquidity thins after this
+    if symbol == 'MNQ' and hour == 19 and dt.minute >= 30:
+        in_session = False
     if not in_session:
         return signals
 
