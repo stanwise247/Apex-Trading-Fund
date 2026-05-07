@@ -769,26 +769,44 @@ async function apiFetch(url) {
 // OVERVIEW TAB
 // ═══════════════════════════════════════════════════════
 async function loadOverview() {
-  const [market, tradesResp, calResp, tvResp, paperResp] = await Promise.all([
+  const [market, tradesResp, calResp, tvResp] = await Promise.all([
     apiFetch('/api/apex/market'),
     apiFetch('/api/apex/trades'),
     apiFetch('/api/apex/calendar'),
     apiFetch('/api/apex/tradovate'),
-    apiFetch('/api/paper/account'),
   ]);
-  renderTickerStrip(market, tradesResp, calResp, tvResp, paperResp);
-  const trades = tradesResp?.open_trades || [];
-  const stats  = tradesResp?.stats || {};
-  renderOpenPositions(trades);
+  renderTickerStrip(market, tradesResp, calResp, tvResp);
+  renderOpenPositions(tradesResp?.open_trades || []);
   renderRecentTrades(tradesResp);
 }
 
-function renderTickerStrip(market, tradesResp, calResp, tvResp, paperResp) {
+// Point value per micro contract (1 contract assumed for paper P&L calc)
+const POINT_VALUE_MAP = { MNQ: 2, NQ: 2, ES: 5, GC: 10, MGC: 10, MES: 5 };
+const STRATEGY_START = 10000;
+
+function calcStrategyEquity(allTrades) {
+  const closed = (allTrades||[]).filter(t =>
+    t.status === 'closed' && t.pnl_r != null &&
+    t.exit_reason !== 'test_endpoint' && t.notes !== 'test_endpoint' && t.setup !== 'test_endpoint'
+  );
+  let equity = STRATEGY_START;
+  for (const t of closed) {
+    const pv = POINT_VALUE_MAP[t.symbol] || 2;
+    const stopPts = Math.abs((parseFloat(t.entry_price)||0) - (parseFloat(t.stop)||0));
+    if (stopPts > 0) {
+      equity += (t.pnl_r||0) * stopPts * pv;
+    }
+  }
+  return { equity: Math.round(equity * 100) / 100, closed: closed.length };
+}
+
+function renderTickerStrip(market, tradesResp, calResp, tvResp) {
   const m = market?.market || {};
   const stats = tradesResp?.stats || {};
   const cal = calResp || {};
   const tv = tvResp || {};
   const openTrades = tradesResp?.open_trades || [];
+  const allTrades  = tradesResp?.all_trades || [];
 
   function symCard(sym) {
     const d = m[sym] || {};
@@ -819,24 +837,31 @@ function renderTickerStrip(market, tradesResp, calResp, tvResp, paperResp) {
     <div style="margin-top:4px">${sigHtml}</div>
   </div>`;
 
-  // Account card — strategy (paper) account when demo; live account when TRADOVATE_DEMO=false
+  // Account card — strategy equity computed from all closed trades
   const useLive = tv.enabled && tv.connected && !tv.demo;
-  const acctBal = useLive
-    ? (tv.balance != null ? '$' + fmtNum(tv.balance, 0) : '—')
-    : (paperResp?.balance != null ? '$' + fmtNum(paperResp.balance, 0) : '—');
-  const acctLabel = useLive ? `LIVE · ${tv.account_name||''}` : 'STRATEGY ACCOUNT';
-  const acctRet   = useLive
-    ? (tv.today_dollar_pnl != null ? (tv.today_dollar_pnl >= 0 ? '+' : '') + '$' + fmtNum(tv.today_dollar_pnl, 0) + ' TODAY' : '')
-    : (paperResp?.return_pct != null ? (paperResp.return_pct >= 0 ? '+' : '') + fmtNum(paperResp.return_pct, 1) + '% TOTAL RETURN' : '');
-  const acctSub   = useLive
-    ? (tv.connected ? '● TRADOVATE LIVE' : '○ DISCONNECTED')
-    : `${paperResp?.total_trades||0} trades · start $${fmtNum(paperResp?.starting_balance,0)}`;
-  const acctCard = `<div class="ticker-card">
-    <div class="ticker-sym">${acctLabel}</div>
-    <div class="ticker-price">${acctBal}</div>
-    <div class="ticker-change ${(useLive ? tv.today_dollar_pnl : paperResp?.return_pct)||0 >= 0 ? 'pos' : 'neg'}">${acctRet}</div>
-    <div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text3)">${acctSub}</div>
-  </div>`;
+  let acctCard;
+  if (useLive) {
+    const liveBal = tv.balance != null ? '$' + fmtNum(tv.balance, 0) : '—';
+    const todayP  = tv.today_dollar_pnl;
+    const todayStr = todayP != null ? (todayP >= 0 ? '+' : '') + '$' + fmtNum(todayP, 0) + ' TODAY' : '';
+    acctCard = `<div class="ticker-card">
+      <div class="ticker-sym">LIVE ACCOUNT · ${tv.account_name||''}</div>
+      <div class="ticker-price">${liveBal}</div>
+      <div class="ticker-change ${(todayP||0) >= 0 ? 'pos' : 'neg'}">${todayStr}</div>
+      <div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text3)">● TRADOVATE LIVE</div>
+    </div>`;
+  } else {
+    const { equity, closed } = calcStrategyEquity(allTrades);
+    const retPct = ((equity - STRATEGY_START) / STRATEGY_START * 100);
+    const retStr = (retPct >= 0 ? '+' : '') + retPct.toFixed(2) + '%';
+    const balStr = '$' + equity.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
+    acctCard = `<div class="ticker-card">
+      <div class="ticker-sym">STRATEGY ACCOUNT</div>
+      <div class="ticker-price">${balStr}</div>
+      <div class="ticker-change ${retPct >= 0 ? 'pos' : 'neg'}">${retStr} TOTAL RETURN</div>
+      <div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text3)">START $${STRATEGY_START.toLocaleString()} · ${closed} TRADES</div>
+    </div>`;
+  }
 
   // Calendar card
   const calStatus = cal.status || 'CLEAR';
