@@ -769,20 +769,21 @@ async function apiFetch(url) {
 // OVERVIEW TAB
 // ═══════════════════════════════════════════════════════
 async function loadOverview() {
-  const [market, tradesResp, calResp, tvResp] = await Promise.all([
+  const [market, tradesResp, calResp, tvResp, paperResp] = await Promise.all([
     apiFetch('/api/apex/market'),
     apiFetch('/api/apex/trades'),
     apiFetch('/api/apex/calendar'),
     apiFetch('/api/apex/tradovate'),
+    apiFetch('/api/paper/account'),
   ]);
-  renderTickerStrip(market, tradesResp, calResp, tvResp);
+  renderTickerStrip(market, tradesResp, calResp, tvResp, paperResp);
   const trades = tradesResp?.open_trades || [];
   const stats  = tradesResp?.stats || {};
   renderOpenPositions(trades);
-  renderRecentTrades(stats);
+  renderRecentTrades(tradesResp);
 }
 
-function renderTickerStrip(market, tradesResp, calResp, tvResp) {
+function renderTickerStrip(market, tradesResp, calResp, tvResp, paperResp) {
   const m = market?.market || {};
   const stats = tradesResp?.stats || {};
   const cal = calResp || {};
@@ -818,15 +819,23 @@ function renderTickerStrip(market, tradesResp, calResp, tvResp) {
     <div style="margin-top:4px">${sigHtml}</div>
   </div>`;
 
-  // Account card
-  const bal = tv.balance != null ? '$' + fmtNum(tv.balance, 0) : '—';
-  const todayPnl = tv.today_dollar_pnl ?? null;
-  const todayStr = todayPnl != null ? (todayPnl >= 0 ? '+' : '') + '$' + fmtNum(todayPnl, 0) : '—';
+  // Account card — strategy (paper) account when demo; live account when TRADOVATE_DEMO=false
+  const useLive = tv.enabled && tv.connected && !tv.demo;
+  const acctBal = useLive
+    ? (tv.balance != null ? '$' + fmtNum(tv.balance, 0) : '—')
+    : (paperResp?.balance != null ? '$' + fmtNum(paperResp.balance, 0) : '—');
+  const acctLabel = useLive ? `LIVE · ${tv.account_name||''}` : 'STRATEGY ACCOUNT';
+  const acctRet   = useLive
+    ? (tv.today_dollar_pnl != null ? (tv.today_dollar_pnl >= 0 ? '+' : '') + '$' + fmtNum(tv.today_dollar_pnl, 0) + ' TODAY' : '')
+    : (paperResp?.return_pct != null ? (paperResp.return_pct >= 0 ? '+' : '') + fmtNum(paperResp.return_pct, 1) + '% TOTAL RETURN' : '');
+  const acctSub   = useLive
+    ? (tv.connected ? '● TRADOVATE LIVE' : '○ DISCONNECTED')
+    : `${paperResp?.total_trades||0} trades · start $${fmtNum(paperResp?.starting_balance,0)}`;
   const acctCard = `<div class="ticker-card">
-    <div class="ticker-sym">ACCOUNT · ${tv.account_name||'DEMO'}</div>
-    <div class="ticker-price">${bal}</div>
-    <div class="ticker-change ${(todayPnl||0) >= 0 ? 'pos' : 'neg'}">TODAY ${todayStr}</div>
-    <div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text3)">${tv.connected ? '● CONNECTED' : '○ DISCONNECTED'}</div>
+    <div class="ticker-sym">${acctLabel}</div>
+    <div class="ticker-price">${acctBal}</div>
+    <div class="ticker-change ${(useLive ? tv.today_dollar_pnl : paperResp?.return_pct)||0 >= 0 ? 'pos' : 'neg'}">${acctRet}</div>
+    <div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text3)">${acctSub}</div>
   </div>`;
 
   // Calendar card
@@ -871,8 +880,13 @@ function renderOpenPositions(trades) {
   </table>`;
 }
 
-function renderRecentTrades(stats) {
-  const closed = (stats.recent_closed || stats.last_trades || []).slice(0, 5);
+function renderRecentTrades(tradesResp) {
+  const allTrades = tradesResp?.all_trades || [];
+  const stats     = tradesResp?.stats || {};
+  // Last 5 closed, excluding test_endpoint
+  const closed = allTrades
+    .filter(t => t.status === 'closed' && t.exit_reason !== 'test_endpoint' && t.notes !== 'test_endpoint' && t.setup !== 'test_endpoint')
+    .slice(0, 5);
   if (!closed.length) {
     document.getElementById('recentTradesTbl').innerHTML = '<div class="tbl-empty">No closed trades</div>';
     document.getElementById('streakBar').innerHTML = '';
@@ -894,12 +908,18 @@ function renderRecentTrades(stats) {
     <tbody>${rows}</tbody>
   </table>`;
 
-  const todayR = stats.today_pnl_r != null ? `TODAY ${fmtR(stats.today_pnl_r)}` : '';
-  const weekR  = stats.week_pnl_r  != null ? `WEEK ${fmtR(stats.week_pnl_r)}` : '';
-  const streak = stats.current_streak != null
-    ? `<span style="color:${stats.current_streak > 0 ? 'var(--green)' : 'var(--red)'}">${stats.current_streak > 0 ? '🔥' : '❌'} ${Math.abs(stats.current_streak)} ${stats.current_streak > 0 ? 'WIN' : 'LOSS'} STREAK</span>`
+  const todayR = stats.today_r != null ? `TODAY ${fmtR(stats.today_r)}` : '';
+  const totalR = stats.total_r != null ? `TOTAL ${fmtR(stats.total_r)}` : '';
+  // Win streak from closed trades
+  let streak = 0;
+  for (const t of closed) {
+    if ((t.pnl_r||0) > 0) { if (streak >= 0) streak++; else break; }
+    else { if (streak <= 0) streak--; else break; }
+  }
+  const streakHtml = streak !== 0
+    ? `<span style="color:${streak > 0 ? 'var(--green)' : 'var(--red)'}">${streak > 0 ? '🔥' : '❌'} ${Math.abs(streak)} ${streak > 0 ? 'WIN' : 'LOSS'} STREAK</span>`
     : '';
-  document.getElementById('streakBar').innerHTML = [todayR, weekR, streak].filter(Boolean).join('&emsp;');
+  document.getElementById('streakBar').innerHTML = [todayR, totalR, streakHtml].filter(Boolean).join('&emsp;');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -975,7 +995,12 @@ async function loadTradovate() {
 async function loadTrades() {
   const data = await apiFetch('/api/apex/trades');
   if (!data) return;
-  _allTrades = [...(data.open_trades||[]), ...(data.stats?.all_trades||data.stats?.recent_closed||[])];
+  // all_trades from server includes both open and closed; deduplicate by id
+  const seen = new Set();
+  _allTrades = [...(data.all_trades||[]), ...(data.open_trades||[])].filter(t => {
+    if (seen.has(t.id)) return false;
+    seen.add(t.id); return true;
+  });
   renderTradesTable();
 }
 
@@ -988,8 +1013,8 @@ function setTradeFilter(f, btn) {
 
 function renderTradesTable() {
   let trades = _allTrades;
-  // Hide test_endpoint trades
-  trades = trades.filter(t => !(t.setup||'').includes('test') && !(t.symbol||'').includes('test'));
+  // Only hide explicit test_endpoint rows — all real historical trades must show
+  trades = trades.filter(t => t.exit_reason !== 'test_endpoint' && t.notes !== 'test_endpoint' && t.setup !== 'test_endpoint');
   if (_tradeFilter === 'open')   trades = trades.filter(t => t.status === 'open');
   if (_tradeFilter === 'closed') trades = trades.filter(t => t.status === 'closed');
   if (_tradeFilter === 'win')    trades = trades.filter(t => (t.pnl_r||0) > 0);
@@ -1037,7 +1062,9 @@ async function loadPerformance() {
   const data = await apiFetch('/api/apex/trades');
   if (!data) return;
   const stats = data.stats || {};
-  const allTrades = stats.all_trades || stats.recent_closed || [];
+  const allTrades = (data.all_trades || []).filter(t =>
+    t.exit_reason !== 'test_endpoint' && t.notes !== 'test_endpoint' && t.setup !== 'test_endpoint'
+  );
 
   // Summary stats
   const closed = allTrades.filter(t => t.status === 'closed');

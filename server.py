@@ -3180,12 +3180,24 @@ def apex_scan():
 
 @app.route('/api/apex/trades', methods=['GET'])
 def apex_trades():
-    """Return open trades and stats."""
+    """Return open trades, all historical trades, and stats."""
     try:
-        from trade_tracker import get_open_trades, get_stats
+        from trade_tracker import get_open_trades, get_stats, init_trades_table
+        import db as _db_t
+        init_trades_table()
+        cols = ['id','symbol','direction','setup','mode','entry_price','stop',
+                'target','rr_planned','session','quality','entry_time','exit_price',
+                'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
+        conn = _db_t.connect()
+        rows = conn.execute(
+            'SELECT * FROM apex_trades ORDER BY entry_time DESC LIMIT 500'
+        ).fetchall()
+        conn.close()
+        all_trades = [dict(zip(cols, r)) for r in rows]
         return jsonify({
             'ok':         True,
             'open_trades': get_open_trades(),
+            'all_trades':  all_trades,
             'stats':      get_stats(),
         })
     except Exception as e:
