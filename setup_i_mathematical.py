@@ -767,6 +767,11 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
     _i_session_counts[sess_key] = _i_session_counts.get(sess_key, 0) + 1
 
     active_xgb_prob = short_prob if direction == 'short' else long_prob
+    logger.info(
+        f'[I-1/6] Signal generated: {symbol} {direction} '
+        f'XGB={active_xgb_prob:.3f} LR={lr_prob:.3f} HTF={bias}'
+    )
+    logger.info(f'[I-2/6] Dedup check: key={dedup_key} (passed)')
     return {
         'symbol':     symbol,
         'direction':  direction,

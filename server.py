@@ -1940,38 +1940,40 @@ def background_scheduler():
                             _i_tid = None
                             try:
                                 logger.info(
-                                    f'Setup I: PRE log_trade {_sym} {sig["direction"]} '
-                                    f'entry={sig.get("entry")} stop={sig.get("stop")} '
-                                    f'target={sig.get("target")} rr={sig.get("rr")} '
-                                    f'session={sig.get("session")} quality={sig.get("quality")} '
+                                    f'[I-3/6] Calling log_trade: entry={sig.get("entry")} '
+                                    f'stop={sig.get("stop")} target={sig.get("target")} '
                                     f'setup={sig.get("setup")} keys={list(sig.keys())}'
                                 )
                                 _i_tid = log_trade(sig)
-                                if _i_tid:
-                                    logger.info(f'Setup I: trade logged id={_i_tid} {_sym} {sig["direction"]}')
-                                else:
-                                    logger.error(
-                                        f'CRITICAL: Setup I log_trade() returned None — '
+                                logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
+                                if not _i_tid:
+                                    logger.critical(
+                                        f'[I-4/6] CRITICAL: Setup I log_trade() returned None — '
                                         f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
                                     )
                             except Exception as _i_lte:
-                                logger.error(
-                                    f'CRITICAL: Setup I log_trade() EXCEPTION — '
+                                logger.critical(
+                                    f'[I-4/6] CRITICAL: Setup I log_trade() EXCEPTION — '
                                     f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
                                     exc_info=True
                                 )
                             try:
+                                logger.info(f'[I-5/6] Calling send_telegram')
                                 msg = format_i_alert(sig) + _i_risk_footer
                                 send_telegram(msg)
                             except Exception as _i_te:
-                                logger.error(f'Setup I: send_telegram failed {_sym}: {_i_te}')
-                            logger.info(f'Setup I: calling _execute_via_tradovate for {_sym} trade_id={_i_tid}')
+                                logger.critical(f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}', exc_info=True)
+                            from tradovate import TRADOVATE_ENABLED as _i_tv_enabled
+                            logger.info(f'[I-6/6] Calling execute_via_tradovate: enabled={_i_tv_enabled}')
                             if _i_tid:
-                                _execute_via_tradovate(sig, _i_tid)
+                                try:
+                                    _execute_via_tradovate(sig, _i_tid)
+                                except Exception as _i_exe:
+                                    logger.critical(f'[I-6/6] CRITICAL: _execute_via_tradovate raised: {_i_exe}', exc_info=True)
                             else:
-                                logger.warning(f'Setup I: skipping _execute_via_tradovate — no trade_id logged for {_sym}')
+                                logger.critical(f'[I-6/6] CRITICAL: skipping execute — no trade_id for {_sym} (log_trade failed)')
                             logger.info(
-                                f'Setup I signal: {_sym} {sig["direction"].upper()} '
+                                f'Setup I signal complete: {_sym} {sig["direction"].upper()} '
                                 f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
                                 f'h={sig.get("hurst","?"):.2f} db_id={_i_tid}'
                             )

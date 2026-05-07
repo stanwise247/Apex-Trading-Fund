@@ -215,6 +215,9 @@ def authenticate() -> dict:
     # Return cached token if still valid
     if (_token_cache['access_token']
             and now < _token_cache['expiry'] - 60):
+        age = int(now - (_token_cache['expiry'] - 80 * 60))
+        ttl = int(_token_cache['expiry'] - now)
+        logger.info(f'Tradovate: token age={age}s TTL={ttl}s (expires at 4800s / 80min)')
         return {
             'ok':         True,
             'token':      _token_cache['access_token'],
@@ -532,16 +535,18 @@ def place_bracket_order(
         'isAutomated': True,
     }
 
+    _order_url = f'{BASE_URL}/order/placeMarket'
     logger.info(
         f'Tradovate: placing market order {contracts}x {instrument} '
-        f'{action} (entry≈{entry:.2f} SL={stop:.2f} TP={target:.2f})'
+        f'{action} (entry≈{entry:.2f} SL={stop:.2f} TP={target:.2f}) '
+        f'URL={_order_url} accountId={account_id} accountSpec={TRADOVATE_ACCOUNT}'
     )
 
     try:
         resp = requests.post(
-            f'{BASE_URL}/order/placeMarket',
+            _order_url,
             json=payload,
-            headers=headers,
+            headers={**headers, 'Content-Type': 'application/json'},
             timeout=15,
         )
         if not resp.ok:
@@ -550,7 +555,14 @@ def place_bracket_order(
                 err_body = resp.json()
             except Exception:
                 pass
-            logger.error(f'placeMarket {resp.status_code}: {err_body}')
+            if resp.status_code == 404:
+                logger.error(
+                    f'placeMarket 404 — URL={_order_url} symbol={instrument} '
+                    f'accountId={account_id} accountSpec={TRADOVATE_ACCOUNT} '
+                    f'payload={payload} response={err_body}'
+                )
+            else:
+                logger.error(f'placeMarket {resp.status_code}: {err_body}')
             return {'ok': False, 'error': f'HTTP {resp.status_code}: {err_body}'}
 
         data       = resp.json()
