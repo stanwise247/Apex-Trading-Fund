@@ -3348,12 +3348,28 @@ def apex_tradovate_test():
         diag['balance'] = acct.get('balance')
         diag['acct_ok'] = acct.get('ok')
 
-        # Step 3 — place 1-contract MNQ market order on demo
+        # Step 3 — probe symbol lookup before placing order
+        from tradovate import BASE_URL, _auth_header
+        import requests as _req
         instrument = _tradovate_symbol('MNQ')
-        diag['instrument'] = instrument
+        diag['instrument']  = instrument
+        diag['base_url']    = BASE_URL
+        diag['order_url']   = f'{BASE_URL}/order/placeOrder'
 
-        # Use a realistic price so the order doesn't get rejected for bad price
-        # entry/stop/target are for logging only — market order ignores them
+        # Verify the symbol exists on Tradovate
+        try:
+            _h = _auth_header()
+            _sym_resp = _req.get(
+                f'{BASE_URL}/contract/find',
+                params={'name': instrument},
+                headers=_h, timeout=10
+            )
+            diag['symbol_lookup_status'] = _sym_resp.status_code
+            diag['symbol_lookup_body']   = _sym_resp.json() if _sym_resp.ok else _sym_resp.text[:200]
+        except Exception as _se:
+            diag['symbol_lookup_error'] = str(_se)
+
+        # Step 4 — place 1-contract MNQ market order on demo
         result = place_bracket_order(
             symbol='MNQ', direction='long', contracts=1,
             entry=0, stop=0, target=0,
