@@ -3975,9 +3975,9 @@ def apex_test_setup_i():
         if _i_tid:
             try:
                 conn = _si_db.connect()
-                row = conn.execute('SELECT id, symbol, direction, setup, entry, status FROM apex_trades WHERE id=?', (_i_tid,)).fetchone()
+                row = conn.execute('SELECT id, symbol, direction, setup, entry_price, status FROM apex_trades WHERE id=?', (_i_tid,)).fetchone()
                 conn.close()
-                steps['I_4_db_row'] = dict(zip(['id','symbol','direction','setup','entry','status'], row)) if row else {'error': 'row not found'}
+                steps['I_4_db_row'] = dict(zip(['id','symbol','direction','setup','entry_price','status'], row)) if row else {'error': 'row not found'}
             except Exception as _dbe:
                 steps['I_4_db_row'] = {'error': str(_dbe)}
 
