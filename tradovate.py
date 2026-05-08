@@ -535,7 +535,7 @@ def place_bracket_order(
         'isAutomated': True,
     }
 
-    _order_url = f'{BASE_URL}/order/placeMarket'
+    _order_url = f'{BASE_URL}/order/placeOrder'
     logger.info(
         f'Tradovate: placing market order {contracts}x {instrument} '
         f'{action} (entry≈{entry:.2f} SL={stop:.2f} TP={target:.2f}) '
@@ -555,14 +555,11 @@ def place_bracket_order(
                 err_body = resp.json()
             except Exception:
                 pass
-            if resp.status_code == 404:
-                logger.error(
-                    f'placeMarket 404 — URL={_order_url} symbol={instrument} '
-                    f'accountId={account_id} accountSpec={TRADOVATE_ACCOUNT} '
-                    f'payload={payload} response={err_body}'
-                )
-            else:
-                logger.error(f'placeMarket {resp.status_code}: {err_body}')
+            logger.error(
+                f'placeOrder {resp.status_code} — URL={_order_url} symbol={instrument} '
+                f'accountId={account_id} accountSpec={TRADOVATE_ACCOUNT} '
+                f'payload={payload} response={err_body}'
+            )
             return {'ok': False, 'error': f'HTTP {resp.status_code}: {err_body}'}
 
         data       = resp.json()
@@ -584,7 +581,7 @@ def place_bracket_order(
         }
 
     except requests.exceptions.RequestException as e:
-        logger.error(f'placeMarket request failed: {e}')
+        logger.error(f'placeOrder request failed: {e}')
         return {'ok': False, 'error': str(e)}
 
 
