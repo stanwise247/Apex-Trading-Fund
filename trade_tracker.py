@@ -20,10 +20,12 @@ NY_TZ   = ZoneInfo('America/New_York')
 UTC     = ZoneInfo('UTC')
 
 SESSION_END_UTC = {
-    'NQ': 19, 'ES': 19, 'GC': 17
+    'MNQ': 19, 'NQ': 19, 'ES': 19, 'MES': 19, 'GC': 17, 'MGC': 17
 }
 MAX_BARS = {
-    'swing': 100, 'scalp': 30
+    'swing':    100,   # ~8h on 5min bars
+    'intraday':  48,   # 4h on 5min bars — Setup I/D/E/H
+    'scalp':     30,   # 2.5h on 5min bars
 }
 
 
