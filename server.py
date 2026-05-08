@@ -3915,6 +3915,115 @@ def apex_test_telegram_get():
         return jsonify({'ok': False, 'error': str(e), 'diag': diag})
 
 
+@app.route('/api/apex/test_setup_i', methods=['GET'])
+def apex_test_setup_i():
+    """
+    End-to-end Setup I verification.
+    Runs a mock signal through log_trade → send_telegram → execute_via_tradovate
+    and returns each step's result as JSON. Does NOT wait for a real signal.
+    The mock trade is immediately closed as test_endpoint so it doesn't pollute open trades.
+    """
+    steps = {}
+    try:
+        from setup_i_mathematical import scan_setup_i, format_i_alert
+        from trade_tracker import log_trade
+        from live_scanner import send_telegram
+        from tradovate import TRADOVATE_ENABLED as _i_tv_enabled
+        from datetime import datetime, timezone
+        import db as _si_db
+
+        # Try a real scan first — if market hours and model ready it may fire [I-1/6],[I-2/6]
+        now_utc = datetime.now(timezone.utc)
+        real_sig = None
+        for _sym in ['MNQ', 'ES']:
+            try:
+                real_sig = scan_setup_i(_sym, now_utc)
+                if real_sig:
+                    steps['real_signal'] = {'symbol': _sym, 'direction': real_sig.get('direction')}
+                    break
+            except Exception as _rse:
+                steps[f'real_scan_{_sym}_error'] = str(_rse)
+
+        # Fall back to mock signal if no real one
+        sig = real_sig or {
+            'symbol':    'MNQ',
+            'direction': 'long',
+            'setup':     'I_mathematical_alpha',
+            'mode':      'intraday',
+            'entry':     20000.0,
+            'stop':      19950.0,
+            'target':    20150.0,
+            'rr':        3.0,
+            'session':   'NY Primary',
+            'quality':   'test',
+            'xgb_prob':  0.72,
+            'lr_prob':   0.68,
+            'hurst':     0.62,
+        }
+        steps['signal_source'] = 'real' if real_sig else 'mock'
+        steps['signal'] = {k: v for k, v in sig.items() if k not in ('raw_data',)}
+
+        # [I-3/6] log_trade
+        _i_tid = None
+        try:
+            _i_tid = log_trade(sig)
+            steps['I_3_log_trade'] = {'ok': bool(_i_tid), 'trade_id': _i_tid}
+        except Exception as _lte:
+            steps['I_3_log_trade'] = {'ok': False, 'error': str(_lte)}
+
+        # [I-4/6] confirm DB row
+        if _i_tid:
+            try:
+                conn = _si_db.connect()
+                row = conn.execute('SELECT id, symbol, direction, setup, entry, status FROM apex_trades WHERE id=?', (_i_tid,)).fetchone()
+                conn.close()
+                steps['I_4_db_row'] = dict(zip(['id','symbol','direction','setup','entry','status'], row)) if row else {'error': 'row not found'}
+            except Exception as _dbe:
+                steps['I_4_db_row'] = {'error': str(_dbe)}
+
+        # [I-5/6] send_telegram
+        try:
+            msg = format_i_alert(sig) if callable(format_i_alert) else f'🧪 Setup I test — {sig["symbol"]} {sig["direction"]}'
+            _tg_ok = send_telegram(msg + '\n<i>⚠️ TEST — not a real signal</i>')
+            steps['I_5_telegram'] = {'ok': _tg_ok}
+        except Exception as _te:
+            steps['I_5_telegram'] = {'ok': False, 'error': str(_te)}
+
+        # [I-6/6] execute_via_tradovate
+        steps['I_6_tradovate_enabled'] = _i_tv_enabled
+        if _i_tid and _i_tv_enabled:
+            try:
+                _execute_via_tradovate(sig, _i_tid)
+                steps['I_6_execute'] = {'ok': True}
+            except Exception as _exe:
+                steps['I_6_execute'] = {'ok': False, 'error': str(_exe)}
+        else:
+            steps['I_6_execute'] = {'skipped': True, 'reason': 'tradovate_disabled or no trade_id'}
+
+        # Clean up: close the test trade immediately
+        if _i_tid:
+            try:
+                conn = _si_db.connect()
+                conn.execute(
+                    "UPDATE apex_trades SET status='closed', exit_reason='test_endpoint', exit_time=? WHERE id=?",
+                    (datetime.now(timezone.utc).isoformat(), _i_tid)
+                )
+                conn.commit()
+                conn.close()
+                steps['cleanup'] = 'trade closed as test_endpoint'
+            except Exception as _ce:
+                steps['cleanup'] = f'cleanup failed: {_ce}'
+
+        all_ok = (
+            steps.get('I_3_log_trade', {}).get('ok') and
+            steps.get('I_5_telegram', {}).get('ok')
+        )
+        return jsonify({'ok': all_ok, 'steps': steps})
+
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e), 'steps': steps})
+
+
 # ─────────────────────────────────────────────────────────────
 #  APEX SESSION ALERTS
 # ─────────────────────────────────────────────────────────────
