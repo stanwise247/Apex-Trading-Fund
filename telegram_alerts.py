@@ -71,8 +71,9 @@ def send_telegram(message, token, chat_id, parse_mode='HTML', silent=False):
 def load_telegram_config():
     """Load Telegram credentials — env vars take priority over config.json"""
     import os
-    # Environment variables take priority (Railway deployment)
-    token   = os.environ.get('TELEGRAM_TOKEN', '')
+    # Accept both TELEGRAM_TOKEN and TELEGRAM_BOT_TOKEN (Railway may use either)
+    token   = (os.environ.get('TELEGRAM_TOKEN', '')
+               or os.environ.get('TELEGRAM_BOT_TOKEN', ''))
     chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
     if token and chat_id:
         return token, chat_id
@@ -80,8 +81,8 @@ def load_telegram_config():
     try:
         with open('config.json') as f:
             cfg = json.load(f)
-        token   = cfg.get('telegram_token', '')
-        chat_id = cfg.get('telegram_chat_id', '')
+        token   = token   or cfg.get('telegram_token', '')
+        chat_id = chat_id or cfg.get('telegram_chat_id', '')
         return token, chat_id
     except Exception:
         return '', ''

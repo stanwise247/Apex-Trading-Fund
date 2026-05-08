@@ -3795,6 +3795,43 @@ def apex_telegram_test():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/test_telegram', methods=['GET', 'POST'])
+def apex_test_telegram_get():
+    """
+    GET-accessible Telegram test with full diagnostics.
+    Shows which env vars are set and whether the message was delivered.
+    """
+    import os, requests as _req
+    from datetime import datetime, timezone
+    token_a = bool(os.environ.get('TELEGRAM_TOKEN'))
+    token_b = bool(os.environ.get('TELEGRAM_BOT_TOKEN'))
+    chat    = bool(os.environ.get('TELEGRAM_CHAT_ID'))
+    diag = {
+        'TELEGRAM_TOKEN_set':     token_a,
+        'TELEGRAM_BOT_TOKEN_set': token_b,
+        'TELEGRAM_CHAT_ID_set':   chat,
+        'active_var': ('TELEGRAM_TOKEN' if token_a else 'TELEGRAM_BOT_TOKEN' if token_b else 'NONE'),
+    }
+    try:
+        from live_scanner import send_telegram, load_telegram_config
+        tok, cid = load_telegram_config()
+        diag['resolved_token_len'] = len(tok) if tok else 0
+        diag['resolved_chat_id']   = cid[:6] + '…' if cid else ''
+        if not tok or not cid:
+            return jsonify({'ok': False, 'reason': 'No credentials resolved', 'diag': diag})
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        result = send_telegram(
+            f'✅ <b>APEX Telegram Test</b>\n'
+            f'Wise Meridian Capital — APEX ENGINE v1.1\n'
+            f'<i>{now}</i>\n'
+            f'If you see this, Telegram alerts are working.'
+        )
+        diag['send_result'] = result
+        return jsonify({'ok': result, 'diag': diag})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e), 'diag': diag})
+
+
 # ─────────────────────────────────────────────────────────────
 #  APEX SESSION ALERTS
 # ─────────────────────────────────────────────────────────────

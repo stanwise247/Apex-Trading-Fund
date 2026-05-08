@@ -43,7 +43,9 @@ DAY_FILTERS = {
 
 def load_telegram_config():
     import os
-    token   = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    # Accept both TELEGRAM_BOT_TOKEN and TELEGRAM_TOKEN (Railway may use either)
+    token   = (os.environ.get('TELEGRAM_BOT_TOKEN', '')
+               or os.environ.get('TELEGRAM_TOKEN', ''))
     chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
     try:
         with open('config.json') as f:
