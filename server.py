@@ -3304,6 +3304,73 @@ def apex_tradovate_order():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/tradovate/test', methods=['GET'])
+def apex_tradovate_test():
+    """
+    End-to-end Tradovate verification.
+    1. Authenticates and logs token age.
+    2. Places 1-contract MNQ market order on demo.
+    3. Returns orderId, fill_price, full diagnostics.
+    ONLY callable when TRADOVATE_ENABLED=true.
+    """
+    diag = {}
+    try:
+        from tradovate import (
+            TRADOVATE_ENABLED, TRADOVATE_DEMO, TRADOVATE_ACCOUNT,
+            authenticate, _token_cache, place_bracket_order,
+            get_account, _tradovate_symbol,
+        )
+        import time as _time
+        diag['TRADOVATE_ENABLED'] = TRADOVATE_ENABLED
+        diag['TRADOVATE_DEMO']    = TRADOVATE_DEMO
+        diag['account_spec']      = TRADOVATE_ACCOUNT or 'not_set'
+
+        if not TRADOVATE_ENABLED:
+            return jsonify({'ok': False, 'reason': 'TRADOVATE_ENABLED=false — set it to true first', 'diag': diag})
+
+        # Step 1 — auth
+        auth = authenticate()
+        diag['auth_ok']    = auth.get('ok', False)
+        diag['account_id'] = auth.get('account_id') or _token_cache.get('account_id')
+
+        _now = _time.time()
+        _exp = _token_cache.get('expiry', 0)
+        if _exp:
+            diag['token_age_s'] = int(_now - (_exp - 80 * 60))
+            diag['token_ttl_s'] = int(_exp - _now)
+
+        if not auth.get('ok'):
+            diag['auth_error'] = auth.get('error')
+            return jsonify({'ok': False, 'reason': 'Auth failed', 'diag': diag})
+
+        # Step 2 — account balance check
+        acct = get_account()
+        diag['balance'] = acct.get('balance')
+        diag['acct_ok'] = acct.get('ok')
+
+        # Step 3 — place 1-contract MNQ market order on demo
+        instrument = _tradovate_symbol('MNQ')
+        diag['instrument'] = instrument
+
+        # Use a realistic price so the order doesn't get rejected for bad price
+        # entry/stop/target are for logging only — market order ignores them
+        result = place_bracket_order(
+            symbol='MNQ', direction='long', contracts=1,
+            entry=0, stop=0, target=0,
+        )
+        diag['order_result'] = result
+        diag['order_ok']     = result.get('ok', False)
+        diag['order_id']     = result.get('order_id')
+        diag['fill_price']   = result.get('fill_price')
+        diag['http_error']   = result.get('error') if not result.get('ok') else None
+
+        return jsonify({'ok': result.get('ok', False), 'diag': diag})
+
+    except Exception as e:
+        diag['exception'] = str(e)
+        return jsonify({'ok': False, 'error': str(e), 'diag': diag})
+
+
 @app.route('/api/apex/market', methods=['GET'])
 def apex_market():
     """Return current market structure per instrument."""
