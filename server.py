@@ -3387,6 +3387,133 @@ def apex_tradovate_test():
         return jsonify({'ok': False, 'error': str(e), 'diag': diag})
 
 
+@app.route('/api/apex/admin/flatten_demo', methods=['GET'])
+def apex_flatten_demo():
+    """
+    One-time admin endpoint: close all open positions on the Tradovate DEMO account.
+    Refuses to run on live account (TRADOVATE_DEMO must be true).
+    Remove this endpoint once confirmed all positions are flat.
+    """
+    try:
+        from tradovate import (
+            TRADOVATE_ENABLED, TRADOVATE_DEMO, TRADOVATE_ACCOUNT,
+            authenticate, _token_cache, BASE_URL, _auth_header,
+        )
+        import requests as _req
+
+        # Safety gate — demo only
+        if not TRADOVATE_ENABLED:
+            return jsonify({'ok': False, 'reason': 'TRADOVATE_ENABLED=false'})
+        if not TRADOVATE_DEMO:
+            return jsonify({'ok': False, 'reason': 'LIVE ACCOUNT DETECTED — refusing to flatten. Only runs on demo.'})
+
+        # Auth
+        auth = authenticate()
+        if not auth.get('ok'):
+            return jsonify({'ok': False, 'reason': f'Auth failed: {auth.get("error")}' })
+
+        account_id   = _token_cache.get('account_id')
+        account_spec = TRADOVATE_ACCOUNT
+        headers      = _auth_header()
+
+        # Step 1 — fetch all positions
+        pos_resp = _req.get(f'{BASE_URL}/position/list', headers=headers, timeout=10)
+        pos_resp.raise_for_status()
+        raw_positions = pos_resp.json() if isinstance(pos_resp.json(), list) else []
+
+        # Filter to this account and non-zero
+        open_positions = [
+            p for p in raw_positions
+            if p.get('accountId') == account_id and p.get('netPos', 0) != 0
+        ]
+
+        if not open_positions:
+            return jsonify({'ok': True, 'message': 'No open positions — already flat.', 'closed': [], 'errors': []})
+
+        closed = []
+        errors = []
+
+        for pos in open_positions:
+            contract_id = pos.get('contractId')
+            net_pos     = int(pos.get('netPos', 0))
+            avg_price   = pos.get('netPrice', 0)
+
+            # Step 2 — resolve contract name
+            symbol_name = str(contract_id)
+            try:
+                ctr = _req.get(
+                    f'{BASE_URL}/contract/item',
+                    params={'id': contract_id},
+                    headers=headers,
+                    timeout=10,
+                )
+                if ctr.ok:
+                    symbol_name = ctr.json().get('name', str(contract_id))
+            except Exception as _ce:
+                logger.warning(f'flatten_demo: contract lookup failed for {contract_id}: {_ce}')
+
+            # Step 3 — place closing order
+            # Long (netPos > 0) → Sell to close; Short (netPos < 0) → Buy to close
+            action   = 'Sell' if net_pos > 0 else 'Buy'
+            close_qty = abs(net_pos)
+
+            payload = {
+                'accountSpec': account_spec,
+                'accountId':   account_id,
+                'action':      action,
+                'symbol':      symbol_name,
+                'orderQty':    close_qty,
+                'orderType':   'Market',
+                'isAutomated': True,
+            }
+
+            logger.info(
+                f'flatten_demo: closing {close_qty}x {symbol_name} {action} '
+                f'(contractId={contract_id} netPos={net_pos} avg={avg_price})'
+            )
+
+            try:
+                ord_resp = _req.post(
+                    f'{BASE_URL}/order/placeOrder',
+                    json=payload,
+                    headers={**headers, 'Content-Type': 'application/json'},
+                    timeout=15,
+                )
+                if ord_resp.ok:
+                    ord_data = ord_resp.json()
+                    order_id = (ord_data.get('orderId')
+                                or ord_data.get('orderStatus', {}).get('orderId')
+                                or str(ord_data))
+                    closed.append({
+                        'symbol':      symbol_name,
+                        'qty':         close_qty,
+                        'side':        action,
+                        'order_id':    str(order_id),
+                        'contract_id': contract_id,
+                        'was_netPos':  net_pos,
+                    })
+                    logger.info(f'flatten_demo: closed {symbol_name} orderId={order_id}')
+                else:
+                    err = {'symbol': symbol_name, 'qty': close_qty, 'side': action,
+                           'http_status': ord_resp.status_code, 'body': ord_resp.text[:200]}
+                    errors.append(err)
+                    logger.error(f'flatten_demo: order failed {symbol_name}: {ord_resp.status_code} {ord_resp.text[:100]}')
+            except Exception as _oe:
+                errors.append({'symbol': symbol_name, 'qty': close_qty, 'side': action, 'error': str(_oe)})
+                logger.error(f'flatten_demo: exception placing order for {symbol_name}: {_oe}')
+
+        return jsonify({
+            'ok':      len(errors) == 0,
+            'closed':  closed,
+            'errors':  errors,
+            'summary': f'{len(closed)} position(s) closed, {len(errors)} error(s)',
+        })
+
+    except Exception as e:
+        logger.error(f'flatten_demo error: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/apex/market', methods=['GET'])
 def apex_market():
     """Return current market structure per instrument."""
