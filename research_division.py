@@ -647,57 +647,76 @@ BACKTEST_FUNCS = {
 #  DAILY BACKTEST RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _write_backtest(bt: BacktestResult, today) -> None:
+    """Write a BacktestResult to backtest_results in a fresh connection."""
+    c = _db.connect()
+    try:
+        c.execute(
+            "INSERT INTO backtest_results "
+            "(setup_id, lookback_days, run_date, total_signals, win_rate, sharpe, "
+            " avg_r, expectancy, max_drawdown, profit_factor, "
+            " benchmark_sharpe, benchmark_win_rate, "
+            " sharpe_vs_benchmark, wr_vs_benchmark, edge_score, bars_analysed) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                bt.setup_id, bt.lookback_days, today.isoformat(),
+                bt.total_signals,
+                round(bt.win_rate, 4) if bt.win_rate else 0,
+                round(bt.sharpe, 3) if bt.sharpe else None,
+                round(bt.avg_r, 4), round(bt.expectancy, 4),
+                round(bt.max_drawdown, 4), round(bt.profit_factor, 3),
+                bt.benchmark_sharpe, bt.benchmark_win_rate,
+                round(bt.sharpe_vs_benchmark, 1), round(bt.wr_vs_benchmark, 1),
+                bt.edge_score, bt.bars_analysed,
+            )
+        )
+        c.commit()
+    finally:
+        c.close()
+
+
 def run_daily_backtest(conn) -> dict:
     """
     Run all 7 setup backtests and write to backtest_results.
+    Each setup uses a fresh read-only connection to avoid PostgreSQL aborted-transaction
+    contamination across setups. Writes use a separate isolated connection.
     Also checks for 3 consecutive days of edge_score < 50 and sends Telegram alert.
     """
     today   = date.today()
     results = {}
 
     for sid, bt_func in BACKTEST_FUNCS.items():
+        # Use a fresh connection per setup — isolates any transaction errors
+        bt_conn = _db.connect()
         try:
-            bt = bt_func(conn, lookback_days=180)
-            if bt is None:
-                logger.warning(f'Backtest {sid}: returned None')
-                results[sid] = None
-                continue
+            bt = bt_func(bt_conn, lookback_days=180)
+        except Exception as e:
+            logger.error(f'Backtest {sid} execution failed: {e}')
+            bt = None
+        finally:
+            try:
+                bt_conn.close()
+            except Exception:
+                pass
 
-            conn.execute(
-                "INSERT INTO backtest_results "
-                "(setup_id, lookback_days, run_date, total_signals, win_rate, sharpe, "
-                " avg_r, expectancy, max_drawdown, profit_factor, "
-                " benchmark_sharpe, benchmark_win_rate, "
-                " sharpe_vs_benchmark, wr_vs_benchmark, edge_score, bars_analysed) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    bt.setup_id, bt.lookback_days, today.isoformat(),
-                    bt.total_signals,
-                    round(bt.win_rate, 4) if bt.win_rate else 0,
-                    round(bt.sharpe, 3) if bt.sharpe else None,
-                    round(bt.avg_r, 4),
-                    round(bt.expectancy, 4),
-                    round(bt.max_drawdown, 4),
-                    round(bt.profit_factor, 3),
-                    bt.benchmark_sharpe,
-                    bt.benchmark_win_rate,
-                    round(bt.sharpe_vs_benchmark, 1),
-                    round(bt.wr_vs_benchmark, 1),
-                    bt.edge_score,
-                    bt.bars_analysed,
-                )
-            )
-            conn.commit()
+        if bt is None:
+            logger.warning(f'Backtest {sid}: no result (insufficient data or error)')
+            results[sid] = None
+            continue
+
+        try:
+            _write_backtest(bt, today)
             results[sid] = bt
             logger.info(
                 f'Backtest {sid}: signals={bt.total_signals} '
-                f'edge={bt.edge_score} sharpe={bt.sharpe}'
+                f'edge={bt.edge_score} sharpe={bt.sharpe} '
+                f'wr={bt.win_rate:.2f} bars={bt.bars_analysed}'
             )
         except Exception as e:
-            logger.error(f'run_daily_backtest {sid}: {e}')
-            results[sid] = None
+            logger.error(f'Backtest {sid} write failed: {e}')
+            results[sid] = bt  # still return the result even if write failed
 
-    # Check for 3-day edge degradation
+    # Check for 3-day edge degradation (uses separate conn internally)
     _check_edge_degradation(conn)
     return results
 
