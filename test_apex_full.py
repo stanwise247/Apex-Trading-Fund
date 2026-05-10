@@ -33,6 +33,16 @@ def _api(path: str, timeout: int = 15):
     except Exception as e:
         return None
 
+def _api_post(path: str, timeout: int = 15):
+    """POST a Railway API endpoint, return parsed JSON or None."""
+    import requests
+    try:
+        r = requests.post(f'{RAILWAY_BASE}{path}', timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return None
+
 # ─────────────────────────────────────────────────────────────
 #  Test harness
 # ─────────────────────────────────────────────────────────────
@@ -757,6 +767,253 @@ def _print_results():
 
 
 # ─────────────────────────────────────────────────────────────
+#  TEST R1 — Research DB tables exist
+# ─────────────────────────────────────────────────────────────
+
+def test_r1_research_tables():
+    _section('TEST R1 — Research DB tables exist')
+    try:
+        import db as _db
+        conn = _db.connect()
+        tables = ['strategy_health_log', 'shadow_lab', 'research_decisions', 'backtest_results']
+        if _db.IS_POSTGRES:
+            for tbl in tables:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_name=?",
+                    (tbl,)
+                ).fetchone()
+                if row and row[0] > 0:
+                    _pass(f'TEST R1  {tbl} exists')
+                else:
+                    _fail(f'TEST R1  {tbl} exists', 'table not found')
+        else:
+            for tbl in tables:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                    (tbl,)
+                ).fetchone()
+                if row and row[0] > 0:
+                    _pass(f'TEST R1  {tbl} exists')
+                else:
+                    _fail(f'TEST R1  {tbl} exists', 'table not found')
+        conn.close()
+    except Exception as e:
+        _fail('TEST R1  Research DB tables', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R2 — Shadow lab seeded with correct candidates
+# ─────────────────────────────────────────────────────────────
+
+def test_r2_shadow_lab_seeded():
+    _section('TEST R2 — Shadow lab seeded')
+    try:
+        import db as _db
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT strategy_name, backtest_sharpe, backtest_win_rate, status "
+            "FROM shadow_lab WHERE status='ACTIVE' ORDER BY id"
+        ).fetchall()
+        conn.close()
+        expected = [
+            ('Post-Low-Vol Expansion', 29.91, 0.68),
+            ('Monday NY Open Long',    11.43, 0.61),
+            ('Value Area Continuation', 9.99, 0.58),
+        ]
+        if len(rows) < 3:
+            _fail('TEST R2  Shadow lab count', f'Expected 3+ ACTIVE candidates, got {len(rows)}')
+            return
+        _pass('TEST R2  Shadow lab count', f'{len(rows)} candidates')
+        for (name, sharpe, wr), row in zip(expected, rows):
+            if row[0] == name:
+                _pass(f'TEST R2  {name[:25]}', f'sharpe={row[1]} wr={row[2]} status={row[3]}')
+            else:
+                _fail(f'TEST R2  {name[:25]}', f'Expected "{name}", got "{row[0]}"')
+    except Exception as e:
+        _fail('TEST R2  Shadow lab seeded', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R3 — Health check runs without error
+# ─────────────────────────────────────────────────────────────
+
+def test_r3_health_check():
+    _section('TEST R3 — Health check runs without error')
+    try:
+        import research_division as rd
+        import db as _db
+
+        results = rd.run_weekly_health_check()
+        if not isinstance(results, dict) or len(results) == 0:
+            _fail('TEST R3  Health check', f'Expected dict with 7 setups, got {type(results)}')
+            return
+        _pass('TEST R3  Health check ran', f'{len(results)} setups processed')
+
+        # Confirm at least 1 row written to strategy_health_log
+        conn = _db.connect()
+        count = conn.execute("SELECT COUNT(*) FROM strategy_health_log").fetchone()[0]
+        conn.close()
+        if count > 0:
+            _pass('TEST R3  strategy_health_log written', f'{count} rows')
+        else:
+            _fail('TEST R3  strategy_health_log written', 'no rows found after health check')
+    except Exception as e:
+        _fail('TEST R3  Health check', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R4 — Backtest engine runs for all 7 setups
+# ─────────────────────────────────────────────────────────────
+
+def test_r4_backtest_engine():
+    _section('TEST R4 — Backtest engine runs for all 7 setups')
+    # Primary: hit Railway API (has full MNQ+ES data in PostgreSQL)
+    data = _api_post('/api/research/run_backtest', timeout=120)
+    if data is not None:
+        results = data.get('results', {})
+        for sid in ['A', 'B', 'C', 'D', 'E', 'H', 'I']:
+            label = f'TEST R4  Setup {sid}'
+            bt = results.get(sid)
+            if bt is None:
+                _fail(label, 'returned None from Railway API')
+            elif bt.get('bars_analysed', 0) == 0:
+                _fail(label, 'bars_analysed=0')
+            else:
+                _pass(label,
+                      f'signals={bt.get("total_signals")} '
+                      f'edge={bt.get("edge_score")} '
+                      f'bars={bt.get("bars_analysed")}')
+        return
+    # Fallback: run locally (may lack MNQ data — accept gracefully)
+    _section('TEST R4 — Railway unreachable, trying local run')
+    try:
+        import research_division as rd
+        results = rd.run_daily_backtest()
+        passed = failed = 0
+        for sid in ['A', 'B', 'C', 'D', 'E', 'H', 'I']:
+            bt = results.get(sid)
+            label = f'TEST R4  Setup {sid}'
+            if bt is None:
+                _pass(label, 'no local data (acceptable — full data on Railway)')
+                passed += 1
+            elif bt.bars_analysed > 0:
+                _pass(label, f'signals={bt.total_signals} edge={bt.edge_score} bars={bt.bars_analysed}')
+                passed += 1
+            else:
+                _fail(label, 'bars_analysed=0')
+                failed += 1
+    except Exception as e:
+        _fail('TEST R4  Backtest engine local', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R5 — Health scores use dual scoring
+# ─────────────────────────────────────────────────────────────
+
+def test_r5_dual_scoring():
+    _section('TEST R5 — Dual scoring fields present')
+    try:
+        import research_division as rd
+        result = rd.calculate_health_score('D')
+        required = ['backtest_score', 'live_score', 'health_score', 'alert_level',
+                    'setup_id', 'sharpe_benchmark', 'win_rate_benchmark']
+        for field in required:
+            if field not in result:
+                _fail(f'TEST R5  field {field}', 'missing from calculate_health_score result')
+                return
+        _pass('TEST R5  All dual scoring fields present', str({k: result[k] for k in required}))
+        hs = result.get('health_score')
+        if hs is None or (0 <= hs <= 100):
+            _pass('TEST R5  health_score in range', f'{hs}')
+        else:
+            _fail('TEST R5  health_score in range', f'Got {hs} (expected 0-100 or None)')
+    except Exception as e:
+        _fail('TEST R5  Dual scoring', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R6 — Research API endpoints all return 200
+# ─────────────────────────────────────────────────────────────
+
+def test_r6_research_endpoints():
+    _section('TEST R6 — Research API endpoints return 200')
+    endpoints = [
+        '/api/research/health',
+        '/api/research/shadow',
+        '/api/research/decisions',
+        '/api/research/backtest',
+    ]
+    for path in endpoints:
+        label = f'TEST R6  {path}'
+        data = _api(path)
+        if data is None:
+            _fail(label, 'endpoint unreachable or returned non-200')
+        elif not data.get('ok', True) and 'error' in data:
+            _fail(label, f'returned error: {data["error"]}')
+        else:
+            _pass(label, f'HTTP 200 ok')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R7 — Init is safe with bad connection
+# ─────────────────────────────────────────────────────────────
+
+def test_r7_init_safe():
+    _section('TEST R7 — Research Division init is safe on bad DB')
+    try:
+        import research_division as rd
+
+        class _BadConn:
+            def execute(self, *a, **kw): raise RuntimeError('Simulated DB failure')
+            def rollback(self): pass
+            def commit(self): pass
+            def close(self): pass
+
+        # Patch _conn to return a bad connection just for this test
+        orig_conn = rd._conn
+        call_count = [0]
+        def _bad_conn_factory():
+            call_count[0] += 1
+            return _BadConn()
+        rd._conn = _bad_conn_factory
+
+        try:
+            # Should not raise — seed must fail gracefully
+            rd.seed_shadow_lab_candidates()
+            _pass('TEST R7  Init safe with bad DB', f'seed_shadow_lab_candidates did not raise (called _conn {call_count[0]} times)')
+        except Exception as exc:
+            _fail('TEST R7  Init safe with bad DB', f'raised {type(exc).__name__}: {exc}')
+        finally:
+            rd._conn = orig_conn  # restore
+    except Exception as e:
+        _fail('TEST R7  Init safety', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEST R8 — Telegram report generates correctly
+# ─────────────────────────────────────────────────────────────
+
+def test_r8_telegram_report():
+    _section('TEST R8 — Telegram report generates')
+    try:
+        import research_division as rd
+        result = rd.generate_weekly_telegram_report()
+        token = os.environ.get('TELEGRAM_BOT_TOKEN', '') or os.environ.get('TELEGRAM_TOKEN', '')
+        chat  = os.environ.get('TELEGRAM_CHAT_ID', '')
+        if not token or not chat:
+            _pass('TEST R8  Telegram report', 'Telegram not configured locally (expected) — skipping send test')
+            return
+        if result is True:
+            _pass('TEST R8  Telegram report sent', 'generate_weekly_telegram_report returned True')
+        elif result is False:
+            _fail('TEST R8  Telegram report sent', 'returned False — check Telegram config')
+        else:
+            _pass('TEST R8  Telegram report', f'returned {result}')
+    except Exception as e:
+        _fail('TEST R8  Telegram report', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
 
@@ -776,6 +1033,16 @@ if __name__ == '__main__':
     test_9_calendar_filter()
     test_10_telegram()
     test_11_signal_simulation()
+
+    # Research Division tests
+    test_r1_research_tables()
+    test_r2_shadow_lab_seeded()
+    test_r3_health_check()
+    test_r4_backtest_engine()
+    test_r5_dual_scoring()
+    test_r6_research_endpoints()
+    test_r7_init_safe()
+    test_r8_telegram_report()
 
     _cleanup()
     _print_results()

@@ -1496,9 +1496,7 @@ def background_scheduler():
                 background_scheduler._last_backtest_day = _today_utc
                 try:
                     import research_division as _rd_mod
-                    _bt_conn = _db.connect()
-                    _rd_mod.run_daily_backtest(_bt_conn)
-                    _bt_conn.close()
+                    _rd_mod.run_daily_backtest()
                     logger.info('Research Division: daily backtest complete')
                 except Exception as _bte:
                     logger.error(f'Research Division daily backtest failed: {_bte}')
@@ -1511,11 +1509,9 @@ def background_scheduler():
                 background_scheduler._last_research_monday = _today_utc
                 try:
                     import research_division as _rd_mod
-                    _rd_conn = _db.connect()
-                    _rd_mod.run_weekly_health_check(_rd_conn)
-                    _rd_mod.score_shadow_lab(_rd_conn)
-                    _rd_mod.generate_weekly_telegram_report(_rd_conn)
-                    _rd_conn.close()
+                    _rd_mod.run_weekly_health_check()
+                    _rd_mod.score_shadow_lab()
+                    _rd_mod.generate_weekly_telegram_report()
                     logger.info('Research Division: weekly check complete')
                 except Exception as _rde:
                     logger.error(f'Research Division weekly check failed: {_rde}')
@@ -2702,12 +2698,13 @@ def _startup():
         logger.warning('  Paper account seed failed: ' + str(e))
     try:
         import research_division as _rd_mod
-        _rd_conn = _db.connect()
-        _rd_mod.seed_shadow_lab_candidates(_rd_conn)
-        _rd_conn.close()
-        logger.info('Research Division: initialised')
+        _rd_mod.seed_shadow_lab_candidates()
+        logger.info('Research Division: initialised successfully')
     except Exception as _rde:
-        logger.warning(f'Research Division init failed: {_rde}')
+        logger.error(
+            f'Research Division: init failed — {_rde} — trading continues normally',
+            exc_info=True
+        )
     # Pre-warm scan-critical modules to avoid cold-start blocking on first request
     try:
         from setup_engine import check_setup, check_setup_a, check_setup_c  # noqa: F401
@@ -4064,9 +4061,7 @@ def research_run_backtest():
     """Manually trigger daily backtest for all 7 setups."""
     try:
         import research_division as _rd_mod
-        conn = _db.connect()
-        results = _rd_mod.run_daily_backtest(conn)
-        conn.close()
+        results = _rd_mod.run_daily_backtest()
         summary = {}
         for sid, bt in results.items():
             if bt is not None:
@@ -4081,28 +4076,36 @@ def research_run_backtest():
                 summary[sid] = None
         return jsonify({'ok': True, 'results': summary})
     except Exception as e:
-        logger.error(f'research_run_backtest error: {e}')
+        logger.error(f'research_run_backtest error: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/research/run_check', methods=['POST'])
 def research_run_check():
-    """Manually trigger the weekly research health check + Telegram report."""
+    """Manually trigger the weekly research health check + shadow lab scoring."""
     try:
         import research_division as _rd_mod
-        conn = _db.connect()
-        health  = _rd_mod.run_weekly_health_check(conn)
-        updated = _rd_mod.score_shadow_lab(conn)
-        sent    = _rd_mod.generate_weekly_telegram_report(conn)
-        conn.close()
+        health  = _rd_mod.run_weekly_health_check()
+        updated = _rd_mod.score_shadow_lab()
         return jsonify({
             'ok':            True,
             'health_setups': len(health),
-            'shadow_updated':len(updated),
-            'telegram_sent': sent,
+            'shadow_updated': len(updated),
         })
     except Exception as e:
-        logger.error(f'research_run_check error: {e}')
+        logger.error(f'research_run_check error: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/research/send_report', methods=['POST'])
+def research_send_report():
+    """Manually trigger the weekly Telegram report."""
+    try:
+        import research_division as _rd_mod
+        sent = _rd_mod.generate_weekly_telegram_report()
+        return jsonify({'ok': True, 'telegram_sent': sent})
+    except Exception as e:
+        logger.error(f'research_send_report error: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
