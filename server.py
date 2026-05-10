@@ -3980,6 +3980,47 @@ def research_shadow():
         return jsonify({'ok': False, 'error': str(e), 'candidates': []})
 
 
+@app.route('/api/research/backtest_ping', methods=['GET'])
+def research_backtest_ping():
+    """Diagnostic: test backtest_results table with a direct INSERT/SELECT/DELETE."""
+    try:
+        from datetime import date as _date
+        conn = _db.connect()
+        # Check table exists
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM backtest_results").fetchone()[0]
+        except Exception as te:
+            conn.close()
+            return jsonify({'ok': False, 'step': 'count', 'error': str(te)})
+        # Attempt test insert
+        today_str = _date.today().isoformat()
+        try:
+            conn.execute(
+                "INSERT INTO backtest_results "
+                "(setup_id, lookback_days, run_date, total_signals, win_rate, sharpe, "
+                " avg_r, expectancy, max_drawdown, profit_factor, "
+                " benchmark_sharpe, benchmark_win_rate, "
+                " sharpe_vs_benchmark, wr_vs_benchmark, edge_score, bars_analysed) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ('TEST', 1, today_str, 5, 0.5, 1.5, 0.3, 0.3, 0.1, 1.2,
+                 5.0, 0.5, 10.0, 5.0, 65, 100)
+            )
+            conn.commit()
+        except Exception as ie:
+            conn.close()
+            return jsonify({'ok': False, 'step': 'insert', 'error': str(ie), 'type': type(ie).__name__})
+        # Clean up test row
+        try:
+            conn.execute("DELETE FROM backtest_results WHERE setup_id='TEST'")
+            conn.commit()
+        except Exception:
+            pass
+        conn.close()
+        return jsonify({'ok': True, 'existing_rows': count, 'table': 'backtest_results'})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/research/backtest', methods=['GET'])
 def research_backtest():
     """Latest backtest_results per setup plus 30-day edge score trend."""
