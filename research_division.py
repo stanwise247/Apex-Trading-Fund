@@ -551,9 +551,11 @@ def run_daily_backtest() -> dict:
     Run all 7 setup backtests and write results to backtest_results.
     Each setup opens and closes its own DB connection.
     Also checks for 3 consecutive days of edge_score < 50 and fires Telegram alert.
+    Returns dict with BacktestResult per setup (or None) and '_write_errors' key.
     """
     today   = date.today()
     results = {}
+    _write_errors = {}
 
     for sid, bt_func in BACKTEST_FUNCS.items():
         bt = None
@@ -602,11 +604,14 @@ def run_daily_backtest() -> dict:
             )
         except Exception as e:
             _rollback(w_conn)
-            logger.error(f'Research Backtest {sid} write failed: {type(e).__name__}: {e}')
+            err_msg = f'{type(e).__name__}: {e}'
+            logger.error(f'Research Backtest {sid} write failed: {err_msg}')
+            _write_errors[sid] = err_msg
             results[sid] = bt  # return in-memory result even when write fails
         finally:
             _close(w_conn)
 
+    results['_write_errors'] = _write_errors
     _check_edge_degradation()
     return results
 

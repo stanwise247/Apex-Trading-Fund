@@ -4062,6 +4062,7 @@ def research_run_backtest():
     try:
         import research_division as _rd_mod
         results = _rd_mod.run_daily_backtest()
+        write_errors = results.pop('_write_errors', {})
         summary = {}
         for sid, bt in results.items():
             if bt is not None:
@@ -4074,7 +4075,7 @@ def research_run_backtest():
                 }
             else:
                 summary[sid] = None
-        return jsonify({'ok': True, 'results': summary})
+        return jsonify({'ok': True, 'results': summary, 'write_errors': write_errors})
     except Exception as e:
         logger.error(f'research_run_backtest error: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500
