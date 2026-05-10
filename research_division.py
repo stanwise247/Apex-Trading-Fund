@@ -652,6 +652,8 @@ BACKTEST_FUNCS = {
 
 def _write_backtest(bt: BacktestResult, today) -> None:
     """Write a BacktestResult to backtest_results in a fresh connection."""
+    # Pass today as a string in YYYY-MM-DD format (works for both SQLite TEXT and PostgreSQL DATE)
+    run_date_str = today.isoformat() if hasattr(today, 'isoformat') else str(today)
     c = _db.connect()
     try:
         c.execute(
@@ -662,7 +664,7 @@ def _write_backtest(bt: BacktestResult, today) -> None:
             " sharpe_vs_benchmark, wr_vs_benchmark, edge_score, bars_analysed) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                bt.setup_id, bt.lookback_days, today.isoformat(),
+                bt.setup_id, bt.lookback_days, run_date_str,
                 bt.total_signals,
                 round(bt.win_rate, 4) if bt.win_rate else 0,
                 round(bt.sharpe, 3) if bt.sharpe else None,
@@ -674,8 +676,15 @@ def _write_backtest(bt: BacktestResult, today) -> None:
             )
         )
         c.commit()
+        logger.debug(f'Backtest {bt.setup_id} written to DB (edge={bt.edge_score})')
+    except Exception as exc:
+        logger.error(f'_write_backtest {bt.setup_id}: {type(exc).__name__}: {exc}')
+        raise  # re-raise so caller can catch and log
     finally:
-        c.close()
+        try:
+            c.close()
+        except Exception:
+            pass
 
 
 def run_daily_backtest(conn) -> dict:
@@ -966,27 +975,41 @@ def run_weekly_health_check(conn) -> dict:
                 if all(scores[i] > scores[i + 1] for i in range(len(scores) - 1)):
                     notes = f'Declining {len(scores) + 1} consecutive weeks'
 
-            conn.execute(
-                "INSERT INTO strategy_health_log "
-                "(setup_id, week_start, sharpe_30d, sharpe_benchmark, win_rate, "
-                " win_rate_benchmark, signal_count_week, expectancy, health_score, "
-                " alert_level, notes, backtest_score, live_score) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    sid, monday.isoformat(),
-                    metrics.get('sharpe_30d'),
-                    metrics.get('sharpe_benchmark'),
-                    metrics.get('win_rate'),
-                    metrics.get('win_rate_benchmark'),
-                    metrics.get('signal_count_week'),
-                    metrics.get('expectancy'),
-                    metrics.get('health_score'),
-                    metrics.get('alert_level'),
-                    notes,
-                    metrics.get('backtest_score'),
-                    metrics.get('live_score'),
+            # Try with dual-score columns first; fall back to base columns if they don't exist
+            try:
+                conn.execute(
+                    "INSERT INTO strategy_health_log "
+                    "(setup_id, week_start, sharpe_30d, sharpe_benchmark, win_rate, "
+                    " win_rate_benchmark, signal_count_week, expectancy, health_score, "
+                    " alert_level, notes, backtest_score, live_score) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        sid, monday.isoformat(),
+                        metrics.get('sharpe_30d'), metrics.get('sharpe_benchmark'),
+                        metrics.get('win_rate'), metrics.get('win_rate_benchmark'),
+                        metrics.get('signal_count_week'), metrics.get('expectancy'),
+                        metrics.get('health_score'), metrics.get('alert_level'), notes,
+                        metrics.get('backtest_score'), metrics.get('live_score'),
+                    )
                 )
-            )
+            except Exception as col_err:
+                # Columns may not exist yet (pending ALTER TABLE migration) — insert without them
+                logger.warning(f'Health log insert with new cols failed ({col_err}) — retrying base')
+                conn.rollback() if hasattr(conn, 'rollback') else None
+                conn.execute(
+                    "INSERT INTO strategy_health_log "
+                    "(setup_id, week_start, sharpe_30d, sharpe_benchmark, win_rate, "
+                    " win_rate_benchmark, signal_count_week, expectancy, health_score, "
+                    " alert_level, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        sid, monday.isoformat(),
+                        metrics.get('sharpe_30d'), metrics.get('sharpe_benchmark'),
+                        metrics.get('win_rate'), metrics.get('win_rate_benchmark'),
+                        metrics.get('signal_count_week'), metrics.get('expectancy'),
+                        metrics.get('health_score'), metrics.get('alert_level'), notes,
+                    )
+                )
             conn.commit()
             results[sid] = metrics
             logger.info(
@@ -1005,7 +1028,35 @@ def run_weekly_health_check(conn) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def seed_shadow_lab_candidates(conn):
-    """Seed initial shadow lab candidates if the table is empty."""
+    """Seed initial shadow lab candidates if the table is empty.
+    Also ensures backtest_results table exists and backtest_score/live_score
+    columns exist in strategy_health_log (compensates for migration gaps).
+    """
+    # Ensure research tables exist (belt-and-suspenders for Railway)
+    for ddl in (
+        "CREATE TABLE IF NOT EXISTS backtest_results ("
+        "id INTEGER PRIMARY KEY, setup_id TEXT, lookback_days INTEGER, "
+        "run_date TEXT, total_signals INTEGER, win_rate REAL, sharpe REAL, "
+        "avg_r REAL, expectancy REAL, max_drawdown REAL, profit_factor REAL, "
+        "benchmark_sharpe REAL, benchmark_win_rate REAL, "
+        "sharpe_vs_benchmark REAL, wr_vs_benchmark REAL, "
+        "edge_score INTEGER, bars_analysed INTEGER, created_at TEXT)",
+    ):
+        try:
+            conn.execute(ddl)
+            conn.commit()
+        except Exception:
+            pass
+    for col_ddl in (
+        "ALTER TABLE strategy_health_log ADD COLUMN backtest_score INTEGER",
+        "ALTER TABLE strategy_health_log ADD COLUMN live_score INTEGER",
+    ):
+        try:
+            conn.execute(col_ddl)
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
     count = conn.execute("SELECT COUNT(*) FROM shadow_lab").fetchone()[0]
     if count > 0:
         logger.info(f'Shadow Lab: already seeded ({count} candidates)')
