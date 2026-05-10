@@ -434,6 +434,16 @@ _PG_DDL = [
         bars_analysed       INT,
         created_at          TIMESTAMP DEFAULT NOW()
     )""",
+    """CREATE TABLE IF NOT EXISTS strategy_config (
+        id              SERIAL PRIMARY KEY,
+        setup_id        VARCHAR(10) UNIQUE NOT NULL,
+        enabled         BOOLEAN DEFAULT TRUE,
+        disabled_reason TEXT,
+        disabled_at     TIMESTAMP,
+        enabled_at      TIMESTAMP,
+        updated_by      VARCHAR(50) DEFAULT 'dashboard',
+        created_at      TIMESTAMP DEFAULT NOW()
+    )""",
     # Indexes
     'CREATE INDEX IF NOT EXISTS idx_ohlcv_sym_tf_ts ON ohlcv (symbol, timeframe, ts)',
     'CREATE INDEX IF NOT EXISTS idx_apex_trades_status ON apex_trades (status)',

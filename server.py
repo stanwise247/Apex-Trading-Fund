@@ -68,6 +68,69 @@ SIGNAL_FILTERS = {
 setup_f_enabled: bool = False   # Disabled: dedup/log_trade gap under investigation
 SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
+# ── Strategy Control Centre — in-memory cache ─────────────────────────────
+# Refreshed every 60 s so there is no DB hit on every scan tick.
+# None means "not yet loaded"; each value is True=enabled, False=disabled.
+_strategy_enabled_cache: dict = {}   # {'A': True, 'B': True, ...}
+_strategy_cache_ts: float = 0.0      # last refresh time (time.time())
+_STRATEGY_CACHE_TTL = 60             # seconds
+
+_STRATEGY_DEFAULTS = {
+    'A': True, 'B': True, 'C': True, 'D': True,
+    'E': True, 'F': False,  # F suspended
+    'H': True, 'I': True,
+}
+
+
+def _refresh_strategy_cache():
+    """Reload strategy_config from DB into memory. Called at most once per 60 s."""
+    global _strategy_enabled_cache, _strategy_cache_ts
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT setup_id, enabled FROM strategy_config"
+        ).fetchall()
+        conn.close()
+        if rows:
+            _strategy_enabled_cache = {r[0]: bool(r[1]) for r in rows}
+            _strategy_cache_ts = time.time()
+    except Exception as _sce:
+        logger.debug(f'strategy_cache refresh failed: {_sce}')
+
+
+def is_setup_enabled(setup_id: str) -> bool:
+    """Return True if the setup is enabled in strategy_config. Cached for 60 s."""
+    global _strategy_cache_ts
+    if time.time() - _strategy_cache_ts > _STRATEGY_CACHE_TTL:
+        _refresh_strategy_cache()
+    sid = setup_id.upper().strip()
+    return _strategy_enabled_cache.get(sid, _STRATEGY_DEFAULTS.get(sid, True))
+
+
+def _seed_strategy_config():
+    """Ensure all setups exist in strategy_config. Idempotent — INSERT OR IGNORE."""
+    try:
+        conn = _db.connect()
+        for sid, enabled in _STRATEGY_DEFAULTS.items():
+            if _db.IS_POSTGRES:
+                conn.execute(
+                    "INSERT INTO strategy_config (setup_id, enabled) "
+                    "VALUES (?, ?) ON CONFLICT (setup_id) DO NOTHING",
+                    (sid, enabled)
+                )
+            else:
+                conn.execute(
+                    "INSERT OR IGNORE INTO strategy_config (setup_id, enabled) "
+                    "VALUES (?, ?)",
+                    (sid, enabled)
+                )
+        conn.commit()
+        conn.close()
+        _refresh_strategy_cache()
+        logger.info('Strategy Control Centre: config seeded')
+    except Exception as e:
+        logger.warning(f'Strategy Control Centre seed failed: {e}')
+
 INSTRUMENTS = {
     'NQ':  {'yahoo': 'NQ=F',     'polygon_paid': 'NQ:CME',   'databento': 'NQ.c.0',  'type': 'future', 'name': 'Nasdaq 100 Futures'},
     'ES':  {'yahoo': 'ES=F',     'polygon_paid': 'ES:CME',   'databento': 'ES.c.0',  'type': 'future', 'name': 'S&P 500 E-Mini'},
@@ -376,6 +439,15 @@ def init_db():
             c.execute(f'ALTER TABLE strategy_health_log ADD COLUMN {col}')
         except Exception:
             pass  # already exists
+    c.execute('''CREATE TABLE IF NOT EXISTS strategy_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id TEXT UNIQUE NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        disabled_reason TEXT,
+        disabled_at TEXT,
+        enabled_at TEXT,
+        updated_by TEXT DEFAULT 'dashboard',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
     logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
@@ -1399,6 +1471,9 @@ def background_scheduler():
                 f'utc_hour={_utc_hr} in_session={_in_sess}'
             )
 
+        # ── Strategy Control Centre — refresh cache every 60 s ───────
+        _refresh_strategy_cache()
+
         # ── Kill switch — check account balance every 5 min ─────────
         if not hasattr(background_scheduler, '_last_kill_check') or \
                 now - background_scheduler._last_kill_check >= 300:
@@ -1780,6 +1855,12 @@ def background_scheduler():
                     _dirn  = result.direction
                     _setup = getattr(result, 'setup', '')
 
+                    # ── Control Centre: check setup enabled ───────────────
+                    _ctrl_sid = _setup[0].upper() if _setup else ''
+                    if _ctrl_sid and not is_setup_enabled(_ctrl_sid):
+                        logger.info(f'Setup {_ctrl_sid}: disabled via Control Centre — skipping')
+                        continue
+
                     # ── FILTER 1: max 1 concurrent trade per instrument ───
                     if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                         _f1_has, _f1_id = _has_open_trade_on_instrument(_sym)
@@ -1877,8 +1958,8 @@ def background_scheduler():
 
         # ── Setup F — Random Forest ML (every 5 min) ─────────────
         # setup_f_enabled=False: fully disabled, dedup/log_trade gap under investigation
-        if not setup_f_enabled:
-            logger.debug('Setup F: disabled (setup_f_enabled=False) — skipping')
+        if not setup_f_enabled or not is_setup_enabled('F'):
+            logger.debug('Setup F: disabled (setup_f_enabled=False or Control Centre) — skipping')
         else:
             if not hasattr(background_scheduler, '_last_setup_f'):
                 background_scheduler._last_setup_f = 0
@@ -1972,146 +2053,149 @@ def background_scheduler():
             background_scheduler._last_setup_i = 0
         if now - background_scheduler._last_setup_i >= 300:
             background_scheduler._last_setup_i = now
-            try:
-                from setup_i_mathematical import scan_setup_i, format_i_alert
-                from live_scanner import send_telegram
-                from trade_tracker import log_trade
-                _now_utc_i = datetime.now(timezone.utc)
-                if not hasattr(background_scheduler, '_risk_gate'):
-                    from risk_manager import RiskGate
-                    background_scheduler._risk_gate = RiskGate()
-                _rg_i = background_scheduler._risk_gate
-                _i_risk_footer = (
-                    f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
-                    f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
-                    f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
-                )
-                for _sym in ['MNQ', 'ES']:
-                    try:
-                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
-                            _i_has, _i_id = _has_open_trade_on_instrument(_sym)
-                            if _i_has:
-                                logger.info(f'Setup I: skipped — {_sym} already has open trade #{_i_id}')
+            if not is_setup_enabled('I'):
+                logger.info('Setup I: disabled via Control Centre — skipping')
+            else:
+                try:
+                    from setup_i_mathematical import scan_setup_i, format_i_alert
+                    from live_scanner import send_telegram
+                    from trade_tracker import log_trade
+                    _now_utc_i = datetime.now(timezone.utc)
+                    if not hasattr(background_scheduler, '_risk_gate'):
+                        from risk_manager import RiskGate
+                        background_scheduler._risk_gate = RiskGate()
+                    _rg_i = background_scheduler._risk_gate
+                    _i_risk_footer = (
+                        f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
+                        f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
+                        f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
+                    )
+                    for _sym in ['MNQ', 'ES']:
+                        try:
+                            if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                _i_has, _i_id = _has_open_trade_on_instrument(_sym)
+                                if _i_has:
+                                    logger.info(f'Setup I: skipped — {_sym} already has open trade #{_i_id}')
+                                    continue
+                            if _rg_i.daily.is_daily_limit_hit():
+                                logger.info(f'Setup I {_sym}: daily limit hit — suppressed')
                                 continue
-                        if _rg_i.daily.is_daily_limit_hit():
-                            logger.info(f'Setup I {_sym}: daily limit hit — suppressed')
-                            continue
-                        sig = scan_setup_i(_sym, _now_utc_i)
-                        if sig:
-                            if _cal_block(_sym, sig['setup']):
-                                continue
-                            if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
-                                continue
-                            if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
-                                continue
-                            _i_tid = None
-                            try:
-                                logger.info(
-                                    f'[I-3/6] Calling log_trade: entry={sig.get("entry")} '
-                                    f'stop={sig.get("stop")} target={sig.get("target")} '
-                                    f'setup={sig.get("setup")} keys={list(sig.keys())}'
-                                )
-                                _i_tid = log_trade(sig)
-                                logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
-                                if not _i_tid:
-                                    logger.critical(
-                                        f'[I-4/6] CRITICAL: Setup I log_trade() returned None — '
-                                        f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
-                                    )
-                            except Exception as _i_lte:
-                                logger.critical(
-                                    f'[I-4/6] CRITICAL: Setup I log_trade() EXCEPTION — '
-                                    f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
-                                    exc_info=True
-                                )
-                            try:
-                                logger.info(f'[I-5/6] Calling send_telegram')
-                                msg = format_i_alert(sig) + _i_risk_footer
-                                send_telegram(msg)
-                            except Exception as _i_te:
-                                logger.critical(f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}', exc_info=True)
-                            from tradovate import TRADOVATE_ENABLED as _i_tv_enabled
-                            logger.info(f'[I-6/6] Calling execute_via_tradovate: enabled={_i_tv_enabled}')
-                            if _i_tid:
+                            sig = scan_setup_i(_sym, _now_utc_i)
+                            if sig:
+                                if _cal_block(_sym, sig['setup']):
+                                    continue
+                                if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
+                                    continue
+                                if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
+                                    continue
+                                _i_tid = None
                                 try:
-                                    _execute_via_tradovate(sig, _i_tid)
-                                except Exception as _i_exe:
-                                    logger.critical(f'[I-6/6] CRITICAL: _execute_via_tradovate raised: {_i_exe}', exc_info=True)
-                            else:
-                                logger.critical(f'[I-6/6] CRITICAL: skipping execute — no trade_id for {_sym} (log_trade failed)')
-                            logger.info(
-                                f'Setup I signal complete: {_sym} {sig["direction"].upper()} '
-                                f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
-                                f'h={sig.get("hurst","?"):.2f} db_id={_i_tid}'
-                            )
-                    except Exception as _i_sym_e:
-                        logger.warning(f'Setup I {_sym} error: {_i_sym_e}')
-            except Exception as _i_e:
-                logger.warning(f'Setup I scanner error: {_i_e}')
+                                    logger.info(
+                                        f'[I-3/6] Calling log_trade: entry={sig.get("entry")} '
+                                        f'stop={sig.get("stop")} target={sig.get("target")} '
+                                        f'setup={sig.get("setup")} keys={list(sig.keys())}'
+                                    )
+                                    _i_tid = log_trade(sig)
+                                    logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
+                                    if not _i_tid:
+                                        logger.critical(
+                                            f'[I-4/6] CRITICAL: Setup I log_trade() returned None — '
+                                            f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
+                                        )
+                                except Exception as _i_lte:
+                                    logger.critical(
+                                        f'[I-4/6] CRITICAL: Setup I log_trade() EXCEPTION — '
+                                        f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
+                                        exc_info=True
+                                    )
+                                try:
+                                    logger.info(f'[I-5/6] Calling send_telegram')
+                                    msg = format_i_alert(sig) + _i_risk_footer
+                                    send_telegram(msg)
+                                except Exception as _i_te:
+                                    logger.critical(f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}', exc_info=True)
+                                from tradovate import TRADOVATE_ENABLED as _i_tv_enabled
+                                logger.info(f'[I-6/6] Calling execute_via_tradovate: enabled={_i_tv_enabled}')
+                                if _i_tid:
+                                    try:
+                                        _execute_via_tradovate(sig, _i_tid)
+                                    except Exception as _i_exe:
+                                        logger.critical(f'[I-6/6] CRITICAL: _execute_via_tradovate raised: {_i_exe}', exc_info=True)
+                                else:
+                                    logger.critical(f'[I-6/6] CRITICAL: skipping execute — no trade_id for {_sym} (log_trade failed)')
+                                logger.info(
+                                    f'Setup I signal complete: {_sym} {sig["direction"].upper()} '
+                                    f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
+                                    f'h={sig.get("hurst","?"):.2f} db_id={_i_tid}'
+                                )
+                        except Exception as _i_sym_e:
+                            logger.warning(f'Setup I {_sym} error: {_i_sym_e}')
+                except Exception as _i_e:
+                    logger.warning(f'Setup I scanner error: {_i_e}')
 
         # ── Setup D — FVG Fill (every 5 min, NQ+ES only) ─────────
         if not hasattr(background_scheduler, '_last_setup_d'):
             background_scheduler._last_setup_d = 0
         if now - background_scheduler._last_setup_d >= 300:
             background_scheduler._last_setup_d = now
-            try:
-                from fvg_engine import scan_setup_d, format_d_alert
-                from live_scanner import send_telegram as _send_tg
-                from trade_tracker import log_trade as _log_trade
-                _now_utc_d = datetime.now(timezone.utc)
-                for _sym_d in ['MNQ', 'ES']:  # GC disabled — feed unverified
-                    try:
-                        sig_d = scan_setup_d(_sym_d, _now_utc_d)
-                        if not sig_d:
-                            continue
-                        # ── FILTER 1: max 1 concurrent per instrument ─────
-                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
-                            _f1d_has, _f1d_id = _has_open_trade_on_instrument(_sym_d)
-                            if _f1d_has:
-                                logger.info(f'Setup D: skipped — {_sym_d} already has open trade #{_f1d_id}')
-                                continue
-                        # ── FILTER 2: primary session only (D is always primary — explicit check) ──
-                        if SIGNAL_FILTERS['primary_session_only_bcd']:
-                            if sig_d.get('quality', 'primary') != 'primary':
-                                logger.info(f'Setup D: skipped — secondary session quality, requires primary')
-                                continue
-                        # ── FILTER 3: dual HTF bias (1h must align with 4h) ──
-                        if SIGNAL_FILTERS['dual_htf_bias']:
-                            _f3d_ok, _f3d_detail = _check_1h_bias(_sym_d, sig_d['direction'])
-                            if not _f3d_ok:
-                                logger.info(
-                                    f'Setup D: skipped — 1h bias conflicts with {sig_d["direction"]} '
-                                    f'direction ({_f3d_detail})'
-                                )
-                                continue
-                        if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
-                            continue
-                        _d_stop_pts = round(abs(sig_d['entry'] - sig_d['stop']), 1)
-                        _d_risk_usd = round(_d_stop_pts * (2 if _sym_d == 'MNQ' else 50), 0)
-                        logger.info(
-                            f'Signal: {_sym_d} {sig_d["direction"]} {sig_d["setup"]} | '
-                            f'stop={_d_stop_pts} pts | risk=${_d_risk_usd:.0f} | contracts=1'
-                        )
-                        _d_tid = None
+            if not is_setup_enabled('D'):
+                logger.info('Setup D: disabled via Control Centre — skipping')
+            else:
+                try:
+                    from fvg_engine import scan_setup_d, format_d_alert
+                    from live_scanner import send_telegram as _send_tg
+                    from trade_tracker import log_trade as _log_trade
+                    _now_utc_d = datetime.now(timezone.utc)
+                    for _sym_d in ['MNQ', 'ES']:  # GC disabled — feed unverified
                         try:
-                            _d_tid = _log_trade(sig_d)
+                            sig_d = scan_setup_d(_sym_d, _now_utc_d)
+                            if not sig_d:
+                                continue
+                            if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                _f1d_has, _f1d_id = _has_open_trade_on_instrument(_sym_d)
+                                if _f1d_has:
+                                    logger.info(f'Setup D: skipped — {_sym_d} already has open trade #{_f1d_id}')
+                                    continue
+                            if SIGNAL_FILTERS['primary_session_only_bcd']:
+                                if sig_d.get('quality', 'primary') != 'primary':
+                                    logger.info(f'Setup D: skipped — secondary session quality, requires primary')
+                                    continue
+                            if SIGNAL_FILTERS['dual_htf_bias']:
+                                _f3d_ok, _f3d_detail = _check_1h_bias(_sym_d, sig_d['direction'])
+                                if not _f3d_ok:
+                                    logger.info(
+                                        f'Setup D: skipped — 1h bias conflicts with {sig_d["direction"]} '
+                                        f'direction ({_f3d_detail})'
+                                    )
+                                    continue
+                            if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
+                                continue
+                            _d_stop_pts = round(abs(sig_d['entry'] - sig_d['stop']), 1)
+                            _d_risk_usd = round(_d_stop_pts * (2 if _sym_d == 'MNQ' else 50), 0)
+                            logger.info(
+                                f'Signal: {_sym_d} {sig_d["direction"]} {sig_d["setup"]} | '
+                                f'stop={_d_stop_pts} pts | risk=${_d_risk_usd:.0f} | contracts=1'
+                            )
+                            _d_tid = None
+                            try:
+                                _d_tid = _log_trade(sig_d)
+                                if _d_tid:
+                                    logger.info(f'Setup D: trade logged id={_d_tid} {_sym_d} {sig_d["direction"]}')
+                                else:
+                                    logger.error(f'CRITICAL: Setup D log_trade() returned None — {_sym_d} {sig_d["direction"]} NOT in DB')
+                            except Exception as _d_lte:
+                                logger.error(f'CRITICAL: Setup D log_trade() EXCEPTION — {_sym_d}: {_d_lte}', exc_info=True)
+                            try:
+                                _send_tg(format_d_alert(sig_d))
+                            except Exception as _d_te:
+                                logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
                             if _d_tid:
-                                logger.info(f'Setup D: trade logged id={_d_tid} {_sym_d} {sig_d["direction"]}')
-                            else:
-                                logger.error(f'CRITICAL: Setup D log_trade() returned None — {_sym_d} {sig_d["direction"]} NOT in DB')
-                        except Exception as _d_lte:
-                            logger.error(f'CRITICAL: Setup D log_trade() EXCEPTION — {_sym_d}: {_d_lte}', exc_info=True)
-                        try:
-                            _send_tg(format_d_alert(sig_d))
-                        except Exception as _d_te:
-                            logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
-                        if _d_tid:
-                            _execute_via_tradovate(sig_d, _d_tid)
-                        logger.info(f'Setup D signal: {_sym_d} {sig_d["direction"].upper()} score={sig_d.get("fvg_score")} db_id={_d_tid}')
-                    except Exception as _de:
-                        logger.warning(f'Setup D {_sym_d} error: {_de}')
-            except Exception as e:
-                logger.warning(f'Setup D scanner error: {e}')
+                                _execute_via_tradovate(sig_d, _d_tid)
+                            logger.info(f'Setup D signal: {_sym_d} {sig_d["direction"].upper()} score={sig_d.get("fvg_score")} db_id={_d_tid}')
+                        except Exception as _de:
+                            logger.warning(f'Setup D {_sym_d} error: {_de}')
+                except Exception as e:
+                    logger.warning(f'Setup D scanner error: {e}')
 
         # ── Setup G — Wyckoff Upthrust Tracker (every 5 min) ─────
         if not hasattr(background_scheduler, '_last_wyckoff'):
@@ -2129,70 +2213,70 @@ def background_scheduler():
             background_scheduler._last_setup_h = 0
         if now - background_scheduler._last_setup_h >= 300:
             background_scheduler._last_setup_h = now
-            try:
-                from setup_h_vwap import scan_setup_h, format_h_alert, log_h_paper
-                from live_scanner import send_telegram
-                from trade_tracker import log_trade
-                _now_utc = datetime.now(timezone.utc)
-                if not hasattr(background_scheduler, '_risk_gate'):
-                    from risk_manager import RiskGate
-                    background_scheduler._risk_gate = RiskGate()
-                _rg = background_scheduler._risk_gate
-                _regime  = _rg.regime.get_regime()
-                _dd_mult = _rg.dd.get_risk_multiplier()
-                _risk_footer = (
-                    f'\n⚙️ <i>Regime: {_regime.label} | '
-                    f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
-                )
-                # ES — live signals
+            if not is_setup_enabled('H'):
+                logger.info('Setup H: disabled via Control Centre — skipping')
+            else:
                 try:
-                    if not _rg.daily.is_daily_limit_hit():
-                        sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
-                        if sig_es:
-                            # ── FILTER 1: max 1 concurrent per instrument ─
-                            if SIGNAL_FILTERS['max_concurrent_per_instrument']:
-                                _f1h_has, _f1h_id = _has_open_trade_on_instrument('ES')
-                                if _f1h_has:
-                                    logger.info(f'Setup H: skipped — ES already has open trade #{_f1h_id}')
-                                    sig_es = None
-                        if sig_es:
-                            if not _has_opposite_swing_trade('ES', sig_es['direction']):
-                                if not _cal_block('ES', sig_es['setup']):
-                                    if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
-                                        if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
-                                            _h_tid = None
-                                            try:
-                                                _h_tid = log_trade(sig_es)
+                    from setup_h_vwap import scan_setup_h, format_h_alert, log_h_paper
+                    from live_scanner import send_telegram
+                    from trade_tracker import log_trade
+                    _now_utc = datetime.now(timezone.utc)
+                    if not hasattr(background_scheduler, '_risk_gate'):
+                        from risk_manager import RiskGate
+                        background_scheduler._risk_gate = RiskGate()
+                    _rg = background_scheduler._risk_gate
+                    _regime  = _rg.regime.get_regime()
+                    _dd_mult = _rg.dd.get_risk_multiplier()
+                    _risk_footer = (
+                        f'\n⚙️ <i>Regime: {_regime.label} | '
+                        f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
+                    )
+                    try:
+                        if not _rg.daily.is_daily_limit_hit():
+                            sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
+                            if sig_es:
+                                if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                    _f1h_has, _f1h_id = _has_open_trade_on_instrument('ES')
+                                    if _f1h_has:
+                                        logger.info(f'Setup H: skipped — ES already has open trade #{_f1h_id}')
+                                        sig_es = None
+                            if sig_es:
+                                if not _has_opposite_swing_trade('ES', sig_es['direction']):
+                                    if not _cal_block('ES', sig_es['setup']):
+                                        if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
+                                            if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
+                                                _h_tid = None
+                                                try:
+                                                    _h_tid = log_trade(sig_es)
+                                                    if _h_tid:
+                                                        logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
+                                                    else:
+                                                        logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
+                                                except Exception as _lte:
+                                                    logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
+                                                try:
+                                                    msg = format_h_alert(sig_es) + _risk_footer
+                                                    send_telegram(msg)
+                                                except Exception as _h_te:
+                                                    logger.error(f'Setup H send_telegram failed ES: {_h_te}')
                                                 if _h_tid:
-                                                    logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
-                                                else:
-                                                    logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
-                                            except Exception as _lte:
-                                                logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
-                                            try:
-                                                msg = format_h_alert(sig_es) + _risk_footer
-                                                send_telegram(msg)
-                                            except Exception as _h_te:
-                                                logger.error(f'Setup H send_telegram failed ES: {_h_te}')
-                                            if _h_tid:
-                                                _execute_via_tradovate(sig_es, _h_tid)
-                                            logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
-                            else:
-                                logger.info('Setup H ES suppressed — opposite swing trade open')
-                    else:
-                        logger.info('Setup H ES: daily limit hit — suppressed')
-                except Exception as _he:
-                    logger.warning(f'Setup H ES error: {_he}')
-                # MNQ — paper tracking only
-                try:
-                    sig_mnq = scan_setup_h('MNQ', _now_utc, paper_only=True)
-                    if sig_mnq:
-                        log_h_paper(sig_mnq)
-                        logger.info(f'Setup H MNQ paper: {sig_mnq["direction"].upper()} @ {sig_mnq["entry"]:.2f}')
-                except Exception as _hmnq:
-                    logger.warning(f'Setup H MNQ paper error: {_hmnq}')
-            except Exception as e:
-                logger.warning(f'Setup H scanner error: {e}')
+                                                    _execute_via_tradovate(sig_es, _h_tid)
+                                                logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
+                                else:
+                                    logger.info('Setup H ES suppressed — opposite swing trade open')
+                        else:
+                            logger.info('Setup H ES: daily limit hit — suppressed')
+                    except Exception as _he:
+                        logger.warning(f'Setup H ES error: {_he}')
+                    try:
+                        sig_mnq = scan_setup_h('MNQ', _now_utc, paper_only=True)
+                        if sig_mnq:
+                            log_h_paper(sig_mnq)
+                            logger.info(f'Setup H MNQ paper: {sig_mnq["direction"].upper()} @ {sig_mnq["entry"]:.2f}')
+                    except Exception as _hmnq:
+                        logger.warning(f'Setup H MNQ paper error: {_hmnq}')
+                except Exception as e:
+                    logger.warning(f'Setup H scanner error: {e}')
 
         time.sleep(60)
 
@@ -2705,6 +2789,7 @@ def _startup():
             f'Research Division: init failed — {_rde} — trading continues normally',
             exc_info=True
         )
+    _seed_strategy_config()
     # Pre-warm scan-critical modules — imports only, no inference.
     # Model .pkl loading happens on first scan request (~15-20s acceptable with 45s test timeout).
     # Do NOT call get_setup_i_state()/get_current_prediction() here — they load DB + run
@@ -3994,6 +4079,118 @@ def research_shadow():
     except Exception as e:
         logger.error(f'research_shadow error: {e}')
         return jsonify({'ok': False, 'error': str(e), 'candidates': []})
+
+
+@app.route('/api/control/strategies', methods=['GET'])
+def control_strategies():
+    """Return enabled/disabled state of all setups from strategy_config."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT setup_id, enabled, disabled_reason, disabled_at, enabled_at, "
+            "       updated_by, created_at "
+            "FROM strategy_config ORDER BY setup_id"
+        ).fetchall()
+        conn.close()
+        cols = ['setup_id', 'enabled', 'disabled_reason', 'disabled_at',
+                'enabled_at', 'updated_by', 'created_at']
+        strategies = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            d['enabled'] = bool(d['enabled'])
+            strategies.append(d)
+        # Include any defaults not yet in DB
+        existing = {s['setup_id'] for s in strategies}
+        for sid, enabled in _STRATEGY_DEFAULTS.items():
+            if sid not in existing:
+                strategies.append({'setup_id': sid, 'enabled': enabled,
+                                   'disabled_reason': None, 'disabled_at': None,
+                                   'enabled_at': None, 'updated_by': 'default',
+                                   'created_at': None})
+        strategies.sort(key=lambda x: x['setup_id'])
+        return jsonify({'ok': True, 'strategies': strategies})
+    except Exception as e:
+        logger.error(f'control_strategies error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'strategies': []})
+
+
+@app.route('/api/control/strategies/<setup_id>/toggle', methods=['POST'])
+def control_toggle(setup_id):
+    """Toggle a setup's enabled state. Optionally accepts JSON {reason: str}."""
+    sid = setup_id.upper().strip()
+    if sid not in _STRATEGY_DEFAULTS:
+        return jsonify({'ok': False, 'error': f'Unknown setup_id: {sid}'}), 400
+    try:
+        data   = request.get_json(silent=True) or {}
+        reason = (data.get('reason') or '').strip()[:200] or None
+        conn   = _db.connect()
+        row    = conn.execute(
+            "SELECT enabled FROM strategy_config WHERE setup_id=?", (sid,)
+        ).fetchone()
+        now_ts = datetime.now(timezone.utc).isoformat()
+        if row is None:
+            # Insert default then toggle
+            conn.execute(
+                "INSERT INTO strategy_config (setup_id, enabled) VALUES (?,?)",
+                (sid, _STRATEGY_DEFAULTS.get(sid, True))
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT enabled FROM strategy_config WHERE setup_id=?", (sid,)
+            ).fetchone()
+        currently_enabled = bool(row[0])
+        new_enabled = not currently_enabled
+        if new_enabled:
+            conn.execute(
+                "UPDATE strategy_config SET enabled=?, enabled_at=?, "
+                "disabled_reason=NULL, updated_by='dashboard' WHERE setup_id=?",
+                (True, now_ts, sid)
+            )
+        else:
+            conn.execute(
+                "UPDATE strategy_config SET enabled=?, disabled_at=?, "
+                "disabled_reason=?, updated_by='dashboard' WHERE setup_id=?",
+                (False, now_ts, reason, sid)
+            )
+        conn.commit()
+        conn.close()
+
+        # Force cache refresh immediately
+        _refresh_strategy_cache()
+
+        # Send Telegram alert
+        try:
+            from live_scanner import send_telegram as _ctl_tg
+            setup_name = {
+                'A': 'Sweep + OB', 'B': 'ChoCh + OB', 'C': 'BOS + OB',
+                'D': 'FVG Fill', 'E': 'EMA50 Pullback', 'F': 'ML Probability',
+                'H': 'VWAP Reversion', 'I': 'Mathematical Alpha',
+            }.get(sid, sid)
+            emoji = '✅' if new_enabled else '⚠️'
+            action = 'ENABLED' if new_enabled else 'DISABLED'
+            reason_txt = f' — Reason: {reason}' if reason else ''
+            _ctl_tg(
+                f'{emoji} <b>WISE MERIDIAN CAPITAL</b>\n'
+                f'Setup {sid} ({setup_name}) <b>{action}</b> via Control Centre{reason_txt}\n'
+                f'<i>Changes take effect within 60 seconds</i>'
+            )
+        except Exception as _tg_e:
+            logger.warning(f'Control Centre Telegram alert failed: {_tg_e}')
+
+        logger.info(
+            f'Control Centre: Setup {sid} {"enabled" if new_enabled else "disabled"}'
+            + (f' — {reason}' if reason else '')
+        )
+        return jsonify({
+            'ok':       True,
+            'setup_id': sid,
+            'enabled':  new_enabled,
+            'reason':   reason,
+            'changed_at': now_ts,
+        })
+    except Exception as e:
+        logger.error(f'control_toggle {sid}: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/research/backtest_ping', methods=['GET'])

@@ -753,6 +753,61 @@ tr:hover td { background: var(--bg3); }
 /* Decisions table */
 .decisions-tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 16px; }
 
+/* ── Control Centre ── */
+.cc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px; margin-bottom: 20px;
+}
+.cc-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: border-color .2s;
+}
+.cc-card.cc-enabled  { border-left: 3px solid var(--green); }
+.cc-card.cc-disabled { border-left: 3px solid var(--red); opacity: 0.75; }
+.cc-card.cc-suspended { border-left: 3px solid var(--text3); opacity: 0.65; }
+
+.cc-header { display: flex; align-items: center; gap: 10px; }
+.cc-badge { width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 13px; font-weight: 700; color: #fff; }
+
+.cc-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.cc-type { font-size: 10px; color: var(--text3); }
+
+.cc-status-pill { padding: 2px 8px; border-radius: var(--r-pill);
+  font-size: 10px; font-weight: 700; margin-left: auto; white-space: nowrap; }
+.cc-status-on   { background: rgba(52,199,89,0.12);  color: var(--green); }
+.cc-status-off  { background: rgba(255,59,48,0.1);   color: var(--red); }
+.cc-status-susp { background: rgba(110,110,115,0.1); color: var(--text3); }
+
+.cc-perf { display: flex; gap: 14px; }
+.cc-perf-stat { display: flex; flex-direction: column; gap: 2px; }
+.cc-perf-label { font-size: 9px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.cc-perf-val   { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+
+.cc-toggle-row { display: flex; align-items: center; justify-content: space-between; }
+.cc-changed    { font-size: 10px; color: var(--text3); font-family: var(--mono); }
+
+/* Toggle switch */
+.cc-toggle { position: relative; width: 44px; height: 24px; cursor: pointer; }
+.cc-toggle input { display: none; }
+.cc-toggle-track {
+  position: absolute; inset: 0; border-radius: 12px;
+  background: var(--bg4); transition: background .2s;
+}
+.cc-toggle input:checked ~ .cc-toggle-track { background: var(--green); }
+.cc-toggle-thumb {
+  position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; transition: transform .2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.cc-toggle input:checked ~ .cc-toggle-thumb { transform: translateX(20px); }
+.cc-toggle.cc-toggle-disabled .cc-toggle-track { background: var(--red); }
+
 /* ── Edge Score Ring ── */
 .edge-ring-wrap { display: flex; align-items: center; gap: 12px; }
 .edge-ring-svg { flex-shrink: 0; }
@@ -804,6 +859,7 @@ tr:hover td { background: var(--bg3); }
 
   <nav class="topnav" id="nav-command" style="display:none">
     <button class="nav-btn active" data-ctab="cmd-overview"   onclick="switchCommandTab('cmd-overview')">Overview</button>
+    <button class="nav-btn"        data-ctab="cmd-control"    onclick="switchCommandTab('cmd-control')">Control Centre</button>
     <button class="nav-btn"        data-ctab="cmd-system"     onclick="switchCommandTab('cmd-system')">System</button>
     <button class="nav-btn"        data-ctab="cmd-strategies" onclick="switchCommandTab('cmd-strategies')">Strategies</button>
     <button class="nav-btn"        data-ctab="cmd-roadmap"    onclick="switchCommandTab('cmd-roadmap')">Roadmap</button>
@@ -1055,6 +1111,43 @@ tr:hover td { background: var(--bg3); }
   <div class="cmd-panel" style="margin-bottom:16px">
     <div class="cmd-panel-title">Action Items</div>
     <div class="cmd-actions-list" id="cmdActions"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMMAND — CONTROL CENTRE ═══════════════════ -->
+<div class="page" id="page-cmd-control">
+  <div style="margin-bottom:14px">
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">
+      Strategy Control Centre
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text3);font-weight:400;margin-left:8px">
+        changes take effect within 60 seconds
+      </span>
+    </div>
+    <div style="background:rgba(255,159,10,0.1);border:1px solid rgba(255,159,10,0.3);border-radius:var(--r-sm);padding:8px 12px;font-size:11px;color:var(--amber)">
+      ⚠ Changes affect live trading. Disable only based on verified data. All actions send a Telegram alert.
+    </div>
+  </div>
+  <div class="cc-grid" id="controlGrid">
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+    <div class="cc-card"><div class="skeleton" style="height:120px"></div></div>
+  </div>
+  <!-- Reason dialog -->
+  <div id="ccDialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:500;display:none;align-items:center;justify-content:center">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:24px;width:380px;max-width:90vw">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px" id="ccDialogTitle">Disable Setup X?</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:14px" id="ccDialogBody"></div>
+      <input type="text" id="ccDialogReason" placeholder="Reason (optional)" style="width:100%;margin-bottom:14px;font-size:12px" maxlength="200">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="ccDialogCancel()" style="padding:6px 16px;border-radius:var(--r-pill);background:var(--bg3);border:1px solid var(--border);font-size:12px;cursor:pointer;color:var(--text)">Cancel</button>
+        <button id="ccDialogConfirm" style="padding:6px 16px;border-radius:var(--r-pill);background:var(--red);color:#fff;font-size:12px;font-weight:600;cursor:pointer;border:none">Confirm</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2154,11 +2247,12 @@ function switchCommandTab(tab) {
   document.querySelectorAll('#nav-command .nav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.ctab === tab);
   });
-  if (tab === 'cmd-overview') renderCommandOverview();
-  if (tab === 'cmd-system')   renderCommandSystem();
+  if (tab === 'cmd-overview')  renderCommandOverview();
+  if (tab === 'cmd-control')   loadControlCentre();
+  if (tab === 'cmd-system')    renderCommandSystem();
   if (tab === 'cmd-strategies') renderCommandStrategies();
-  if (tab === 'cmd-roadmap')  renderCommandRoadmap();
-  if (tab === 'cmd-actions')  renderCommandActions();
+  if (tab === 'cmd-roadmap')   renderCommandRoadmap();
+  if (tab === 'cmd-actions')   renderCommandActions();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2693,6 +2787,174 @@ function renderCommandActions() {
   const el = document.getElementById('cmdActionsDetail');
   if (el) _renderActions(el, true);
 }
+
+// ═══════════════════════════════════════════════════════
+//  CONTROL CENTRE
+// ═══════════════════════════════════════════════════════
+const CC_META = {
+  A: { name:'Sweep + OB',        type:'Gate · Swing',        color:'#34c759' },
+  B: { name:'ChoCh + OB',        type:'Gate · Swing',        color:'#0071e3' },
+  C: { name:'BOS + OB',          type:'Gate · Swing',        color:'#ff9f0a' },
+  D: { name:'FVG Fill',          type:'Gate · Intraday',     color:'#af52de' },
+  E: { name:'EMA50 Pullback',    type:'Gate · Intraday',     color:'#ff3b30' },
+  F: { name:'ML Probability',    type:'ML · Suspended',      color:'#8e8e93' },
+  H: { name:'VWAP Reversion',    type:'Gate · Intraday',     color:'#ff9f0a' },
+  I: { name:'Mathematical Alpha',type:'ML Ensemble',         color:'#5e5ce6' },
+};
+
+let _ccPending = null;  // {sid, newEnabled} — set during dialog
+
+async function loadControlCentre() {
+  const grid = document.getElementById('controlGrid');
+  try {
+    // Fetch strategy states and trade stats in parallel
+    const [ctrlResp, tradesResp] = await Promise.all([
+      fetch('/api/control/strategies'),
+      fetch('/api/apex/trades'),
+    ]);
+    const ctrl   = await ctrlResp.json();
+    const trades = tradesResp.ok ? await tradesResp.json() : {all_trades: []};
+
+    // Build per-setup live stats from closed trades
+    const statMap = {};
+    for (const t of (trades.all_trades || [])) {
+      if (t.status !== 'closed' || t.pnl_r == null) continue;
+      const sid = (t.setup || '').charAt(0).toUpperCase();
+      if (!sid) continue;
+      if (!statMap[sid]) statMap[sid] = {trades: 0, totalR: 0, wins: 0};
+      statMap[sid].trades++;
+      statMap[sid].totalR += t.pnl_r;
+      if (t.pnl_r > 0) statMap[sid].wins++;
+    }
+
+    const strategies = ctrl.strategies || [];
+    const ORDER = ['A','B','C','D','E','F','H','I'];
+
+    grid.innerHTML = ORDER.map(sid => {
+      const s    = strategies.find(x => x.setup_id === sid) || {setup_id: sid, enabled: sid !== 'F'};
+      const meta = CC_META[sid] || {name: sid, type: '', color: '#888'};
+      const st   = statMap[sid] || {trades: 0, totalR: 0, wins: 0};
+      const wr   = st.trades > 0 ? (st.wins / st.trades * 100).toFixed(0) + '%' : '—';
+      const rStr = st.trades > 0 ? (st.totalR >= 0 ? '+' : '') + st.totalR.toFixed(1) + 'R' : '—';
+      const rCol = st.totalR > 0 ? 'var(--green)' : st.totalR < 0 ? 'var(--red)' : 'var(--text)';
+
+      const isSuspended = sid === 'F' && !s.enabled;
+      const isEnabled   = s.enabled;
+      const cardClass   = isSuspended ? 'cc-card cc-suspended'
+                        : isEnabled   ? 'cc-card cc-enabled'
+                        :               'cc-card cc-disabled';
+      const statusText  = isSuspended ? 'SUSPENDED' : isEnabled ? 'ENABLED' : 'DISABLED';
+      const statusClass = isSuspended ? 'cc-status-susp' : isEnabled ? 'cc-status-on' : 'cc-status-off';
+
+      const lastChange = s.disabled_at || s.enabled_at || s.created_at;
+      const lastStr    = lastChange ? new Date(lastChange).toLocaleString('en-GB', {
+        day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'
+      }) : '—';
+      const reasonStr  = s.disabled_reason ? `· ${s.disabled_reason.slice(0,40)}` : '';
+
+      const toggleChecked = isEnabled ? 'checked' : '';
+      const toggleDisabled = isSuspended ? 'disabled' : '';
+
+      return `<div class="${cardClass}" id="cc-card-${sid}">
+        <div class="cc-header">
+          <div class="cc-badge" style="background:${meta.color}">${sid}</div>
+          <div>
+            <div class="cc-name">${meta.name}</div>
+            <div class="cc-type">${meta.type}</div>
+          </div>
+          <span class="cc-status-pill ${statusClass}">${statusText}</span>
+        </div>
+        <div class="cc-perf">
+          <div class="cc-perf-stat">
+            <span class="cc-perf-label">Trades</span>
+            <span class="cc-perf-val">${st.trades || '—'}</span>
+          </div>
+          <div class="cc-perf-stat">
+            <span class="cc-perf-label">Total R</span>
+            <span class="cc-perf-val" style="color:${rCol}">${rStr}</span>
+          </div>
+          <div class="cc-perf-stat">
+            <span class="cc-perf-label">Win Rate</span>
+            <span class="cc-perf-val">${wr}</span>
+          </div>
+        </div>
+        <div class="cc-toggle-row">
+          <div class="cc-changed">${lastStr} ${reasonStr}</div>
+          <label class="cc-toggle ${isEnabled ? '' : 'cc-toggle-disabled'}" ${isSuspended ? 'title="Suspended — enable in server.py"' : ''}>
+            <input type="checkbox" ${toggleChecked} ${toggleDisabled}
+              onchange="ccToggle('${sid}', this.checked, this)">
+            <div class="cc-toggle-track"></div>
+            <div class="cc-toggle-thumb"></div>
+          </label>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('loadControlCentre:', e);
+    grid.innerHTML = '<div class="tbl-empty">Failed to load strategy config</div>';
+  }
+}
+
+function ccToggle(sid, newEnabled, checkbox) {
+  // Immediately revert the checkbox — we confirm first
+  checkbox.checked = !newEnabled;
+
+  const meta    = CC_META[sid] || {name: sid};
+  const action  = newEnabled ? 'enable' : 'disable';
+  const dialog  = document.getElementById('ccDialog');
+  const title   = document.getElementById('ccDialogTitle');
+  const body    = document.getElementById('ccDialogBody');
+  const confirm = document.getElementById('ccDialogConfirm');
+  const reason  = document.getElementById('ccDialogReason');
+
+  title.textContent  = `${newEnabled ? 'Enable' : 'Disable'} Setup ${sid}?`;
+  body.textContent   = newEnabled
+    ? `This will re-enable Setup ${sid} (${meta.name}). Signals will resume within 60 seconds.`
+    : `This will stop all Setup ${sid} (${meta.name}) signals on the live account. Confirm?`;
+  confirm.style.background = newEnabled ? 'var(--green)' : 'var(--red)';
+  confirm.textContent = newEnabled ? 'Enable' : 'Disable';
+  reason.value  = '';
+  reason.style.display = newEnabled ? 'none' : '';
+
+  _ccPending = {sid, newEnabled, checkbox};
+  dialog.style.display = 'flex';
+}
+
+function ccDialogCancel() {
+  document.getElementById('ccDialog').style.display = 'none';
+  _ccPending = null;
+}
+
+async function ccDialogConfirm() {
+  if (!_ccPending) return;
+  const {sid, newEnabled, checkbox} = _ccPending;
+  const reason = document.getElementById('ccDialogReason').value.trim();
+  document.getElementById('ccDialog').style.display = 'none';
+  _ccPending = null;
+
+  try {
+    const r = await fetch(`/api/control/strategies/${sid}/toggle`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reason}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      // Reload the whole control centre to show updated state
+      await loadControlCentre();
+    } else {
+      alert(`Toggle failed: ${d.error || 'unknown error'}`);
+    }
+  } catch (e) {
+    alert(`Toggle failed: ${e.message}`);
+  }
+}
+
+// Wire up confirm button
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('ccDialogConfirm');
+  if (btn) btn.onclick = ccDialogConfirm;
+});
 
 // ═══════════════════════════════════════════════════════
 function toggleTheme() {
