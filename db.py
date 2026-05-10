@@ -369,6 +369,51 @@ _PG_DDL = [
         timestamp  TIMESTAMPTZ NOT NULL,
         reason     TEXT
     )""",
+    # ── Research Division tables ─────────────────────────────
+    """CREATE TABLE IF NOT EXISTS strategy_health_log (
+        id                  SERIAL PRIMARY KEY,
+        setup_id            VARCHAR(10),
+        week_start          DATE,
+        sharpe_30d          FLOAT,
+        sharpe_benchmark    FLOAT,
+        win_rate            FLOAT,
+        win_rate_benchmark  FLOAT,
+        signal_count_week   INT,
+        expectancy          FLOAT,
+        health_score        INT,
+        alert_level         VARCHAR(20),
+        notes               TEXT,
+        created_at          TIMESTAMP DEFAULT NOW()
+    )""",
+    """CREATE TABLE IF NOT EXISTS shadow_lab (
+        id                     SERIAL PRIMARY KEY,
+        strategy_name          VARCHAR(100),
+        description            TEXT,
+        entered_date           DATE,
+        week_number            INT,
+        total_weeks            INT DEFAULT 8,
+        paper_sharpe           FLOAT,
+        paper_win_rate         FLOAT,
+        paper_total_r          FLOAT,
+        paper_signal_count     INT,
+        backtest_sharpe        FLOAT,
+        backtest_win_rate      FLOAT,
+        status                 VARCHAR(20),
+        promotion_eligible_date DATE,
+        notes                  TEXT,
+        created_at             TIMESTAMP DEFAULT NOW()
+    )""",
+    """CREATE TABLE IF NOT EXISTS research_decisions (
+        id              SERIAL PRIMARY KEY,
+        decision_type   VARCHAR(50),
+        subject         VARCHAR(100),
+        recommendation  TEXT,
+        supporting_data JSONB,
+        status          VARCHAR(20),
+        decided_at      TIMESTAMP,
+        outcome         TEXT,
+        created_at      TIMESTAMP DEFAULT NOW()
+    )""",
     # Indexes
     'CREATE INDEX IF NOT EXISTS idx_ohlcv_sym_tf_ts ON ohlcv (symbol, timeframe, ts)',
     'CREATE INDEX IF NOT EXISTS idx_apex_trades_status ON apex_trades (status)',

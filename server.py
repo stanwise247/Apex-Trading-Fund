@@ -12,6 +12,7 @@ import logging
 import threading
 import requests
 import db as _db
+import research_division
 from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -337,6 +338,30 @@ def init_db():
         pattern_name TEXT, score REAL, direction TEXT, entry REAL, stop REAL,
         target1 REAL, target2 REAL, outcome TEXT DEFAULT 'pending',
         outcome_rr REAL, regime TEXT, notes TEXT)''')
+    # ── Research Division tables (SQLite-compatible) ──────────
+    c.execute('''CREATE TABLE IF NOT EXISTS strategy_health_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id TEXT, week_start TEXT,
+        sharpe_30d REAL, sharpe_benchmark REAL,
+        win_rate REAL, win_rate_benchmark REAL,
+        signal_count_week REAL, expectancy REAL,
+        health_score INTEGER, alert_level TEXT, notes TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS shadow_lab (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        strategy_name TEXT, description TEXT,
+        entered_date TEXT, week_number INTEGER, total_weeks INTEGER DEFAULT 8,
+        paper_sharpe REAL, paper_win_rate REAL,
+        paper_total_r REAL, paper_signal_count INTEGER,
+        backtest_sharpe REAL, backtest_win_rate REAL,
+        status TEXT, promotion_eligible_date TEXT, notes TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS research_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_type TEXT, subject TEXT,
+        recommendation TEXT, supporting_data TEXT,
+        status TEXT, decided_at TEXT, outcome TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
     logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
@@ -1448,6 +1473,22 @@ def background_scheduler():
             _fired_today.clear()
             background_scheduler._fired_today_date = _today_utc
             logger.info(f'_fired_today reset for new day: {_today_utc}')
+
+        # ── Research Division — weekly health check (Monday 06:00 UTC) ──
+        _now_rd = datetime.now(timezone.utc)
+        if _now_rd.weekday() == 0 and _now_rd.hour == 6:
+            if not hasattr(background_scheduler, '_last_research_monday') or \
+                    background_scheduler._last_research_monday != _today_utc:
+                background_scheduler._last_research_monday = _today_utc
+                try:
+                    _rd_conn = _db.connect()
+                    research_division.run_weekly_health_check(_rd_conn)
+                    research_division.score_shadow_lab(_rd_conn)
+                    research_division.generate_weekly_telegram_report(_rd_conn)
+                    _rd_conn.close()
+                    logger.info('Research Division: weekly check complete')
+                except Exception as _rde:
+                    logger.error(f'Research Division weekly check failed: {_rde}')
 
         if now - last_daily > 86400:
             logger.info('Running daily data update...')
@@ -2629,6 +2670,13 @@ def _startup():
         logger.info('  Paper account seeded OK')
     except Exception as e:
         logger.warning('  Paper account seed failed: ' + str(e))
+    try:
+        _rd_conn = _db.connect()
+        research_division.seed_shadow_lab_candidates(_rd_conn)
+        _rd_conn.close()
+        logger.info('Research Division: initialised')
+    except Exception as _rde:
+        logger.warning(f'Research Division init failed: {_rde}')
     def startup_backfill():
         import time as _t
         _t.sleep(10)
@@ -3802,6 +3850,110 @@ def apex_health():
         'db_counts':  db_counts,
         'setup_f':    setup_f_status,
     })
+
+
+@app.route('/api/research/health', methods=['GET'])
+def research_health():
+    """Latest strategy health log entry per setup plus 4-week trend scores."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT s.setup_id, s.health_score, s.alert_level, s.sharpe_30d, "
+            "       s.sharpe_benchmark, s.win_rate, s.win_rate_benchmark, "
+            "       s.signal_count_week, s.expectancy, s.week_start, s.notes "
+            "FROM strategy_health_log s "
+            "INNER JOIN ("
+            "  SELECT setup_id, MAX(week_start) AS latest "
+            "  FROM strategy_health_log GROUP BY setup_id"
+            ") m ON s.setup_id = m.setup_id AND s.week_start = m.latest "
+            "ORDER BY s.setup_id"
+        ).fetchall()
+
+        latest = {r[0]: r for r in rows}
+
+        from datetime import date, timedelta
+        four_weeks_ago = (date.today() - timedelta(weeks=4)).isoformat()
+        trend_rows = conn.execute(
+            "SELECT setup_id, health_score, week_start "
+            "FROM strategy_health_log "
+            "WHERE week_start >= ? "
+            "ORDER BY setup_id, week_start ASC",
+            (four_weeks_ago,)
+        ).fetchall()
+        conn.close()
+
+        trend_map = {}
+        for sid, score, ws in trend_rows:
+            trend_map.setdefault(sid, []).append(score)
+
+        all_setups = ['A', 'B', 'C', 'D', 'E', 'H', 'I']
+        setups_out = []
+        for sid in all_setups:
+            r = latest.get(sid)
+            setups_out.append({
+                'setup_id':          sid,
+                'health_score':      r[1] if r else None,
+                'alert_level':       r[2] if r else 'INSUFFICIENT_DATA',
+                'sharpe_30d':        r[3] if r else None,
+                'sharpe_benchmark':  r[4] if r else research_division.BENCHMARKS.get(sid, {}).get('sharpe'),
+                'win_rate':          r[5] if r else None,
+                'win_rate_benchmark':r[6] if r else research_division.BENCHMARKS.get(sid, {}).get('wr'),
+                'signal_count_week': r[7] if r else None,
+                'expectancy':        r[8] if r else None,
+                'week_start':        r[9] if r else None,
+                'notes':             r[10] if r else None,
+                'trend':             trend_map.get(sid, []),
+            })
+
+        return jsonify({'ok': True, 'setups': setups_out})
+    except Exception as e:
+        logger.error(f'research_health error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'setups': []})
+
+
+@app.route('/api/research/shadow', methods=['GET'])
+def research_shadow():
+    """All active shadow lab candidates."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT strategy_name, description, week_number, total_weeks, "
+            "       paper_sharpe, paper_win_rate, paper_total_r, paper_signal_count, "
+            "       backtest_sharpe, backtest_win_rate, "
+            "       promotion_eligible_date, status, entered_date "
+            "FROM shadow_lab WHERE status = 'ACTIVE' ORDER BY id"
+        ).fetchall()
+        conn.close()
+        cols = [
+            'strategy_name', 'description', 'week_number', 'total_weeks',
+            'paper_sharpe', 'paper_win_rate', 'paper_total_r', 'paper_signal_count',
+            'backtest_sharpe', 'backtest_win_rate',
+            'promotion_eligible_date', 'status', 'entered_date',
+        ]
+        candidates = [dict(zip(cols, r)) for r in rows]
+        return jsonify({'ok': True, 'candidates': candidates})
+    except Exception as e:
+        logger.error(f'research_shadow error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'candidates': []})
+
+
+@app.route('/api/research/decisions', methods=['GET'])
+def research_decisions():
+    """All pending research decisions."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT id, decision_type, subject, recommendation, created_at "
+            "FROM research_decisions WHERE status = 'PENDING' "
+            "ORDER BY created_at DESC"
+        ).fetchall()
+        conn.close()
+        cols = ['id', 'decision_type', 'subject', 'recommendation', 'created_at']
+        decisions = [dict(zip(cols, r)) for r in rows]
+        return jsonify({'ok': True, 'decisions': decisions})
+    except Exception as e:
+        logger.error(f'research_decisions error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'decisions': []})
 
 
 @app.route('/api/apex/regime', methods=['GET'])

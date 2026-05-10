@@ -523,6 +523,7 @@ tr:hover td { background: var(--bg3); }
 }
 @media (max-width: 768px) {
   .topbar { padding: 0 12px; }
+  .mode-switcher { display: none; }
   .wm-wordmark { display: none; }
   .page { padding: 12px; }
   .setups-grid { grid-template-columns: 1fr 1fr; }
@@ -535,6 +536,222 @@ tr:hover td { background: var(--bg3); }
   .perf-grid { grid-template-columns: 1fr 1fr; }
   .diag-grid { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   MODE SWITCHER
+═══════════════════════════════════════════════════════ */
+.mode-switcher {
+  display: flex; align-items: center;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--r-pill); padding: 2px;
+  margin-right: 14px; flex-shrink: 0; gap: 1px;
+}
+.mode-btn {
+  padding: 4px 13px; border-radius: var(--r-pill);
+  font-family: var(--sans); font-size: 11px; font-weight: 500;
+  color: var(--text2); cursor: pointer; white-space: nowrap;
+  border: none; background: none;
+  transition: background .15s, color .15s;
+  letter-spacing: 0.01em;
+}
+.mode-btn:hover { color: var(--text); }
+.mode-btn.active {
+  background: var(--card); color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* ═══════════════════════════════════════════════════════
+   RESEARCH MODE — HEALTH TAB
+═══════════════════════════════════════════════════════ */
+.research-alert-banner {
+  padding: 10px 16px; border-radius: var(--r); margin-bottom: 16px;
+  font-family: var(--sans); font-size: 12px; font-weight: 500;
+  display: none;
+}
+.research-alert-banner.amber { background: rgba(255,159,10,0.12); color: var(--amber); border: 1px solid rgba(255,159,10,0.3); display: block; }
+.research-alert-banner.red   { background: rgba(255,59,48,0.1);   color: var(--red);   border: 1px solid rgba(255,59,48,0.3);  display: block; }
+
+.health-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px; margin-bottom: 20px;
+}
+.health-card-r {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 15px 16px;
+  display: flex; flex-direction: column; gap: 11px;
+  transition: border-color .15s;
+}
+.health-card-r:hover { border-color: var(--border2); }
+.health-card-r.watch { border-color: rgba(255,159,10,0.45); }
+.health-card-r.alert-red { border-color: rgba(255,59,48,0.45); }
+
+.hc-header { display: flex; align-items: center; gap: 10px; }
+.hc-badge {
+  width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 14px; font-weight: 700; color: #fff;
+}
+.hc-badge-a { background: #34c759; }
+.hc-badge-b { background: #0071e3; }
+.hc-badge-c { background: #ff9f0a; }
+.hc-badge-d { background: #af52de; }
+.hc-badge-e { background: #ff3b30; }
+.hc-badge-h { background: #ff9f0a; }
+.hc-badge-i { background: #5e5ce6; }
+
+.hc-title { flex: 1; }
+.hc-setup-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.hc-setup-type { font-size: 10px; color: var(--text3); margin-top: 1px; font-family: var(--mono); }
+
+.hc-alert-pill {
+  padding: 2px 7px; border-radius: var(--r-pill);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap;
+}
+.hc-pill-healthy { background: rgba(52,199,89,0.12);  color: var(--green); }
+.hc-pill-watch   { background: rgba(255,159,10,0.12); color: var(--amber); }
+.hc-pill-alert   { background: rgba(255,59,48,0.1);   color: var(--red); }
+.hc-pill-nodata  { background: rgba(110,110,115,0.1); color: var(--text3); }
+
+.hc-metrics { display: flex; gap: 14px; flex-wrap: wrap; }
+.hc-metric { display: flex; flex-direction: column; gap: 2px; }
+.hc-metric-label { font-size: 9px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.hc-metric-val { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+.hc-metric-sub { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+.hc-metric-sub.pos { color: var(--green); }
+.hc-metric-sub.neg { color: var(--red); }
+
+.hc-sparkline { width: 100%; height: 36px; }
+.hc-footer { font-size: 10px; color: var(--text3); font-family: var(--mono); padding-top: 2px; border-top: 1px solid var(--border); }
+
+/* ═══════════════════════════════════════════════════════
+   RESEARCH MODE — SHADOW LAB TAB
+═══════════════════════════════════════════════════════ */
+.shadow-cards-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px; margin-bottom: 20px;
+}
+.shadow-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.sc-header { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
+.sc-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.sc-desc { font-size: 11px; color: var(--text2); margin-top: 2px; line-height: 1.4; }
+.sc-status-pill { padding: 2px 8px; border-radius: var(--r-pill); font-size: 10px; font-weight: 600; white-space: nowrap; }
+.sc-status-active { background: rgba(52,199,89,0.12); color: var(--green); }
+
+.sc-progress-wrap { display: flex; flex-direction: column; gap: 4px; }
+.sc-progress-label { font-size: 10px; color: var(--text3); font-family: var(--mono); display: flex; justify-content: space-between; }
+.sc-prog-bar { height: 4px; border-radius: 4px; background: var(--bg3); overflow: hidden; }
+.sc-prog-fill { height: 100%; border-radius: 4px; background: var(--blue); transition: width .4s; }
+
+.sc-stats { display: flex; gap: 20px; }
+.sc-stat { display: flex; flex-direction: column; gap: 2px; }
+.sc-stat-label { font-size: 9px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.sc-stat-val { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); }
+
+.sc-paper { padding: 8px 10px; background: var(--bg3); border-radius: var(--r-sm); font-size: 11px; color: var(--text3); font-style: italic; }
+.sc-promo { font-size: 10px; color: var(--text3); font-family: var(--mono); }
+
+/* ═══════════════════════════════════════════════════════
+   RESEARCH MODE — COMING SOON
+═══════════════════════════════════════════════════════ */
+.coming-soon-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 48px;
+  text-align: center; margin-top: 40px;
+}
+.coming-soon-card .cs-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.coming-soon-card .cs-sub   { font-size: 12px; color: var(--text3); font-family: var(--mono); }
+
+/* ═══════════════════════════════════════════════════════
+   COMMAND MODE
+═══════════════════════════════════════════════════════ */
+.cmd-stat-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 12px; margin-bottom: 20px;
+}
+.cmd-stat {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 14px 16px;
+}
+.cmd-stat-label { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.cmd-stat-value { font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--text); }
+.cmd-stat-sub   { font-family: var(--mono); font-size: 11px; color: var(--text2); margin-top: 3px; }
+
+.cmd-three-col {
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px; margin-bottom: 16px;
+}
+.cmd-panel {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 14px; overflow: hidden;
+}
+.cmd-panel-title {
+  font-size: 10px; font-weight: 600; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px;
+}
+
+.cmd-component { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.cmd-component:last-child { border-bottom: none; }
+.cmd-comp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.cmd-comp-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.cmd-comp-desc { font-size: 10px; color: var(--text3); margin-top: 1px; }
+
+.cmd-strategy-item { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.cmd-strategy-item:last-child { border-bottom: none; }
+.cmd-strat-badge { width: 24px; height: 24px; border-radius: 6px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; }
+.cmd-strat-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.cmd-strat-detail { font-size: 10px; color: var(--text3); }
+.cmd-strat-pnl  { font-family: var(--mono); font-size: 12px; font-weight: 600; margin-left: auto; }
+
+.roadmap-phase { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.roadmap-phase:last-child { border-bottom: none; }
+.roadmap-phase-header { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.roadmap-num {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700;
+}
+.roadmap-num.done   { background: var(--green); color: #fff; }
+.roadmap-num.active { background: var(--blue);  color: #fff; }
+.roadmap-num.plan   { background: var(--bg3);   color: var(--text3); border: 1px solid var(--border2); }
+.roadmap-phase-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.roadmap-phase-date  { font-size: 10px; color: var(--text3); margin-left: auto; font-family: var(--mono); }
+.roadmap-items { padding-left: 28px; }
+.roadmap-item { font-size: 10px; color: var(--text3); margin-bottom: 2px; }
+.roadmap-item.done   { color: var(--green); }
+.roadmap-item.active { color: var(--blue); }
+
+.cmd-actions-list { display: flex; flex-direction: column; gap: 8px; }
+.cmd-action {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 10px 14px;
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.cmd-action-num {
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; font-family: var(--mono);
+}
+.cmd-action-num.high   { background: rgba(255,59,48,0.12);   color: var(--red); }
+.cmd-action-num.medium { background: rgba(255,159,10,0.12);  color: var(--amber); }
+.cmd-action-num.low    { background: rgba(110,110,115,0.1);  color: var(--text3); }
+.cmd-action-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.cmd-action-desc  { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.cmd-action-tag   { padding: 2px 7px; border-radius: var(--r-pill); font-size: 10px; font-weight: 600; margin-left: auto; flex-shrink: 0; }
+.cmd-action-tag.high   { background: rgba(255,59,48,0.1);   color: var(--red); }
+.cmd-action-tag.medium { background: rgba(255,159,10,0.1);  color: var(--amber); }
+.cmd-action-tag.low    { background: rgba(110,110,115,0.1); color: var(--text3); }
+
+/* Command sub-tabs (for System, Strategies etc.) */
+.cmd-subtab-content { display: none; }
+.cmd-subtab-content.active { display: block; }
+
+/* Decisions table */
+.decisions-tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -546,7 +763,13 @@ tr:hover td { background: var(--bg3); }
     <div class="wm-name">WISE MERIDIAN <span>CAPITAL</span></div>
     <div class="wm-engine">APEX ENGINE v1.1 · SYSTEMATIC TRADING</div>
   </div>
-  <nav class="topnav">
+  <div class="mode-switcher">
+    <button class="mode-btn active" onclick="switchMode('trading')">Trading</button>
+    <button class="mode-btn" onclick="switchMode('research')">Research</button>
+    <button class="mode-btn" onclick="switchMode('command')">Command</button>
+  </div>
+
+  <nav class="topnav" id="nav-trading">
     <button class="nav-btn active" onclick="switchTab('overview')">Overview</button>
     <button class="nav-btn" onclick="switchTab('tradovate')">Tradovate</button>
     <button class="nav-btn" onclick="switchTab('trades')">Trades</button>
@@ -554,6 +777,22 @@ tr:hover td { background: var(--bg3); }
     <button class="nav-btn" onclick="switchTab('setups')">Setups</button>
     <button class="nav-btn" onclick="switchTab('system')">System</button>
     <button class="nav-btn" onclick="switchTab('diagnostics')">Diagnostics</button>
+  </nav>
+
+  <nav class="topnav" id="nav-research" style="display:none">
+    <button class="nav-btn active" data-rtab="rsch-health"    onclick="switchResearchTab('rsch-health')">Health</button>
+    <button class="nav-btn"        data-rtab="rsch-shadow"    onclick="switchResearchTab('rsch-shadow')">Shadow Lab</button>
+    <button class="nav-btn"        data-rtab="rsch-discovery" onclick="switchResearchTab('rsch-discovery')">Discovery</button>
+    <button class="nav-btn"        data-rtab="rsch-patterns"  onclick="switchResearchTab('rsch-patterns')">Patterns</button>
+    <button class="nav-btn"        data-rtab="rsch-decisions" onclick="switchResearchTab('rsch-decisions')">Decisions</button>
+  </nav>
+
+  <nav class="topnav" id="nav-command" style="display:none">
+    <button class="nav-btn active" data-ctab="cmd-overview"   onclick="switchCommandTab('cmd-overview')">Overview</button>
+    <button class="nav-btn"        data-ctab="cmd-system"     onclick="switchCommandTab('cmd-system')">System</button>
+    <button class="nav-btn"        data-ctab="cmd-strategies" onclick="switchCommandTab('cmd-strategies')">Strategies</button>
+    <button class="nav-btn"        data-ctab="cmd-roadmap"    onclick="switchCommandTab('cmd-roadmap')">Roadmap</button>
+    <button class="nav-btn"        data-ctab="cmd-actions"    onclick="switchCommandTab('cmd-actions')">Actions</button>
   </nav>
   <div class="topbar-right">
     <div class="live-dot"></div>
@@ -676,6 +915,145 @@ tr:hover td { background: var(--bg3); }
     <div class="diag-block"><div class="skeleton" style="height:120px"></div></div>
     <div class="diag-block"><div class="skeleton" style="height:120px"></div></div>
     <div class="diag-block"><div class="skeleton" style="height:120px"></div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESEARCH — HEALTH ═══════════════════ -->
+<div class="page" id="page-rsch-health">
+  <div id="healthAlertBanner" class="research-alert-banner" style="display:none"></div>
+  <div class="section-title" style="margin-bottom:12px">
+    Strategy Health
+    <button class="refresh-btn" onclick="loadResearchHealth()">Refresh</button>
+  </div>
+  <div class="health-cards-grid" id="healthCardsGrid">
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESEARCH — SHADOW LAB ═══════════════════ -->
+<div class="page" id="page-rsch-shadow">
+  <div class="section-title" style="margin-bottom:12px">
+    Shadow Lab
+    <button class="refresh-btn" onclick="loadResearchShadow()">Refresh</button>
+  </div>
+  <div class="shadow-cards-grid" id="shadowCardsGrid">
+    <div class="shadow-card"><div class="skeleton" style="height:160px"></div></div>
+    <div class="shadow-card"><div class="skeleton" style="height:160px"></div></div>
+    <div class="shadow-card"><div class="skeleton" style="height:160px"></div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESEARCH — DISCOVERY ═══════════════════ -->
+<div class="page" id="page-rsch-discovery">
+  <div class="coming-soon-card">
+    <div class="cs-title">Discovery Engine</div>
+    <div class="cs-sub">Coming in Phase 3 — June 2026</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESEARCH — PATTERNS ═══════════════════ -->
+<div class="page" id="page-rsch-patterns">
+  <div class="coming-soon-card">
+    <div class="cs-title">Pattern Research</div>
+    <div class="cs-sub">Coming in Phase 3 — June 2026</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESEARCH — DECISIONS ═══════════════════ -->
+<div class="page" id="page-rsch-decisions">
+  <div class="section-title" style="margin-bottom:12px">
+    Pending Decisions
+    <button class="refresh-btn" onclick="loadResearchDecisions()">Refresh</button>
+  </div>
+  <div class="decisions-tbl-wrap" id="decisionsTbl">
+    <div class="tbl-empty">Loading…</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMMAND — OVERVIEW ═══════════════════ -->
+<div class="page" id="page-cmd-overview">
+  <div class="cmd-stat-grid">
+    <div class="cmd-stat">
+      <div class="cmd-stat-label">Strategy P&amp;L</div>
+      <div class="cmd-stat-value" id="cmdPnl">—</div>
+      <div class="cmd-stat-sub" id="cmdPnlSub">Loading…</div>
+    </div>
+    <div class="cmd-stat">
+      <div class="cmd-stat-label">System Health</div>
+      <div class="cmd-stat-value">8<span style="font-size:14px;color:var(--text3)">/10</span></div>
+      <div class="cmd-stat-sub">Setup F offline · all others nominal</div>
+    </div>
+    <div class="cmd-stat">
+      <div class="cmd-stat-label">Active Strategies</div>
+      <div class="cmd-stat-value">7</div>
+      <div class="cmd-stat-sub">A · B · C · D · E · H · I</div>
+    </div>
+    <div class="cmd-stat">
+      <div class="cmd-stat-label">Build Phase</div>
+      <div class="cmd-stat-value" style="font-size:15px">Phase 1</div>
+      <div class="cmd-stat-sub">Research Division</div>
+    </div>
+  </div>
+
+  <div class="cmd-three-col">
+    <!-- System components -->
+    <div class="cmd-panel">
+      <div class="cmd-panel-title">System Components</div>
+      <div id="cmdComponents"></div>
+    </div>
+    <!-- Strategy stack -->
+    <div class="cmd-panel">
+      <div class="cmd-panel-title">Strategy Stack</div>
+      <div id="cmdStrategies"></div>
+    </div>
+    <!-- Roadmap -->
+    <div class="cmd-panel">
+      <div class="cmd-panel-title">Roadmap</div>
+      <div id="cmdRoadmap"></div>
+    </div>
+  </div>
+
+  <div class="cmd-panel" style="margin-bottom:16px">
+    <div class="cmd-panel-title">Action Items</div>
+    <div class="cmd-actions-list" id="cmdActions"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMMAND — SYSTEM ═══════════════════ -->
+<div class="page" id="page-cmd-system">
+  <div class="cmd-panel">
+    <div class="cmd-panel-title">System Components — Detail</div>
+    <div id="cmdSystemDetail"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMMAND — STRATEGIES ═══════════════════ -->
+<div class="page" id="page-cmd-strategies">
+  <div class="cmd-panel">
+    <div class="cmd-panel-title">Strategy Reference</div>
+    <div id="cmdStrategiesDetail"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMMAND — ROADMAP ═══════════════════ -->
+<div class="page" id="page-cmd-roadmap">
+  <div class="cmd-panel">
+    <div class="cmd-panel-title">Full Roadmap</div>
+    <div id="cmdRoadmapDetail"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMMAND — ACTIONS ═══════════════════ -->
+<div class="page" id="page-cmd-actions">
+  <div class="cmd-panel">
+    <div class="cmd-panel-title">Action Items</div>
+    <div class="cmd-actions-list" id="cmdActionsDetail"></div>
   </div>
 </div>
 
@@ -1697,6 +2075,476 @@ function startRefreshLoop() {
 
 // ═══════════════════════════════════════════════════════
 // BOOT
+// ═══════════════════════════════════════════════════════
+//  MODE SWITCHING
+// ═══════════════════════════════════════════════════════
+let _currentMode   = 'trading';
+let _researchTab   = 'rsch-health';
+let _commandTab    = 'cmd-overview';
+let _tradingTabSaved = 'overview';
+
+function switchMode(mode) {
+  _currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.trim().toLowerCase() === mode);
+  });
+  document.getElementById('nav-trading').style.display  = mode === 'trading'  ? '' : 'none';
+  document.getElementById('nav-research').style.display = mode === 'research' ? '' : 'none';
+  document.getElementById('nav-command').style.display  = mode === 'command'  ? '' : 'none';
+  if (mode === 'trading')  { switchTab(_tradingTabSaved); }
+  if (mode === 'research') { switchResearchTab(_researchTab); }
+  if (mode === 'command')  { switchCommandTab(_commandTab); }
+}
+
+function switchResearchTab(tab) {
+  _researchTab = tab;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const page = document.getElementById('page-' + tab);
+  if (page) page.classList.add('active');
+  document.querySelectorAll('#nav-research .nav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.rtab === tab);
+  });
+  const loaders = {
+    'rsch-health':    loadResearchHealth,
+    'rsch-shadow':    loadResearchShadow,
+    'rsch-decisions': loadResearchDecisions,
+  };
+  if (loaders[tab]) loaders[tab]();
+}
+
+function switchCommandTab(tab) {
+  _commandTab = tab;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const page = document.getElementById('page-' + tab);
+  if (page) page.classList.add('active');
+  document.querySelectorAll('#nav-command .nav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.ctab === tab);
+  });
+  if (tab === 'cmd-overview') renderCommandOverview();
+  if (tab === 'cmd-system')   renderCommandSystem();
+  if (tab === 'cmd-strategies') renderCommandStrategies();
+  if (tab === 'cmd-roadmap')  renderCommandRoadmap();
+  if (tab === 'cmd-actions')  renderCommandActions();
+}
+
+// Patch existing switchTab to track the current trading tab
+const _origSwitchTab = switchTab;
+function switchTab(tab) {
+  if (_currentMode === 'trading') _tradingTabSaved = tab;
+  _origSwitchTab(tab);
+}
+
+// ═══════════════════════════════════════════════════════
+//  RESEARCH — HEALTH
+// ═══════════════════════════════════════════════════════
+const SETUP_NAMES_R = {
+  A: 'Sweep + OB', B: 'ChoCh + OB', C: 'BOS + OB', D: 'FVG Fill',
+  E: 'EMA50 Pullback', H: 'VWAP Reversion', I: 'Mathematical Alpha',
+};
+const SETUP_TYPES_R = {
+  A: 'Gate · Swing', B: 'Gate · Swing', C: 'Gate · Swing',
+  D: 'Gate · Intraday', E: 'Gate · Intraday',
+  H: 'Gate · Intraday', I: 'ML Ensemble',
+};
+
+function _sparklineSVG(scores, w=120, h=32) {
+  const valid = scores.filter(v => v != null);
+  if (valid.length < 2) {
+    return `<svg width="${w}" height="${h}" class="hc-sparkline"><text x="4" y="${h/2+4}" font-size="9" fill="var(--text3)" font-family="var(--mono)">no trend data</text></svg>`;
+  }
+  const mn = Math.min(...valid), mx = Math.max(...valid);
+  const range = mx - mn || 1;
+  const pad = 3;
+  const pts = valid.map((v, i) => {
+    const x = pad + (i / (valid.length - 1)) * (w - 2 * pad);
+    const y = pad + (1 - (v - mn) / range) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = valid[valid.length - 1];
+  const strokeColor = last > 75 ? 'var(--green)' : last >= 50 ? 'var(--amber)' : 'var(--red)';
+  return `<svg width="${w}" height="${h}" class="hc-sparkline" style="width:100%">
+    <polyline points="${pts.join(' ')}" fill="none" stroke="${strokeColor}" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="${pts[pts.length-1].split(',')[0]}" cy="${pts[pts.length-1].split(',')[1]}" r="2.5" fill="${strokeColor}"/>
+  </svg>`;
+}
+
+async function loadResearchHealth() {
+  try {
+    const r = await fetch('/api/research/health');
+    if (!r.ok) return;
+    const data = await r.json();
+    const grid = document.getElementById('healthCardsGrid');
+    const banner = document.getElementById('healthAlertBanner');
+    if (!data.setups) return;
+
+    // Alert banner
+    const alerts = data.setups.filter(s => s.alert_level === 'ALERT');
+    const watches = data.setups.filter(s => s.alert_level === 'WATCH');
+    if (alerts.length) {
+      banner.className = 'research-alert-banner red';
+      banner.textContent = `⚠ ${alerts.map(s=>s.setup_id).join(', ')} — ALERT: health score below 50. Immediate review required.`;
+    } else if (watches.length) {
+      banner.className = 'research-alert-banner amber';
+      banner.textContent = `⚠ ${watches.map(s=>s.setup_id).join(', ')} — WATCH: health score 50–75. Monitor closely.`;
+    } else {
+      banner.className = 'research-alert-banner';
+      banner.style.display = 'none';
+    }
+
+    grid.innerHTML = data.setups.map(s => {
+      const sid   = s.setup_id;
+      const name  = SETUP_NAMES_R[sid] || sid;
+      const type  = SETUP_TYPES_R[sid] || '';
+      const al    = s.alert_level || 'INSUFFICIENT_DATA';
+      const cardClass = al === 'WATCH' ? 'health-card-r watch' :
+                        al === 'ALERT' ? 'health-card-r alert-red' : 'health-card-r';
+      const pillClass = al === 'HEALTHY'           ? 'hc-pill-healthy' :
+                        al === 'WATCH'             ? 'hc-pill-watch'   :
+                        al === 'ALERT'             ? 'hc-pill-alert'   : 'hc-pill-nodata';
+      const pillText  = al === 'INSUFFICIENT_DATA' ? 'NO DATA' : al;
+
+      let metricsHtml = '';
+      if (s.health_score != null) {
+        // Sharpe comparison
+        const sharpeVsBench = (s.sharpe_30d != null && s.sharpe_benchmark)
+          ? ((s.sharpe_30d / s.sharpe_benchmark - 1) * 100).toFixed(0)
+          : null;
+        const sharpeSubClass = sharpeVsBench != null ? (sharpeVsBench >= 0 ? 'pos' : 'neg') : '';
+        const sharpeSubText  = sharpeVsBench != null ? (sharpeVsBench >= 0 ? `+${sharpeVsBench}%` : `${sharpeVsBench}%`) : '—';
+        // WR comparison
+        const wrVsBench = (s.win_rate != null && s.win_rate_benchmark)
+          ? ((s.win_rate - s.win_rate_benchmark) * 100).toFixed(1)
+          : null;
+        const wrSubClass = wrVsBench != null ? (parseFloat(wrVsBench) >= 0 ? 'pos' : 'neg') : '';
+        const wrSubText  = wrVsBench != null ? (parseFloat(wrVsBench) >= 0 ? `+${wrVsBench}pp` : `${wrVsBench}pp`) : '—';
+
+        metricsHtml = `
+          <div class="hc-metrics">
+            <div class="hc-metric">
+              <span class="hc-metric-label">Sharpe</span>
+              <span class="hc-metric-val">${s.sharpe_30d != null ? s.sharpe_30d.toFixed(2) : '—'}</span>
+              <span class="hc-metric-sub ${sharpeSubClass}">${sharpeSubText} vs BM</span>
+            </div>
+            <div class="hc-metric">
+              <span class="hc-metric-label">Win Rate</span>
+              <span class="hc-metric-val">${s.win_rate != null ? (s.win_rate*100).toFixed(1)+'%' : '—'}</span>
+              <span class="hc-metric-sub ${wrSubClass}">${wrSubText} vs BM</span>
+            </div>
+            <div class="hc-metric">
+              <span class="hc-metric-label">Signals/wk</span>
+              <span class="hc-metric-val">${s.signal_count_week != null ? s.signal_count_week.toFixed(1) : '—'}</span>
+              <span class="hc-metric-sub">4-wk avg</span>
+            </div>
+            <div class="hc-metric">
+              <span class="hc-metric-label">Expectancy</span>
+              <span class="hc-metric-val">${s.expectancy != null ? (s.expectancy>0?'+':'')+s.expectancy.toFixed(2)+'R' : '—'}</span>
+              <span class="hc-metric-sub">last 20</span>
+            </div>
+          </div>
+          ${_sparklineSVG(s.trend || [], 140, 36)}`;
+      } else {
+        metricsHtml = `<div style="color:var(--text3);font-size:11px;font-family:var(--mono)">Fewer than 5 closed trades — no metrics yet</div>`;
+      }
+
+      const footerHtml = s.notes ? `<div class="hc-footer">⚠ ${s.notes}</div>` : '';
+
+      return `<div class="${cardClass}">
+        <div class="hc-header">
+          <div class="hc-badge hc-badge-${sid.toLowerCase()}">${sid}</div>
+          <div class="hc-title">
+            <div class="hc-setup-name">${name}</div>
+            <div class="hc-setup-type">${type}</div>
+          </div>
+          <span class="hc-alert-pill ${pillClass}">${pillText}</span>
+          ${s.health_score != null ? `<span style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--text)">${s.health_score}</span>` : ''}
+        </div>
+        ${metricsHtml}
+        ${footerHtml}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('loadResearchHealth:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RESEARCH — SHADOW LAB
+// ═══════════════════════════════════════════════════════
+async function loadResearchShadow() {
+  try {
+    const r = await fetch('/api/research/shadow');
+    if (!r.ok) return;
+    const data = await r.json();
+    const grid = document.getElementById('shadowCardsGrid');
+    if (!data.candidates || !data.candidates.length) {
+      grid.innerHTML = '<div class="tbl-empty" style="padding:32px">No active shadow lab candidates</div>';
+      return;
+    }
+    grid.innerHTML = data.candidates.map(c => {
+      const pct    = Math.round(((c.week_number || 0) / (c.total_weeks || 8)) * 100);
+      const promoD = c.promotion_eligible_date
+        ? new Date(c.promotion_eligible_date).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'})
+        : '—';
+      return `<div class="shadow-card">
+        <div class="sc-header">
+          <div>
+            <div class="sc-name">${c.strategy_name}</div>
+            <div class="sc-desc">${c.description || ''}</div>
+          </div>
+          <span class="sc-status-pill sc-status-active">${c.status || 'ACTIVE'}</span>
+        </div>
+        <div class="sc-progress-wrap">
+          <div class="sc-progress-label">
+            <span>Shadow Lab Progress</span>
+            <span>Week ${c.week_number || 0} of ${c.total_weeks || 8}</span>
+          </div>
+          <div class="sc-prog-bar"><div class="sc-prog-fill" style="width:${pct}%"></div></div>
+        </div>
+        <div class="sc-stats">
+          <div class="sc-stat">
+            <span class="sc-stat-label">BT Sharpe</span>
+            <span class="sc-stat-val">${c.backtest_sharpe != null ? c.backtest_sharpe.toFixed(2) : '—'}</span>
+          </div>
+          <div class="sc-stat">
+            <span class="sc-stat-label">BT Win Rate</span>
+            <span class="sc-stat-val">${c.backtest_win_rate != null ? (c.backtest_win_rate*100).toFixed(0)+'%' : '—'}</span>
+          </div>
+        </div>
+        <div class="sc-paper">Live paper tracking begins when paper trades log · Phase 2</div>
+        <div class="sc-promo">Promotion eligible: ${promoD}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('loadResearchShadow:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RESEARCH — DECISIONS
+// ═══════════════════════════════════════════════════════
+async function loadResearchDecisions() {
+  try {
+    const r = await fetch('/api/research/decisions');
+    if (!r.ok) return;
+    const data = await r.json();
+    const wrap = document.getElementById('decisionsTbl');
+    if (!data.decisions || !data.decisions.length) {
+      wrap.innerHTML = '<div class="tbl-empty">No pending decisions</div>';
+      return;
+    }
+    wrap.innerHTML = `<table>
+      <thead><tr>
+        <th>Type</th><th>Subject</th><th>Recommendation</th><th>Created</th>
+      </tr></thead>
+      <tbody>${data.decisions.map(d => `<tr>
+        <td><span class="pill pill-open">${d.decision_type || ''}</span></td>
+        <td style="font-weight:600">${d.subject || ''}</td>
+        <td style="white-space:normal;max-width:400px">${d.recommendation || ''}</td>
+        <td style="color:var(--text3)">${d.created_at ? d.created_at.slice(0,10) : ''}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch (e) {
+    console.error('loadResearchDecisions:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  COMMAND MODE DATA
+// ═══════════════════════════════════════════════════════
+const CMD_COMPONENTS = [
+  { name: 'APEX Engine v1.1',   desc: 'Core Flask server — signal routing, API, scheduler', status: 'green' },
+  { name: 'Strategy Engine',    desc: 'A/B/C/D/E/H/I — signal generators, gate checks',    status: 'green' },
+  { name: 'Risk Manager',       desc: 'Position sizing, kill switch, drawdown tracker',     status: 'green' },
+  { name: 'Live Data Feed',     desc: 'Databento 1min stream + yfinance HTF',               status: 'green' },
+  { name: 'Paper Trader',       desc: 'Virtual account, positions, P&L tracking',           status: 'green' },
+  { name: 'Telegram Alerts',    desc: 'Signal, session, and research notifications',         status: 'green' },
+  { name: 'Research Division',  desc: 'Weekly health checks, Shadow Lab, decisions',        status: 'green' },
+  { name: 'Setup F (ML)',       desc: 'XGBoost probability model — disabled (dedup gap)',   status: 'amber' },
+];
+
+const CMD_STRAT_META = [
+  { id:'A', name:'Sweep + OB',       detail:'Gate · Swing · MNQ/ES/GC · London+NY' },
+  { id:'B', name:'ChoCh + OB',       detail:'Gate · Swing · MNQ/ES/GC · London+NY' },
+  { id:'C', name:'BOS + OB',         detail:'Gate · Swing · MNQ/ES/GC · London+NY' },
+  { id:'D', name:'FVG Fill',         detail:'Gate · Intraday · MNQ/ES · NY Primary' },
+  { id:'E', name:'EMA50 Pullback',   detail:'Gate · Intraday · MNQ · NY Primary' },
+  { id:'H', name:'VWAP Reversion',   detail:'Gate · Intraday · ES live / MNQ paper' },
+  { id:'I', name:'Mathematical Alpha',detail:'ML Ensemble XGB+LR · MNQ/ES · NY Primary' },
+];
+
+const CMD_ROADMAP = [
+  {
+    num: 1, status: 'active', title: 'Foundation', date: 'Dec 2025 – May 2026',
+    items: [
+      { done: true,  text: '7 live strategies A/B/C/D/E/H/I' },
+      { done: true,  text: 'PostgreSQL production database (Railway)' },
+      { done: true,  text: 'Telegram alerts — signals + sessions' },
+      { done: true,  text: 'Paper trading virtual account' },
+      { done: true,  text: 'Research Division — health + shadow lab' },
+    ],
+  },
+  {
+    num: 2, status: 'plan', title: 'Research Expansion', date: 'Jun – Aug 2026',
+    items: [
+      { done: false, text: 'Shadow Lab paper trading integration' },
+      { done: false, text: 'Automated promotion/demotion decisions' },
+      { done: false, text: 'Pattern Discovery engine' },
+      { done: false, text: 'Setup F dedup fix + reactivation' },
+    ],
+  },
+  {
+    num: 3, status: 'plan', title: 'Scale', date: 'Sep – Dec 2026',
+    items: [
+      { done: false, text: 'Live funded account integration' },
+      { done: false, text: 'Full portfolio optimisation' },
+      { done: false, text: 'Advanced pattern research' },
+      { done: false, text: 'Multi-instrument expansion' },
+    ],
+  },
+];
+
+const CMD_ACTIONS = [
+  { pri:1, level:'high',   title:'Resolve Setup F dedup gap', desc:'log_trade() gap under investigation — setup currently disabled, blocking live ML signals', tag:'HIGH' },
+  { pri:2, level:'high',   title:'Shadow Lab paper trading',  desc:'Wire up Phase 2 paper trading integration for shadow candidates', tag:'HIGH' },
+  { pri:3, level:'medium', title:'Setup I — ES short AUC',    desc:'Review short direction AUC on ES; currently enabled but marginal at some periods', tag:'MEDIUM' },
+  { pri:4, level:'medium', title:'Expand GC to Setup D/H',    desc:'FVG Fill and VWAP Reversion show promise on Gold futures in backtests', tag:'MEDIUM' },
+  { pri:5, level:'low',    title:'Phase 3 planning',          desc:'Define timeline and requirements for funded account integration', tag:'LOW' },
+];
+
+const STRAT_BADGE_COLORS = { A:'#34c759',B:'#0071e3',C:'#ff9f0a',D:'#af52de',E:'#ff3b30',H:'#ff9f0a',I:'#5e5ce6' };
+
+function _renderComponents(el, showDesc) {
+  el.innerHTML = CMD_COMPONENTS.map(c => {
+    const dot = c.status === 'green' ? 'dot-green' : c.status === 'amber' ? 'dot-amber' : 'dot-grey';
+    return `<div class="cmd-component">
+      <span class="dot cmd-comp-dot ${dot}"></span>
+      <div>
+        <div class="cmd-comp-name">${c.name}</div>
+        ${showDesc ? `<div class="cmd-comp-desc">${c.desc}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _renderRoadmap(el, full) {
+  el.innerHTML = CMD_ROADMAP.map(p => {
+    const nc = p.status === 'active' ? 'active' : p.status === 'done' ? 'done' : 'plan';
+    const items = full ? p.items : p.items.slice(0, 3);
+    return `<div class="roadmap-phase">
+      <div class="roadmap-phase-header">
+        <div class="roadmap-num ${nc}">${p.num}</div>
+        <span class="roadmap-phase-title">${p.title}</span>
+        <span class="roadmap-phase-date">${p.date}</span>
+      </div>
+      <div class="roadmap-items">${items.map(it =>
+        `<div class="roadmap-item ${it.done ? 'done' : (p.status==='active' ? 'active' : '')}">
+          ${it.done ? '✓' : '○'} ${it.text}
+        </div>`
+      ).join('')}</div>
+    </div>`;
+  }).join('');
+}
+
+function _renderActions(el, full) {
+  const items = full ? CMD_ACTIONS : CMD_ACTIONS.slice(0, 3);
+  el.innerHTML = items.map(a =>
+    `<div class="cmd-action">
+      <div class="cmd-action-num ${a.level}">${a.pri}</div>
+      <div style="flex:1">
+        <div class="cmd-action-title">${a.title}</div>
+        <div class="cmd-action-desc">${a.desc}</div>
+      </div>
+      <span class="cmd-action-tag ${a.level}">${a.tag}</span>
+    </div>`
+  ).join('');
+}
+
+async function renderCommandOverview() {
+  // Components
+  _renderComponents(document.getElementById('cmdComponents'), true);
+  // Roadmap
+  _renderRoadmap(document.getElementById('cmdRoadmap'), false);
+  // Actions
+  _renderActions(document.getElementById('cmdActions'), false);
+
+  // Strategy stack with live P&L from API
+  const stratEl = document.getElementById('cmdStrategies');
+  stratEl.innerHTML = CMD_STRAT_META.map(s =>
+    `<div class="cmd-strategy-item">
+      <div class="cmd-strat-badge" style="background:${STRAT_BADGE_COLORS[s.id]}">${s.id}</div>
+      <div>
+        <div class="cmd-strat-name">${s.name}</div>
+        <div class="cmd-strat-detail">${s.detail}</div>
+      </div>
+      <span class="cmd-strat-pnl" id="cmdStratPnl${s.id}" style="color:var(--text3)">—</span>
+    </div>`
+  ).join('');
+
+  // Load P&L per setup
+  try {
+    const r = await fetch('/api/apex/trades');
+    if (!r.ok) return;
+    const d = await r.json();
+    const closed = (d.all_trades || []).filter(t => t.status === 'closed' && t.pnl_r != null);
+    const pnlMap = {};
+    for (const t of closed) {
+      const sid = (t.setup || '').toUpperCase().charAt(0);
+      if (sid) pnlMap[sid] = (pnlMap[sid] || 0) + t.pnl_r;
+    }
+    let totalR = 0;
+    for (const s of CMD_STRAT_META) {
+      const el = document.getElementById('cmdStratPnl' + s.id);
+      const pnl = pnlMap[s.id];
+      if (el && pnl != null) {
+        el.textContent = (pnl > 0 ? '+' : '') + pnl.toFixed(2) + 'R';
+        el.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text3)';
+        totalR += pnl;
+      }
+    }
+    const pnlEl = document.getElementById('cmdPnl');
+    if (pnlEl) {
+      pnlEl.textContent = (totalR > 0 ? '+' : '') + totalR.toFixed(2) + 'R';
+      pnlEl.style.color = totalR >= 0 ? 'var(--green)' : 'var(--red)';
+      document.getElementById('cmdPnlSub').textContent = `${closed.length} closed trades total`;
+    }
+  } catch (_) {}
+}
+
+function renderCommandSystem() {
+  const el = document.getElementById('cmdSystemDetail');
+  if (!el) return;
+  _renderComponents(el, true);
+}
+
+function renderCommandStrategies() {
+  const el = document.getElementById('cmdStrategiesDetail');
+  if (!el) return;
+  el.innerHTML = `<table style="width:100%">
+    <thead><tr>
+      <th>Setup</th><th>Name</th><th>Type</th><th>Instruments</th><th>Session</th>
+    </tr></thead>
+    <tbody>
+      ${CMD_STRAT_META.map(s => `<tr>
+        <td><div class="cmd-strat-badge" style="background:${STRAT_BADGE_COLORS[s.id]};width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:11px">${s.id}</div></td>
+        <td style="font-weight:600">${s.name}</td>
+        <td style="color:var(--text3)">${s.detail.split('·')[0]}</td>
+        <td style="color:var(--text3)">${s.detail.split('·')[2] || ''}</td>
+        <td style="color:var(--text3)">${s.detail.split('·')[3] || ''}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function renderCommandRoadmap() {
+  const el = document.getElementById('cmdRoadmapDetail');
+  if (el) _renderRoadmap(el, true);
+}
+
+function renderCommandActions() {
+  const el = document.getElementById('cmdActionsDetail');
+  if (el) _renderActions(el, true);
+}
+
 // ═══════════════════════════════════════════════════════
 function toggleTheme() {
   const dark = document.documentElement.getAttribute('data-theme') === 'dark';
