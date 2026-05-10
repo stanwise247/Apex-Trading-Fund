@@ -12,7 +12,6 @@ import logging
 import threading
 import requests
 import db as _db
-import research_division
 from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -1481,10 +1480,11 @@ def background_scheduler():
                     background_scheduler._last_research_monday != _today_utc:
                 background_scheduler._last_research_monday = _today_utc
                 try:
+                    import research_division as _rd_mod
                     _rd_conn = _db.connect()
-                    research_division.run_weekly_health_check(_rd_conn)
-                    research_division.score_shadow_lab(_rd_conn)
-                    research_division.generate_weekly_telegram_report(_rd_conn)
+                    _rd_mod.run_weekly_health_check(_rd_conn)
+                    _rd_mod.score_shadow_lab(_rd_conn)
+                    _rd_mod.generate_weekly_telegram_report(_rd_conn)
                     _rd_conn.close()
                     logger.info('Research Division: weekly check complete')
                 except Exception as _rde:
@@ -2671,12 +2671,24 @@ def _startup():
     except Exception as e:
         logger.warning('  Paper account seed failed: ' + str(e))
     try:
+        import research_division as _rd_mod
         _rd_conn = _db.connect()
-        research_division.seed_shadow_lab_candidates(_rd_conn)
+        _rd_mod.seed_shadow_lab_candidates(_rd_conn)
         _rd_conn.close()
         logger.info('Research Division: initialised')
     except Exception as _rde:
         logger.warning(f'Research Division init failed: {_rde}')
+    # Pre-warm scan-critical modules to avoid cold-start blocking on first request
+    try:
+        from setup_engine import check_setup, check_setup_a, check_setup_c  # noqa: F401
+        from setup_e import check_setup_e                                    # noqa: F401
+        from fvg_engine import scan_setup_d                                  # noqa: F401
+        from setup_h_vwap import get_h_state                                 # noqa: F401
+        from setup_i_mathematical import get_setup_i_state                   # noqa: F401
+        from setup_f_ml import get_current_prediction                        # noqa: F401
+        logger.info('  Scan modules pre-warmed')
+    except Exception as _pw:
+        logger.warning(f'  Scan module pre-warm failed: {_pw}')
     def startup_backfill():
         import time as _t
         _t.sleep(10)
@@ -3856,6 +3868,7 @@ def apex_health():
 def research_health():
     """Latest strategy health log entry per setup plus 4-week trend scores."""
     try:
+        import research_division as _rd_mod
         conn = _db.connect()
         rows = conn.execute(
             "SELECT s.setup_id, s.health_score, s.alert_level, s.sharpe_30d, "
@@ -3895,9 +3908,9 @@ def research_health():
                 'health_score':      r[1] if r else None,
                 'alert_level':       r[2] if r else 'INSUFFICIENT_DATA',
                 'sharpe_30d':        r[3] if r else None,
-                'sharpe_benchmark':  r[4] if r else research_division.BENCHMARKS.get(sid, {}).get('sharpe'),
+                'sharpe_benchmark':  r[4] if r else _rd_mod.BENCHMARKS.get(sid, {}).get('sharpe'),
                 'win_rate':          r[5] if r else None,
-                'win_rate_benchmark':r[6] if r else research_division.BENCHMARKS.get(sid, {}).get('wr'),
+                'win_rate_benchmark':r[6] if r else _rd_mod.BENCHMARKS.get(sid, {}).get('wr'),
                 'signal_count_week': r[7] if r else None,
                 'expectancy':        r[8] if r else None,
                 'week_start':        r[9] if r else None,
@@ -3941,10 +3954,11 @@ def research_shadow():
 def research_run_check():
     """Manually trigger the weekly research health check + Telegram report."""
     try:
+        import research_division as _rd_mod
         conn = _db.connect()
-        health  = research_division.run_weekly_health_check(conn)
-        updated = research_division.score_shadow_lab(conn)
-        sent    = research_division.generate_weekly_telegram_report(conn)
+        health  = _rd_mod.run_weekly_health_check(conn)
+        updated = _rd_mod.score_shadow_lab(conn)
+        sent    = _rd_mod.generate_weekly_telegram_report(conn)
         conn.close()
         return jsonify({
             'ok':            True,
