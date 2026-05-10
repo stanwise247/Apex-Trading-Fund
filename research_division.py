@@ -735,7 +735,7 @@ def calculate_health_score(setup_id: str) -> dict:
         bt_row = c.execute(
             "SELECT edge_score, sharpe, win_rate, bars_analysed, total_signals, "
             "       sharpe_vs_benchmark, wr_vs_benchmark "
-            "FROM backtest_results WHERE setup_id=? ORDER BY run_date DESC LIMIT 1",
+            "FROM backtest_results WHERE setup_id=? ORDER BY id DESC LIMIT 1",
             (sid,)
         ).fetchone()
 

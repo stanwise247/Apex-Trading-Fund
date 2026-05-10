@@ -4054,9 +4054,14 @@ def research_backtest():
 
         from datetime import date, timedelta
         trend_cutoff = (date.today() - timedelta(days=30)).isoformat()
+        # Trend: one edge_score per (setup_id, run_date) day — use MAX(id) per day
         trend_rows = conn.execute(
-            "SELECT setup_id, edge_score, run_date FROM backtest_results "
-            "WHERE run_date >= ? ORDER BY setup_id, run_date ASC",
+            "SELECT t.setup_id, t.edge_score, t.run_date "
+            "FROM backtest_results t "
+            "WHERE t.id IN ("
+            "  SELECT MAX(id) FROM backtest_results "
+            "  WHERE run_date >= ? GROUP BY setup_id, run_date"
+            ") ORDER BY t.setup_id, t.run_date ASC",
             (trend_cutoff,)
         ).fetchall()
         conn.close()
