@@ -361,6 +361,21 @@ def init_db():
         recommendation TEXT, supporting_data TEXT,
         status TEXT, decided_at TEXT, outcome TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS backtest_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setup_id TEXT, lookback_days INTEGER, run_date TEXT,
+        total_signals INTEGER, win_rate REAL, sharpe REAL,
+        avg_r REAL, expectancy REAL, max_drawdown REAL, profit_factor REAL,
+        benchmark_sharpe REAL, benchmark_win_rate REAL,
+        sharpe_vs_benchmark REAL, wr_vs_benchmark REAL,
+        edge_score INTEGER, bars_analysed INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    # Migrate: add dual-score columns to strategy_health_log if missing
+    for col in ('backtest_score INTEGER', 'live_score INTEGER'):
+        try:
+            c.execute(f'ALTER TABLE strategy_health_log ADD COLUMN {col}')
+        except Exception:
+            pass  # already exists
     conn.commit()
     conn.close()
     logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
@@ -1472,6 +1487,21 @@ def background_scheduler():
             _fired_today.clear()
             background_scheduler._fired_today_date = _today_utc
             logger.info(f'_fired_today reset for new day: {_today_utc}')
+
+        # ── Research Division — daily backtest (02:00 UTC weekdays) ──
+        _now_bt = datetime.now(timezone.utc)
+        if _now_bt.weekday() < 5 and _now_bt.hour == 2:
+            if not hasattr(background_scheduler, '_last_backtest_day') or \
+                    background_scheduler._last_backtest_day != _today_utc:
+                background_scheduler._last_backtest_day = _today_utc
+                try:
+                    import research_division as _rd_mod
+                    _bt_conn = _db.connect()
+                    _rd_mod.run_daily_backtest(_bt_conn)
+                    _bt_conn.close()
+                    logger.info('Research Division: daily backtest complete')
+                except Exception as _bte:
+                    logger.error(f'Research Division daily backtest failed: {_bte}')
 
         # ── Research Division — weekly health check (Monday 06:00 UTC) ──
         _now_rd = datetime.now(timezone.utc)
@@ -3948,6 +3978,70 @@ def research_shadow():
     except Exception as e:
         logger.error(f'research_shadow error: {e}')
         return jsonify({'ok': False, 'error': str(e), 'candidates': []})
+
+
+@app.route('/api/research/backtest', methods=['GET'])
+def research_backtest():
+    """Latest backtest_results per setup plus 30-day edge score trend."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT b.setup_id, b.run_date, b.sharpe, b.win_rate, b.edge_score, "
+            "       b.sharpe_vs_benchmark, b.wr_vs_benchmark, "
+            "       b.bars_analysed, b.total_signals, b.profit_factor, b.max_drawdown "
+            "FROM backtest_results b "
+            "INNER JOIN (SELECT setup_id, MAX(run_date) AS latest "
+            "            FROM backtest_results GROUP BY setup_id) m "
+            "ON b.setup_id = m.setup_id AND b.run_date = m.latest "
+            "ORDER BY b.setup_id"
+        ).fetchall()
+        cols = ['setup_id', 'run_date', 'sharpe', 'win_rate', 'edge_score',
+                'sharpe_vs_benchmark', 'wr_vs_benchmark',
+                'bars_analysed', 'total_signals', 'profit_factor', 'max_drawdown']
+        results = [dict(zip(cols, r)) for r in rows]
+
+        from datetime import date, timedelta
+        trend_cutoff = (date.today() - timedelta(days=30)).isoformat()
+        trend_rows = conn.execute(
+            "SELECT setup_id, edge_score, run_date FROM backtest_results "
+            "WHERE run_date >= ? ORDER BY setup_id, run_date ASC",
+            (trend_cutoff,)
+        ).fetchall()
+        conn.close()
+        trends = {}
+        for sid, es, rd in trend_rows:
+            trends.setdefault(sid, []).append(es)
+
+        return jsonify({'ok': True, 'results': results, 'trends': trends})
+    except Exception as e:
+        logger.error(f'research_backtest error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'results': [], 'trends': {}})
+
+
+@app.route('/api/research/run_backtest', methods=['POST'])
+def research_run_backtest():
+    """Manually trigger daily backtest for all 7 setups."""
+    try:
+        import research_division as _rd_mod
+        conn = _db.connect()
+        results = _rd_mod.run_daily_backtest(conn)
+        conn.close()
+        summary = {}
+        for sid, bt in results.items():
+            if bt is not None:
+                summary[sid] = {
+                    'edge_score':    bt.edge_score,
+                    'total_signals': bt.total_signals,
+                    'sharpe':        round(bt.sharpe, 3) if bt.sharpe else None,
+                    'win_rate':      round(bt.win_rate, 3),
+                    'bars_analysed': bt.bars_analysed,
+                }
+            else:
+                summary[sid] = None
+        return jsonify({'ok': True, 'results': summary})
+    except Exception as e:
+        logger.error(f'research_run_backtest error: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/research/run_check', methods=['POST'])

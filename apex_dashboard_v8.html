@@ -752,6 +752,20 @@ tr:hover td { background: var(--bg3); }
 
 /* Decisions table */
 .decisions-tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 16px; }
+
+/* ── Edge Score Ring ── */
+.edge-ring-wrap { display: flex; align-items: center; gap: 12px; }
+.edge-ring-svg { flex-shrink: 0; }
+.edge-ring-label { font-size: 9px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.edge-ring-value { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--text); }
+.edge-ring-sub { font-size: 10px; color: var(--text3); }
+
+/* ── Dual score pills ── */
+.dual-score-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.score-chip { padding: 2px 8px; border-radius: var(--r-pill); font-family: var(--mono); font-size: 10px; font-weight: 600; }
+.score-chip-bt   { background: rgba(0,113,227,0.1); color: var(--blue); }
+.score-chip-live { background: rgba(52,199,89,0.1); color: var(--green); }
+.score-chip-na   { background: var(--bg3); color: var(--text3); }
 </style>
 </head>
 <body>
@@ -781,6 +795,7 @@ tr:hover td { background: var(--bg3); }
 
   <nav class="topnav" id="nav-research" style="display:none">
     <button class="nav-btn active" data-rtab="rsch-health"    onclick="switchResearchTab('rsch-health')">Health</button>
+    <button class="nav-btn"        data-rtab="rsch-backtest"  onclick="switchResearchTab('rsch-backtest')">Backtest</button>
     <button class="nav-btn"        data-rtab="rsch-shadow"    onclick="switchResearchTab('rsch-shadow')">Shadow Lab</button>
     <button class="nav-btn"        data-rtab="rsch-discovery" onclick="switchResearchTab('rsch-discovery')">Discovery</button>
     <button class="nav-btn"        data-rtab="rsch-patterns"  onclick="switchResearchTab('rsch-patterns')">Patterns</button>
@@ -933,6 +948,24 @@ tr:hover td { background: var(--bg3); }
     <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
     <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
     <div class="health-card-r"><div class="skeleton" style="height:140px"></div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESEARCH — BACKTEST ═══════════════════ -->
+<div class="page" id="page-rsch-backtest">
+  <div class="section-title" style="margin-bottom:12px">
+    Daily Strategy Backtest — 180-day lookback
+    <button class="refresh-btn" onclick="loadResearchBacktest()">Refresh</button>
+  </div>
+  <div id="backtestHeader" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:12px"></div>
+  <div class="health-cards-grid" id="backtestCardsGrid">
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
+    <div class="health-card-r"><div class="skeleton" style="height:160px"></div></div>
   </div>
 </div>
 
@@ -1100,13 +1133,13 @@ const SETUP_META = {
 // ── Tab switching ─────────────────────────────────────
 function switchTab(tab) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#nav-trading .nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + tab).classList.add('active');
-  document.querySelectorAll('.nav-btn').forEach(b => {
-    if (b.textContent.toLowerCase().replace(/\s/g,'') === tab) b.classList.add('active');
+  document.querySelectorAll('#nav-trading .nav-btn').forEach(b => {
+    if (b.textContent.trim().toLowerCase() === tab) b.classList.add('active');
   });
   _activeTab = tab;
-  // Trigger immediate load on tab switch
+  if (typeof _tradingTabSaved !== 'undefined') _tradingTabSaved = tab;
   const loaders = {
     overview: loadOverview, tradovate: loadTradovate,
     trades: loadTrades, performance: loadPerformance,
@@ -2106,6 +2139,7 @@ function switchResearchTab(tab) {
   });
   const loaders = {
     'rsch-health':    loadResearchHealth,
+    'rsch-backtest':  loadResearchBacktest,
     'rsch-shadow':    loadResearchShadow,
     'rsch-decisions': loadResearchDecisions,
   };
@@ -2125,13 +2159,6 @@ function switchCommandTab(tab) {
   if (tab === 'cmd-strategies') renderCommandStrategies();
   if (tab === 'cmd-roadmap')  renderCommandRoadmap();
   if (tab === 'cmd-actions')  renderCommandActions();
-}
-
-// Patch existing switchTab to track the current trading tab
-const _origSwitchTab = switchTab;
-function switchTab(tab) {
-  if (_currentMode === 'trading') _tradingTabSaved = tab;
-  _origSwitchTab(tab);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2205,30 +2232,34 @@ async function loadResearchHealth() {
 
       let metricsHtml = '';
       if (s.health_score != null) {
-        // Sharpe comparison
         const sharpeVsBench = (s.sharpe_30d != null && s.sharpe_benchmark)
-          ? ((s.sharpe_30d / s.sharpe_benchmark - 1) * 100).toFixed(0)
-          : null;
+          ? ((s.sharpe_30d / s.sharpe_benchmark - 1) * 100).toFixed(0) : null;
         const sharpeSubClass = sharpeVsBench != null ? (sharpeVsBench >= 0 ? 'pos' : 'neg') : '';
-        const sharpeSubText  = sharpeVsBench != null ? (sharpeVsBench >= 0 ? `+${sharpeVsBench}%` : `${sharpeVsBench}%`) : '—';
-        // WR comparison
         const wrVsBench = (s.win_rate != null && s.win_rate_benchmark)
-          ? ((s.win_rate - s.win_rate_benchmark) * 100).toFixed(1)
-          : null;
+          ? ((s.win_rate - s.win_rate_benchmark) * 100).toFixed(1) : null;
         const wrSubClass = wrVsBench != null ? (parseFloat(wrVsBench) >= 0 ? 'pos' : 'neg') : '';
-        const wrSubText  = wrVsBench != null ? (parseFloat(wrVsBench) >= 0 ? `+${wrVsBench}pp` : `${wrVsBench}pp`) : '—';
+
+        // Dual score chips
+        const btChip  = s.backtest_score != null
+          ? `<span class="score-chip score-chip-bt">BT ${s.backtest_score}/100</span>` : '';
+        const liveChip = s.live_score != null
+          ? `<span class="score-chip score-chip-live">Live ${s.live_score}/100</span>`
+          : `<span class="score-chip score-chip-na">Live: <5 trades</span>`;
+        const barsNote = s.bars_analysed > 0
+          ? `<span class="score-chip score-chip-na">${s.bars_analysed.toLocaleString()} bars</span>` : '';
 
         metricsHtml = `
+          <div class="dual-score-row">${btChip}${liveChip}${barsNote}</div>
           <div class="hc-metrics">
             <div class="hc-metric">
               <span class="hc-metric-label">Sharpe</span>
               <span class="hc-metric-val">${s.sharpe_30d != null ? s.sharpe_30d.toFixed(2) : '—'}</span>
-              <span class="hc-metric-sub ${sharpeSubClass}">${sharpeSubText} vs BM</span>
+              <span class="hc-metric-sub ${sharpeSubClass}">${sharpeVsBench != null ? (sharpeVsBench >= 0 ? '+' : '') + sharpeVsBench + '% vs BM' : '—'}</span>
             </div>
             <div class="hc-metric">
               <span class="hc-metric-label">Win Rate</span>
               <span class="hc-metric-val">${s.win_rate != null ? (s.win_rate*100).toFixed(1)+'%' : '—'}</span>
-              <span class="hc-metric-sub ${wrSubClass}">${wrSubText} vs BM</span>
+              <span class="hc-metric-sub ${wrSubClass}">${wrVsBench != null ? (parseFloat(wrVsBench) >= 0 ? '+' : '') + wrVsBench + 'pp' : '—'}</span>
             </div>
             <div class="hc-metric">
               <span class="hc-metric-label">Signals/wk</span>
@@ -2243,7 +2274,11 @@ async function loadResearchHealth() {
           </div>
           ${_sparklineSVG(s.trend || [], 140, 36)}`;
       } else {
-        metricsHtml = `<div style="color:var(--text3);font-size:11px;font-family:var(--mono)">Fewer than 5 closed trades — no metrics yet</div>`;
+        const btChip = s.backtest_score != null
+          ? `<span class="score-chip score-chip-bt">BT ${s.backtest_score}/100 · ${(s.bars_analysed||0).toLocaleString()} bars</span>` : '';
+        metricsHtml = `
+          <div class="dual-score-row">${btChip}</div>
+          <div style="color:var(--text3);font-size:11px;font-family:var(--mono);margin-top:6px">Fewer than 5 live trades — live score pending</div>`;
       }
 
       const footerHtml = s.notes ? `<div class="hc-footer">⚠ ${s.notes}</div>` : '';
@@ -2264,6 +2299,120 @@ async function loadResearchHealth() {
     }).join('');
   } catch (e) {
     console.error('loadResearchHealth:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RESEARCH — BACKTEST
+// ═══════════════════════════════════════════════════════
+function _edgeRingSVG(score, size=52) {
+  if (score == null) return `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text3)">—</div>`;
+  const r = (size - 6) / 2;
+  const circ = 2 * Math.PI * r;
+  const fill = (score / 100) * circ;
+  const color = score > 75 ? 'var(--green)' : score >= 50 ? 'var(--amber)' : 'var(--red)';
+  return `<svg width="${size}" height="${size}" class="edge-ring-svg" viewBox="0 0 ${size} ${size}">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--bg3)" stroke-width="5"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${color}" stroke-width="5"
+      stroke-dasharray="${fill} ${circ}" stroke-dashoffset="${circ/4}"
+      stroke-linecap="round" transform="rotate(-90 ${size/2} ${size/2})"/>
+    <text x="${size/2}" y="${size/2+5}" text-anchor="middle" font-family="var(--mono)"
+      font-size="13" font-weight="700" fill="${color}">${score}</text>
+  </svg>`;
+}
+
+async function loadResearchBacktest() {
+  const grid   = document.getElementById('backtestCardsGrid');
+  const header = document.getElementById('backtestHeader');
+  try {
+    const r = await fetch('/api/research/backtest');
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data.results) return;
+
+    if (!data.results.length) {
+      grid.innerHTML = `<div class="coming-soon-card">
+        <div class="cs-title">No Backtest Data Yet</div>
+        <div class="cs-sub">Daily backtest runs at 02:00 UTC. Use POST /api/research/run_backtest to run manually.</div>
+      </div>`;
+      return;
+    }
+
+    const allSetups = ['A','B','C','D','E','H','I'];
+    const bySetup = {};
+    for (const r2 of data.results) bySetup[r2.setup_id] = r2;
+    const trends = data.trends || {};
+
+    const runDate = data.results[0]?.run_date || '—';
+    header.textContent = `Last run: ${runDate}  ·  180-day lookback  ·  ${data.results.length} setups`;
+
+    grid.innerHTML = allSetups.map(sid => {
+      const bt   = bySetup[sid];
+      const name = SETUP_NAMES_R[sid] || sid;
+      if (!bt) {
+        return `<div class="health-card-r">
+          <div class="hc-header">
+            <div class="hc-badge hc-badge-${sid.toLowerCase()}">${sid}</div>
+            <div class="hc-title"><div class="hc-setup-name">${name}</div></div>
+            <span class="hc-alert-pill hc-pill-nodata">NO DATA</span>
+          </div>
+          <div style="color:var(--text3);font-size:11px;font-family:var(--mono)">No backtest run yet</div>
+        </div>`;
+      }
+
+      const es    = bt.edge_score;
+      const card  = es > 75 ? 'health-card-r' : es >= 50 ? 'health-card-r watch' : 'health-card-r alert-red';
+      const pill  = es > 75 ? 'hc-pill-healthy' : es >= 50 ? 'hc-pill-watch' : 'hc-pill-alert';
+      const label = es > 75 ? 'HEALTHY' : es >= 50 ? 'WATCH' : 'ALERT';
+
+      const sharpePct = bt.sharpe_vs_benchmark != null
+        ? `${bt.sharpe_vs_benchmark > 0 ? '+' : ''}${bt.sharpe_vs_benchmark.toFixed(0)}%` : '—';
+      const sharpeCls = bt.sharpe_vs_benchmark != null ? (bt.sharpe_vs_benchmark >= 0 ? 'pos' : 'neg') : '';
+      const wrPct = bt.wr_vs_benchmark != null
+        ? `${bt.wr_vs_benchmark > 0 ? '+' : ''}${bt.wr_vs_benchmark.toFixed(1)}pp` : '—';
+      const wrCls = bt.wr_vs_benchmark != null ? (bt.wr_vs_benchmark >= 0 ? 'pos' : 'neg') : '';
+
+      const trend30 = trends[sid] || [];
+
+      return `<div class="${card}">
+        <div class="hc-header">
+          <div class="hc-badge hc-badge-${sid.toLowerCase()}">${sid}</div>
+          <div class="hc-title"><div class="hc-setup-name">${name}</div><div class="hc-setup-type">180-day backtest</div></div>
+          <span class="hc-alert-pill ${pill}">${label}</span>
+        </div>
+        <div class="edge-ring-wrap">
+          ${_edgeRingSVG(es)}
+          <div>
+            <div class="edge-ring-label">Edge Score</div>
+            <div class="edge-ring-sub">${(bt.bars_analysed||0).toLocaleString()} bars · ${bt.total_signals||0} signals</div>
+          </div>
+        </div>
+        <div class="hc-metrics">
+          <div class="hc-metric">
+            <span class="hc-metric-label">Sharpe</span>
+            <span class="hc-metric-val">${bt.sharpe != null ? bt.sharpe.toFixed(2) : '—'}</span>
+            <span class="hc-metric-sub ${sharpeCls}">${sharpePct} vs BM</span>
+          </div>
+          <div class="hc-metric">
+            <span class="hc-metric-label">Win Rate</span>
+            <span class="hc-metric-val">${bt.win_rate != null ? (bt.win_rate*100).toFixed(0)+'%' : '—'}</span>
+            <span class="hc-metric-sub ${wrCls}">${wrPct} vs BM</span>
+          </div>
+          <div class="hc-metric">
+            <span class="hc-metric-label">Profit Factor</span>
+            <span class="hc-metric-val">${bt.profit_factor != null ? bt.profit_factor.toFixed(2) : '—'}</span>
+          </div>
+          <div class="hc-metric">
+            <span class="hc-metric-label">Max DD</span>
+            <span class="hc-metric-val ${bt.max_drawdown > 0.2 ? 'hc-metric-sub neg' : ''}">${bt.max_drawdown != null ? (bt.max_drawdown*100).toFixed(1)+'%' : '—'}</span>
+          </div>
+        </div>
+        ${_sparklineSVG(trend30, 140, 32)}
+        <div class="hc-footer">Last run: ${bt.run_date || '—'}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('loadResearchBacktest:', e);
   }
 }
 

@@ -414,6 +414,26 @@ _PG_DDL = [
         outcome         TEXT,
         created_at      TIMESTAMP DEFAULT NOW()
     )""",
+    """CREATE TABLE IF NOT EXISTS backtest_results (
+        id                  SERIAL PRIMARY KEY,
+        setup_id            VARCHAR(10),
+        lookback_days       INT,
+        run_date            DATE,
+        total_signals       INT,
+        win_rate            FLOAT,
+        sharpe              FLOAT,
+        avg_r               FLOAT,
+        expectancy          FLOAT,
+        max_drawdown        FLOAT,
+        profit_factor       FLOAT,
+        benchmark_sharpe    FLOAT,
+        benchmark_win_rate  FLOAT,
+        sharpe_vs_benchmark FLOAT,
+        wr_vs_benchmark     FLOAT,
+        edge_score          INT,
+        bars_analysed       INT,
+        created_at          TIMESTAMP DEFAULT NOW()
+    )""",
     # Indexes
     'CREATE INDEX IF NOT EXISTS idx_ohlcv_sym_tf_ts ON ohlcv (symbol, timeframe, ts)',
     'CREATE INDEX IF NOT EXISTS idx_apex_trades_status ON apex_trades (status)',
@@ -432,6 +452,11 @@ _PG_MIGRATIONS = [
     # Unique index — required for ON CONFLICT (symbol,timeframe,ts) to work
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique '
     'ON ohlcv (symbol, timeframe, ts)',
+    # Add dual-score columns to strategy_health_log (safe: IF NOT EXISTS)
+    'ALTER TABLE strategy_health_log ADD COLUMN IF NOT EXISTS backtest_score INT',
+    'ALTER TABLE strategy_health_log ADD COLUMN IF NOT EXISTS live_score INT',
+    # Index on backtest_results for fast per-setup lookups
+    'CREATE INDEX IF NOT EXISTS idx_backtest_setup_date ON backtest_results (setup_id, run_date)',
 ]
 
 
