@@ -3900,7 +3900,8 @@ def research_health():
         rows = conn.execute(
             "SELECT s.setup_id, s.health_score, s.alert_level, s.sharpe_30d, "
             "       s.sharpe_benchmark, s.win_rate, s.win_rate_benchmark, "
-            "       s.signal_count_week, s.expectancy, s.week_start, s.notes "
+            "       s.signal_count_week, s.expectancy, s.week_start, s.notes, "
+            "       s.backtest_score, s.live_score "
             "FROM strategy_health_log s "
             "INNER JOIN ("
             "  SELECT setup_id, MAX(week_start) AS latest "
@@ -3910,6 +3911,16 @@ def research_health():
         ).fetchall()
 
         latest = {r[0]: r for r in rows}
+
+        # Backtest rows: latest bars_analysed per setup
+        bt_rows = conn.execute(
+            "SELECT b.setup_id, b.bars_analysed, b.edge_score "
+            "FROM backtest_results b "
+            "INNER JOIN (SELECT setup_id, MAX(run_date) AS latest "
+            "            FROM backtest_results GROUP BY setup_id) m "
+            "ON b.setup_id = m.setup_id AND b.run_date = m.latest"
+        ).fetchall()
+        bt_map = {r[0]: {'bars_analysed': r[1], 'edge_score': r[2]} for r in bt_rows}
 
         from datetime import date, timedelta
         four_weeks_ago = (date.today() - timedelta(weeks=4)).isoformat()
@@ -3929,19 +3940,26 @@ def research_health():
         all_setups = ['A', 'B', 'C', 'D', 'E', 'H', 'I']
         setups_out = []
         for sid in all_setups:
-            r = latest.get(sid)
+            r  = latest.get(sid)
+            bt = bt_map.get(sid, {})
+            # backtest_score: prefer the health log column, fall back to backtest_results
+            bt_score = (r[11] if r and len(r) > 11 else None) or bt.get('edge_score')
+            lv_score = r[12] if r and len(r) > 12 else None
             setups_out.append({
                 'setup_id':          sid,
-                'health_score':      r[1] if r else None,
-                'alert_level':       r[2] if r else 'INSUFFICIENT_DATA',
-                'sharpe_30d':        r[3] if r else None,
-                'sharpe_benchmark':  r[4] if r else _rd_mod.BENCHMARKS.get(sid, {}).get('sharpe'),
-                'win_rate':          r[5] if r else None,
-                'win_rate_benchmark':r[6] if r else _rd_mod.BENCHMARKS.get(sid, {}).get('wr'),
-                'signal_count_week': r[7] if r else None,
-                'expectancy':        r[8] if r else None,
-                'week_start':        r[9] if r else None,
+                'health_score':      r[1]  if r else None,
+                'alert_level':       r[2]  if r else 'INSUFFICIENT_DATA',
+                'sharpe_30d':        r[3]  if r else None,
+                'sharpe_benchmark':  r[4]  if r else _rd_mod.BENCHMARKS.get(sid, {}).get('sharpe'),
+                'win_rate':          r[5]  if r else None,
+                'win_rate_benchmark':r[6]  if r else _rd_mod.BENCHMARKS.get(sid, {}).get('wr'),
+                'signal_count_week': r[7]  if r else None,
+                'expectancy':        r[8]  if r else None,
+                'week_start':        r[9]  if r else None,
                 'notes':             r[10] if r else None,
+                'backtest_score':    bt_score,
+                'live_score':        lv_score,
+                'bars_analysed':     bt.get('bars_analysed', 0),
                 'trend':             trend_map.get(sid, []),
             })
 
