@@ -3897,28 +3897,26 @@ def research_health():
     try:
         import research_division as _rd_mod
         conn = _db.connect()
+        # Use MAX(id) to guarantee latest row per setup — MAX(date/week) returns
+        # multiple rows when the same date appears more than once (same-day reruns)
         rows = conn.execute(
             "SELECT s.setup_id, s.health_score, s.alert_level, s.sharpe_30d, "
             "       s.sharpe_benchmark, s.win_rate, s.win_rate_benchmark, "
             "       s.signal_count_week, s.expectancy, s.week_start, s.notes, "
             "       s.backtest_score, s.live_score "
             "FROM strategy_health_log s "
-            "INNER JOIN ("
-            "  SELECT setup_id, MAX(week_start) AS latest "
-            "  FROM strategy_health_log GROUP BY setup_id"
-            ") m ON s.setup_id = m.setup_id AND s.week_start = m.latest "
-            "ORDER BY s.setup_id"
+            "WHERE s.id IN ("
+            "  SELECT MAX(id) FROM strategy_health_log GROUP BY setup_id"
+            ") ORDER BY s.setup_id"
         ).fetchall()
 
         latest = {r[0]: r for r in rows}
 
-        # Backtest rows: latest bars_analysed per setup
+        # Backtest: latest row per setup by MAX(id)
         bt_rows = conn.execute(
             "SELECT b.setup_id, b.bars_analysed, b.edge_score "
             "FROM backtest_results b "
-            "INNER JOIN (SELECT setup_id, MAX(run_date) AS latest "
-            "            FROM backtest_results GROUP BY setup_id) m "
-            "ON b.setup_id = m.setup_id AND b.run_date = m.latest"
+            "WHERE b.id IN (SELECT MAX(id) FROM backtest_results GROUP BY setup_id)"
         ).fetchall()
         bt_map = {r[0]: {'bars_analysed': r[1], 'edge_score': r[2]} for r in bt_rows}
 
@@ -4046,9 +4044,7 @@ def research_backtest():
             "       b.sharpe_vs_benchmark, b.wr_vs_benchmark, "
             "       b.bars_analysed, b.total_signals, b.profit_factor, b.max_drawdown "
             "FROM backtest_results b "
-            "INNER JOIN (SELECT setup_id, MAX(run_date) AS latest "
-            "            FROM backtest_results GROUP BY setup_id) m "
-            "ON b.setup_id = m.setup_id AND b.run_date = m.latest "
+            "WHERE b.id IN (SELECT MAX(id) FROM backtest_results GROUP BY setup_id) "
             "ORDER BY b.setup_id"
         ).fetchall()
         cols = ['setup_id', 'run_date', 'sharpe', 'win_rate', 'edge_score',
