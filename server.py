@@ -439,16 +439,26 @@ def init_db():
             c.execute(f'ALTER TABLE strategy_health_log ADD COLUMN {col}')
         except Exception:
             pass  # already exists
-    c.execute('''CREATE TABLE IF NOT EXISTS strategy_config (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setup_id TEXT UNIQUE NOT NULL,
-        enabled INTEGER DEFAULT 1,
-        disabled_reason TEXT,
-        disabled_at TEXT,
-        enabled_at TEXT,
-        updated_by TEXT DEFAULT 'dashboard',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
+    # strategy_config — isolated commit so any prior aborted tx cannot block it
+    try:
+        conn.rollback()  # clear any aborted transaction state from above migrations
+        c.execute('''CREATE TABLE IF NOT EXISTS strategy_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            setup_id TEXT UNIQUE NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            disabled_reason TEXT,
+            disabled_at TEXT,
+            enabled_at TEXT,
+            updated_by TEXT DEFAULT 'dashboard',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        conn.commit()
+    except Exception as _scfg_e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error(f'strategy_config table creation failed (non-fatal): {_scfg_e}')
     conn.close()
     logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
     _migrate_htf_prices()
