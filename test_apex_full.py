@@ -24,13 +24,15 @@ load_dotenv()
 RAILWAY_BASE = 'https://apex-trading-production-ddb3.up.railway.app'
 
 def _api(path: str, timeout: int = 15):
-    """GET a Railway API endpoint, return parsed JSON or None."""
+    """GET a Railway API endpoint, return parsed JSON or None.
+    Scan endpoint gets a longer timeout — ML model inference can be slow post-deploy."""
     import requests
+    effective_timeout = 45 if 'scan' in path else timeout
     try:
-        r = requests.get(f'{RAILWAY_BASE}{path}', timeout=timeout)
+        r = requests.get(f'{RAILWAY_BASE}{path}', timeout=effective_timeout)
         r.raise_for_status()
         return r.json()
-    except Exception as e:
+    except Exception:
         return None
 
 def _api_post(path: str, timeout: int = 15):

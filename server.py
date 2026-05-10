@@ -2705,14 +2705,27 @@ def _startup():
             f'Research Division: init failed — {_rde} — trading continues normally',
             exc_info=True
         )
-    # Pre-warm scan-critical modules to avoid cold-start blocking on first request
+    # Pre-warm scan-critical modules AND pre-load ML models to ensure
+    # the first /api/apex/scan request is fast (not blocked on .pkl disk reads)
     try:
         from setup_engine import check_setup, check_setup_a, check_setup_c  # noqa: F401
         from setup_e import check_setup_e                                    # noqa: F401
         from fvg_engine import scan_setup_d                                  # noqa: F401
         from setup_h_vwap import get_h_state                                 # noqa: F401
-        from setup_i_mathematical import get_setup_i_state                   # noqa: F401
-        from setup_f_ml import get_current_prediction                        # noqa: F401
+        from setup_i_mathematical import get_setup_i_state
+        from setup_f_ml import get_current_prediction
+        # Trigger model loading from disk now (warm the cache)
+        try:
+            get_setup_i_state('MNQ')
+            get_setup_i_state('ES')
+            logger.info('  Setup I models pre-loaded')
+        except Exception as _mi:
+            logger.debug(f'  Setup I model pre-load: {_mi}')
+        try:
+            get_current_prediction('MNQ')
+            logger.info('  Setup F model pre-loaded')
+        except Exception as _mf:
+            logger.debug(f'  Setup F model pre-load: {_mf}')
         logger.info('  Scan modules pre-warmed')
     except Exception as _pw:
         logger.warning(f'  Scan module pre-warm failed: {_pw}')
