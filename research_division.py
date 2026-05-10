@@ -596,12 +596,20 @@ def run_daily_backtest() -> dict:
                 )
             )
             w_conn.commit()
+            # Verify write succeeded (within same connection before close)
+            verify = w_conn.execute(
+                "SELECT COUNT(*) FROM backtest_results WHERE setup_id=? AND run_date=?",
+                (bt.setup_id, today.isoformat())
+            ).fetchone()
+            rows_after = verify[0] if verify else 0
             results[sid] = bt
             logger.info(
-                f'Research Backtest {sid}: signals={bt.total_signals} '
-                f'edge={bt.edge_score} sharpe={bt.sharpe} '
-                f'wr={bt.win_rate:.3f} bars={bt.bars_analysed}'
+                f'Research Backtest {sid}: WRITTEN (rows_after_commit={rows_after}) '
+                f'signals={bt.total_signals} edge={bt.edge_score} '
+                f'sharpe={bt.sharpe} wr={bt.win_rate:.3f} bars={bt.bars_analysed}'
             )
+            if rows_after == 0:
+                _write_errors[sid] = f'COMMIT_SUCCEEDED_BUT_NO_ROWS (rows_after_commit=0)'
         except Exception as e:
             _rollback(w_conn)
             err_msg = f'{type(e).__name__}: {e}'
