@@ -3937,6 +3937,26 @@ def research_shadow():
         return jsonify({'ok': False, 'error': str(e), 'candidates': []})
 
 
+@app.route('/api/research/run_check', methods=['POST'])
+def research_run_check():
+    """Manually trigger the weekly research health check + Telegram report."""
+    try:
+        conn = _db.connect()
+        health  = research_division.run_weekly_health_check(conn)
+        updated = research_division.score_shadow_lab(conn)
+        sent    = research_division.generate_weekly_telegram_report(conn)
+        conn.close()
+        return jsonify({
+            'ok':            True,
+            'health_setups': len(health),
+            'shadow_updated':len(updated),
+            'telegram_sent': sent,
+        })
+    except Exception as e:
+        logger.error(f'research_run_check error: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 @app.route('/api/research/decisions', methods=['GET'])
 def research_decisions():
     """All pending research decisions."""
