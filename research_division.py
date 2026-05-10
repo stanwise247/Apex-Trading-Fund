@@ -1042,23 +1042,21 @@ def generate_weekly_telegram_report() -> bool:
     sep      = '━' * 21
     c        = _conn()
     try:
+        # MAX(id) guarantees exactly one row per setup — avoids duplicate rows
+        # when same date appears multiple times (same-day reruns during testing)
         health_rows = c.execute(
             "SELECT s.setup_id, s.health_score, s.alert_level, "
             "       s.sharpe_30d, s.sharpe_benchmark, s.win_rate, "
             "       s.backtest_score, s.live_score "
             "FROM strategy_health_log s "
-            "INNER JOIN (SELECT setup_id, MAX(week_start) AS latest "
-            "            FROM strategy_health_log GROUP BY setup_id) m "
-            "ON s.setup_id = m.setup_id AND s.week_start = m.latest "
+            "WHERE s.id IN (SELECT MAX(id) FROM strategy_health_log GROUP BY setup_id) "
             "ORDER BY s.setup_id"
         ).fetchall()
 
         bt_rows = c.execute(
             "SELECT b.setup_id, b.edge_score, b.sharpe, b.win_rate, b.total_signals, b.run_date "
             "FROM backtest_results b "
-            "INNER JOIN (SELECT setup_id, MAX(run_date) AS latest "
-            "            FROM backtest_results GROUP BY setup_id) m "
-            "ON b.setup_id = m.setup_id AND b.run_date = m.latest "
+            "WHERE b.id IN (SELECT MAX(id) FROM backtest_results GROUP BY setup_id) "
             "ORDER BY b.setup_id"
         ).fetchall()
 
