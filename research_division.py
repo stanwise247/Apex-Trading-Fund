@@ -159,6 +159,13 @@ def _ensure_research_schema():
              "backtest_score column"),
             ("ALTER TABLE strategy_health_log ADD COLUMN IF NOT EXISTS live_score INT",
              "live_score column"),
+            # Ensure backtest_results.id has an auto-increment sequence.
+            # Earlier deploy may have created it with INTEGER PRIMARY KEY (no SERIAL).
+            ("CREATE SEQUENCE IF NOT EXISTS backtest_results_id_seq",
+             "backtest_results id sequence"),
+            ("ALTER TABLE backtest_results ALTER COLUMN id "
+             "SET DEFAULT nextval('backtest_results_id_seq')",
+             "backtest_results id default"),
             ("CREATE INDEX IF NOT EXISTS idx_backtest_setup_date "
              "ON backtest_results (setup_id, run_date)",
              "backtest index"),
