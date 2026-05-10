@@ -260,51 +260,70 @@ def _sim_outcome(df, start_idx: int, direction: str,
     return 0.0
 
 
+def _py(v):
+    """Convert numpy scalar to Python native type. psycopg2 cannot adapt numpy types."""
+    if v is None:
+        return None
+    try:
+        # numpy scalars have an item() method
+        return v.item()
+    except AttributeError:
+        return float(v) if isinstance(v, (int, float)) else v
+
+
 def _backtest_stats(pnl_list: list, benchmark_sharpe: float, benchmark_wr: float,
                     bars_analysed: int, setup_id: str, lookback_days: int) -> BacktestResult:
+    # Convert all pnl values to Python floats — they may be numpy.float64 from df.values
+    pnl_list = [float(p) for p in pnl_list]
     n = len(pnl_list)
     if n == 0:
         return BacktestResult(
-            setup_id=setup_id, lookback_days=lookback_days,
+            setup_id=setup_id, lookback_days=int(lookback_days),
             total_signals=0, win_rate=0.0, sharpe=None,
             avg_r=0.0, expectancy=0.0, max_drawdown=0.0,
-            profit_factor=0.0, benchmark_sharpe=benchmark_sharpe,
-            benchmark_win_rate=benchmark_wr,
+            profit_factor=0.0, benchmark_sharpe=float(benchmark_sharpe),
+            benchmark_win_rate=float(benchmark_wr),
             sharpe_vs_benchmark=0.0, wr_vs_benchmark=0.0,
-            edge_score=0, run_date=date.today(), bars_analysed=bars_analysed,
+            edge_score=0, run_date=date.today(), bars_analysed=int(bars_analysed),
         )
-    wins      = [p for p in pnl_list if p > 0]
-    losses    = [p for p in pnl_list if p < 0]
-    win_rate  = len(wins) / n
-    avg_r     = sum(pnl_list) / n
-    mean      = avg_r
-    var       = sum((v - mean) ** 2 for v in pnl_list) / (n - 1) if n > 1 else 0
-    std       = math.sqrt(var) if var > 0 else 0
-    sharpe    = (mean / std * math.sqrt(252)) if std > 0 else None
-    gross_win = sum(wins)
+    wins       = [p for p in pnl_list if p > 0]
+    losses     = [p for p in pnl_list if p < 0]
+    win_rate   = float(len(wins)) / n
+    avg_r      = sum(pnl_list) / n
+    mean       = avg_r
+    var        = sum((v - mean) ** 2 for v in pnl_list) / (n - 1) if n > 1 else 0
+    std        = math.sqrt(float(var)) if var > 0 else 0
+    sharpe     = float(mean / std * math.sqrt(252)) if std > 0 else None
+    gross_win  = sum(wins)
     gross_loss = abs(sum(losses))
-    profit_factor = (gross_win / gross_loss if gross_loss > 0
-                     else (999.0 if gross_win > 0 else 0.0))
+    profit_factor = float(
+        gross_win / gross_loss if gross_loss > 0
+        else (999.0 if gross_win > 0 else 0.0)
+    )
     cum = peak = max_dd = 0.0
     for p in pnl_list:
         cum += p
         if cum > peak: peak = cum
         dd = (peak - cum) / max(abs(peak), 1)
         if dd > max_dd: max_dd = dd
+    max_dd = float(max_dd)
 
-    sharpe_vs_bm = ((sharpe / benchmark_sharpe) - 1) * 100 if (sharpe and benchmark_sharpe) else -100.0
-    wr_vs_bm     = (win_rate - benchmark_wr) * 100
+    sharpe_vs_bm = float(((sharpe / benchmark_sharpe) - 1) * 100
+                         if (sharpe and benchmark_sharpe) else -100.0)
+    wr_vs_bm     = float((win_rate - benchmark_wr) * 100)
 
-    es = _edge_score(win_rate, sharpe, n, profit_factor, max_dd, benchmark_sharpe, benchmark_wr)
+    es = _edge_score(win_rate, sharpe, n, profit_factor, max_dd,
+                     float(benchmark_sharpe), float(benchmark_wr))
     return BacktestResult(
-        setup_id=setup_id, lookback_days=lookback_days,
+        setup_id=setup_id, lookback_days=int(lookback_days),
         total_signals=n, win_rate=win_rate, sharpe=sharpe,
         avg_r=avg_r, expectancy=avg_r, max_drawdown=max_dd,
-        profit_factor=profit_factor, benchmark_sharpe=benchmark_sharpe,
-        benchmark_win_rate=benchmark_wr,
+        profit_factor=profit_factor,
+        benchmark_sharpe=float(benchmark_sharpe),
+        benchmark_win_rate=float(benchmark_wr),
         sharpe_vs_benchmark=round(sharpe_vs_bm, 1),
         wr_vs_benchmark=round(wr_vs_bm, 1),
-        edge_score=es, run_date=date.today(), bars_analysed=bars_analysed,
+        edge_score=es, run_date=date.today(), bars_analysed=int(bars_analysed),
     )
 
 
@@ -576,6 +595,7 @@ def run_daily_backtest() -> dict:
         # Write in its own isolated connection
         w_conn = _conn()
         try:
+            # All values are Python natives (guaranteed by _backtest_stats + _py())
             w_conn.execute(
                 "INSERT INTO backtest_results "
                 "(setup_id, lookback_days, run_date, total_signals, win_rate, sharpe, "
@@ -584,15 +604,15 @@ def run_daily_backtest() -> dict:
                 " sharpe_vs_benchmark, wr_vs_benchmark, edge_score, bars_analysed) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    bt.setup_id, bt.lookback_days, today.isoformat(),
-                    bt.total_signals,
-                    round(bt.win_rate, 4) if bt.win_rate else 0,
-                    round(bt.sharpe, 3)   if bt.sharpe  else None,
-                    round(bt.avg_r, 4), round(bt.expectancy, 4),
-                    round(bt.max_drawdown, 4), round(bt.profit_factor, 3),
-                    bt.benchmark_sharpe, bt.benchmark_win_rate,
-                    round(bt.sharpe_vs_benchmark, 1), round(bt.wr_vs_benchmark, 1),
-                    bt.edge_score, bt.bars_analysed,
+                    str(bt.setup_id),   int(bt.lookback_days),  str(today.isoformat()),
+                    int(bt.total_signals),
+                    float(bt.win_rate)  if bt.win_rate  is not None else 0.0,
+                    float(bt.sharpe)    if bt.sharpe    is not None else None,
+                    float(bt.avg_r),    float(bt.expectancy),
+                    float(bt.max_drawdown), float(bt.profit_factor),
+                    float(bt.benchmark_sharpe), float(bt.benchmark_win_rate),
+                    float(bt.sharpe_vs_benchmark), float(bt.wr_vs_benchmark),
+                    int(bt.edge_score), int(bt.bars_analysed),
                 )
             )
             w_conn.commit()
