@@ -301,7 +301,16 @@ def monitor_trades():
             logger.warning(f'monitor_trades: {sym} — could not get current price, skipping')
             continue
 
-        logger.info(f'monitor_trades: {sym} #{t["id"]} {direction} current={price} stop={stop} target={target}')
+        risk = abs(entry - stop)
+        if risk > 0:
+            unreal_r = round((price - entry) / risk, 3) if direction == 'long' else round((entry - price) / risk, 3)
+        else:
+            unreal_r = 0.0
+        logger.info(
+            f'monitor_trades: {sym} {direction} {t["setup"]} | '
+            f'entry={entry:.2f} current={price:.2f} unrealised={unreal_r:+.3f}R | '
+            f'stop={stop:.2f} target={target:.2f}'
+        )
 
         exit_reason = None
         exit_price  = price

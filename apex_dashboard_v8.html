@@ -1416,22 +1416,47 @@ function renderOpenPositions(trades) {
     return;
   }
   const rows = trades.map(t => {
-    const entry = fmtNum(t.entry_price, 2);
-    const stop  = fmtNum(t.stop, 2);
-    const tgt   = fmtNum(t.target, 2);
-    const pnlR  = t.pnl_r != null ? fmtR(t.pnl_r) : '—';
-    const pnlStyle = t.pnl_r > 0 ? 'color:var(--green)' : t.pnl_r < 0 ? 'color:var(--red)' : '';
+    const pv      = POINT_VALUE_MAP[t.symbol] || 2;
+    const entryF  = parseFloat(t.entry_price) || 0;
+    const stopF   = parseFloat(t.stop)        || 0;
+    const tgtF    = parseFloat(t.target)      || 0;
+    const curF    = parseFloat(t.current_price) || 0;
+    const stopPts = Math.abs(entryF - stopF);
+
+    // unrealised R comes from live API field; fall back to final pnl_r if somehow populated
+    const uR   = t.current_pnl_r ?? t.pnl_r;
+    const uDol = (uR != null && stopPts > 0) ? Math.round(uR * stopPts * pv) : null;
+
+    const curStr    = curF   ? fmtNum(curF, 2) : '—';
+    const stopDist  = (curF && stopF) ? fmtNum(Math.abs(curF - stopF), 1) : '—';
+    const tgtDist   = (curF && tgtF)  ? fmtNum(Math.abs(tgtF  - curF), 1) : '—';
+    const uRStr     = uR  != null ? fmtR(uR)  : '—';
+    const uDolStr   = uDol != null ? (uDol >= 0 ? '+$' : '-$') + Math.abs(uDol) : '—';
+    const pStyle    = uR  >  0 ? 'color:var(--green)' : uR < 0 ? 'color:var(--red)' : '';
+
+    const minIn   = Math.floor((Date.now() - new Date(t.entry_time).getTime()) / 60000);
+    const timeStr = minIn >= 60 ? `${Math.floor(minIn/60)}h ${minIn%60}m` : `${minIn}m`;
+
     return `<tr>
       <td>${setupPill(t.setup)}</td>
       <td style="font-family:var(--mono);font-weight:600">${t.symbol}</td>
       <td>${dirPill(t.direction)}</td>
-      <td>${entry}</td><td>${stop}</td><td>${tgt}</td>
-      <td style="${pnlStyle};font-weight:600">${pnlR}</td>
-      <td style="color:var(--text2)">${(t.entry_time||'').slice(0,16)}</td>
+      <td style="font-family:var(--mono)">${fmtNum(entryF,2)}</td>
+      <td style="font-family:var(--mono);font-weight:600">${curStr}</td>
+      <td style="font-family:var(--mono);color:var(--red)">${fmtNum(stopF,2)}</td>
+      <td style="font-family:var(--mono);color:var(--green)">${fmtNum(tgtF,2)}</td>
+      <td style="font-family:var(--mono);color:var(--text2)">${stopDist} / ${tgtDist}</td>
+      <td style="${pStyle};font-weight:700;font-family:var(--mono)">${uRStr}</td>
+      <td style="${pStyle};font-weight:600">${uDolStr}</td>
+      <td style="color:var(--text2)">${timeStr}</td>
     </tr>`;
   }).join('');
   document.getElementById('openPosTbl').innerHTML = `<table>
-    <thead><tr><th>Setup</th><th>Symbol</th><th>Dir</th><th>Entry</th><th>Stop</th><th>Target</th><th>P&amp;L R</th><th>Time</th></tr></thead>
+    <thead><tr>
+      <th>Setup</th><th>Symbol</th><th>Dir</th>
+      <th>Entry</th><th>Current</th><th>Stop</th><th>Target</th>
+      <th>Dist (stop/tgt)</th><th>Unreal R</th><th>Unreal $</th><th>Time</th>
+    </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -1582,7 +1607,12 @@ function renderTradesTable() {
     return;
   }
   const rows = trades.map(t => {
-    const cls = t.status === 'open' ? '' : (t.pnl_r||0) > 0 ? 'win' : (t.pnl_r||0) < 0 ? 'loss' : '';
+    // Open trades: show live unrealised R (current_pnl_r). Closed: show final pnl_r.
+    const displayR = t.status === 'open' ? (t.current_pnl_r ?? t.pnl_r) : t.pnl_r;
+    const cls = displayR > 0 ? 'win' : displayR < 0 ? 'loss' : '';
+    const rLabel = t.status === 'open'
+      ? (displayR != null ? fmtR(displayR) + ' <span style="opacity:.5;font-size:.8em">unreal</span>' : '—')
+      : fmtR(displayR);
     return `<tr class="${cls}">
       <td>${t.id||'—'}</td>
       <td>${setupPill(t.setup)}</td>
@@ -1591,7 +1621,7 @@ function renderTradesTable() {
       <td>${fmtNum(t.entry_price,2)}</td>
       <td>${fmtNum(t.stop,2)}</td>
       <td>${fmtNum(t.target,2)}</td>
-      <td style="${colorR(t.pnl_r)};font-weight:600">${fmtR(t.pnl_r)}</td>
+      <td style="${colorR(displayR)};font-weight:600">${rLabel}</td>
       <td><span class="pill pill-${t.status}">${t.status}</span></td>
       <td style="color:var(--text2)">${(t.entry_time||'').slice(0,16)}</td>
       <td style="color:var(--text2)">${(t.exit_time||'').slice(0,16)||'—'}</td>
