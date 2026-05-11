@@ -91,43 +91,62 @@ def _refresh_strategy_cache():
             "SELECT setup_id, enabled FROM strategy_config"
         ).fetchall()
         conn.close()
+        _strategy_cache_ts = time.time()  # always advance — prevents hammering on empty table
         if rows:
             _strategy_enabled_cache = {r[0]: bool(r[1]) for r in rows}
-            _strategy_cache_ts = time.time()
     except Exception as _sce:
-        logger.debug(f'strategy_cache refresh failed: {_sce}')
+        _strategy_cache_ts = time.time()  # advance even on failure to prevent per-call hammering
+        logger.warning(f'Strategy config: cache refresh failed — {_sce}')
 
 
 def is_setup_enabled(setup_id: str) -> bool:
-    """Return True if the setup is enabled in strategy_config. Cached for 60 s."""
+    """Return True if the setup is enabled in strategy_config.
+
+    Defaults to True on any exception or missing config row — a missing
+    or unreadable row must never disable a live strategy.
+    """
     global _strategy_cache_ts
-    if time.time() - _strategy_cache_ts > _STRATEGY_CACHE_TTL:
-        _refresh_strategy_cache()
     sid = setup_id.upper().strip()
-    return _strategy_enabled_cache.get(sid, _STRATEGY_DEFAULTS.get(sid, True))
+    try:
+        if time.time() - _strategy_cache_ts > _STRATEGY_CACHE_TTL:
+            _refresh_strategy_cache()
+        if sid in _strategy_enabled_cache:
+            enabled = _strategy_enabled_cache[sid]
+            logger.info(f'Strategy config: Setup {sid} enabled={enabled}')
+            return enabled
+        # No row in cache — safe default, never block a live strategy
+        default = _STRATEGY_DEFAULTS.get(sid, True)
+        logger.info(f'Strategy config: Setup {sid} enabled={default} (default — no DB row)')
+        return default
+    except Exception as _e:
+        logger.warning(
+            f'Strategy config: is_setup_enabled failed for {sid} — defaulting to ENABLED'
+        )
+        return True
 
 
 def _seed_strategy_config():
-    """Ensure all setups exist in strategy_config. Idempotent — INSERT OR IGNORE."""
+    """Upsert all setups into strategy_config, enforcing correct defaults on every startup."""
     try:
         conn = _db.connect()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
             if _db.IS_POSTGRES:
                 conn.execute(
-                    "INSERT INTO strategy_config (setup_id, enabled) "
-                    "VALUES (?, ?) ON CONFLICT (setup_id) DO NOTHING",
+                    "INSERT INTO strategy_config (setup_id, enabled) VALUES (?, ?) "
+                    "ON CONFLICT (setup_id) DO UPDATE SET enabled = EXCLUDED.enabled",
                     (sid, enabled)
                 )
             else:
                 conn.execute(
-                    "INSERT OR IGNORE INTO strategy_config (setup_id, enabled) "
+                    "INSERT OR REPLACE INTO strategy_config (setup_id, enabled) "
                     "VALUES (?, ?)",
                     (sid, enabled)
                 )
         conn.commit()
         conn.close()
         _refresh_strategy_cache()
-        logger.info('Strategy Control Centre: config seeded')
+        for sid, enabled in _STRATEGY_DEFAULTS.items():
+            logger.info(f'Strategy config: Setup {sid} seeded enabled={enabled}')
     except Exception as e:
         logger.warning(f'Strategy Control Centre seed failed: {e}')
 
