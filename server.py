@@ -68,6 +68,14 @@ SIGNAL_FILTERS = {
 setup_f_enabled: bool = False   # Disabled: dedup/log_trade gap under investigation
 SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
+# ── Execution limits — configurable via Railway env vars without redeployment ──
+DAILY_LOSS_LIMIT  = int(os.environ.get('DAILY_LOSS_LIMIT', '100'))
+# Setups that scan, log, and Telegram but never send a Tradovate order.
+PAPER_ONLY_SETUPS = set(
+    s.strip().upper() for s in
+    os.environ.get('PAPER_ONLY_SETUPS', 'E').split(',') if s.strip()
+)
+
 # ── Strategy Control Centre — in-memory cache ─────────────────────────────
 # Refreshed every 60 s so there is no DB hit on every scan tick.
 # None means "not yet loaded"; each value is True=enabled, False=disabled.
@@ -1990,8 +1998,14 @@ def background_scheduler():
                     except Exception as _apex_te:
                         logger.error(f'{_setup} send_telegram failed {_sym}: {_apex_te}')
                     if _apex_tid:
-                        logger.info(f'Calling _execute_via_tradovate: {_sym} {_dirn} {_setup} trade_id={_apex_tid}')
-                        _execute_via_tradovate(_sig_dict, _apex_tid)
+                        if _ctrl_sid in PAPER_ONLY_SETUPS:
+                            logger.info(
+                                f'Setup {_ctrl_sid}: paper-only — '
+                                f'Tradovate execution skipped for {_sym} {_dirn}'
+                            )
+                        else:
+                            logger.info(f'Calling _execute_via_tradovate: {_sym} {_dirn} {_setup} trade_id={_apex_tid}')
+                            _execute_via_tradovate(_sig_dict, _apex_tid)
                     else:
                         logger.warning(f'Skipping _execute_via_tradovate — log_trade returned None for {_sym} {_dirn} {_setup}')
                     logger.info(f'APEX signal: {_sym} {_dirn} {_setup} regime={_regime.label} dd_mult={_dd_mult:.2f}×')
@@ -3105,6 +3119,9 @@ def _startup():
 
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
+    logger.info(f'  Daily loss limit:  ${DAILY_LOSS_LIMIT}')
+    logger.info(f'  Paper-only setups (no Tradovate execution): '
+                f'{", ".join(sorted(PAPER_ONLY_SETUPS)) or "none"}')
     logger.info('  Server running at: http://localhost:5000')
     logger.info('  Open apex_dashboard_v8.html in your browser')
     logger.info('=' * 55)
