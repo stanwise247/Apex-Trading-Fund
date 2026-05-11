@@ -354,13 +354,16 @@ def _backtest_stats(pnl_list: list, benchmark_sharpe: float, benchmark_wr: float
         gross_win / gross_loss if gross_loss > 0
         else (999.0 if gross_win > 0 else 0.0)
     )
-    cum = peak = max_dd = 0.0
+    # Drawdown: measure peak-to-trough in absolute R, then normalise by 100R
+    # (100R = 1% risk per trade on a standard account — keeps DD bounded and
+    # mathematically consistent with 1R max loss per trade).
+    cum = peak = max_dd_abs = 0.0
     for p in pnl_list:
         cum += p
         if cum > peak: peak = cum
-        dd = (peak - cum) / max(abs(peak), 1)
-        if dd > max_dd: max_dd = dd
-    max_dd = float(max_dd)
+        dd_abs = peak - cum
+        if dd_abs > max_dd_abs: max_dd_abs = dd_abs
+    max_dd = float(max_dd_abs / 100.0)
 
     sharpe_vs_bm = float(((sharpe / benchmark_sharpe) - 1) * 100
                          if (sharpe and benchmark_sharpe) else -100.0)
@@ -423,33 +426,124 @@ def _edge_score(win_rate: float, sharpe: Optional[float], total_signals: int,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def backtest_setup_d(conn, lookback_days: int = 180) -> Optional[BacktestResult]:
-    """FVG Fill — MNQ 5min. Bullish/bearish gap detection, session 13-19 UTC."""
+    """
+    FVG Fill — matches live scan_setup_d logic exactly:
+    - 15min FVGs (same as live scanner, not 5min)
+    - 4h EMA20 bias filter (same computation as fvg_engine.get_htf_bias)
+    - 5min entry trigger: price retraces to FVG midpoint with confirming close
+    - Stop: 1.0 × ATR(5min) beyond FVG edge (live uses ATR_1min; 5min is closest proxy)
+    - RR 2.5, session 13-19 UTC, weekdays only
+    - Quality gate: size >= 0.4×ATR, age <= 16 15min bars, penetration <= 75%
+    """
     try:
-        import pandas as pd
-        df   = _load_ohlcv_df(conn, 'MNQ', '5min', lookback_days)
-        if len(df) < 50: return None
-        atr  = _atr14(df)
-        highs = df['high'].values; lows = df['low'].values
-        hours = df['hour'].values; bars = len(df)
-        pnl   = []
-        for i in range(2, bars - 1):
-            if not (13 <= hours[i] < 19): continue
-            atr_val = atr.iloc[i]
-            if not atr_val or math.isnan(atr_val) or atr_val < 10: continue
-            fvg_top = lows[i]; fvg_bot = highs[i - 2]
-            if fvg_bot < fvg_top and (fvg_top - fvg_bot) >= 0.3 * atr_val:
-                for j in range(i + 1, min(i + 31, bars)):
-                    if lows[j] <= fvg_bot + (fvg_top - fvg_bot) * 0.5:
-                        e = fvg_bot + (fvg_top - fvg_bot) * 0.5
-                        pnl.append(_sim_outcome(df, j, 'long', e, e - atr_val, e + 2.5 * atr_val)); break
-            fvg_top2 = lows[i - 2]; fvg_bot2 = highs[i]
-            if fvg_bot2 < fvg_top2 and (fvg_top2 - fvg_bot2) >= 0.3 * atr_val:
-                for j in range(i + 1, min(i + 31, bars)):
-                    if highs[j] >= fvg_top2 - (fvg_top2 - fvg_bot2) * 0.5:
-                        e = fvg_top2 - (fvg_top2 - fvg_bot2) * 0.5
-                        pnl.append(_sim_outcome(df, j, 'short', e, e + atr_val, e - 2.5 * atr_val)); break
+        import pandas as pd, numpy as np
+
+        df15 = _load_ohlcv_df(conn, 'MNQ', '15min', lookback_days)
+        if len(df15) < 50: return None
+        df5  = _load_ohlcv_df(conn, 'MNQ', '5min',  lookback_days)
+        if len(df5)  < 50: return None
+
+        # ── 4h EMA20 bias — identical to fvg_engine.get_htf_bias() ────────
+        df5_idx = df5.set_index('dt')
+        df4h = df5_idx[['open', 'high', 'low', 'close', 'volume']].resample('4h').agg(
+            {'open': 'first', 'high': 'max', 'low': 'min',
+             'close': 'last',  'volume': 'sum'}
+        ).dropna()
+        if len(df4h) < 21: return None
+        df4h['ema20'] = df4h['close'].ewm(span=20, adjust=False).mean()
+        _bias_raw = (df4h['close'] > df4h['ema20'] * 1.001).astype(int) - \
+                    (df4h['close'] < df4h['ema20'] * 0.999).astype(int)
+        df15['bias4h'] = _bias_raw.reindex(
+            df15.set_index('dt').index, method='ffill').fillna(0).values
+        df5['bias4h']  = _bias_raw.reindex(
+            df5_idx.index,              method='ffill').fillna(0).values
+
+        atr15  = _atr14(df15);  atr5 = _atr14(df5)
+        h15    = df15['high'].values;  l15  = df15['low'].values
+        v15    = df15['volume'].values; hrs15 = df15['hour'].values
+        wday15 = df15['weekday'].values; ts15  = df15['ts'].values
+        bias15 = df15['bias4h'].values;  bars15 = len(df15)
+
+        h5   = df5['high'].values;  l5  = df5['low'].values
+        c5   = df5['close'].values; o5  = df5['open'].values
+        ts5  = df5['ts'].values;    hrs5 = df5['hour'].values
+        atr5v = atr5.values;        bars5 = len(df5)
+
+        def _quality_ok(ftype, ft, fb, sz, av, fi, ti):
+            """Lightweight quality gate mirroring score_fvg thresholds."""
+            if sz < 0.4 * av: return False          # too small
+            if (ti - fi) > 16: return False          # stale — > 4h old
+            if ti > fi:                              # check penetration
+                sl = l15[fi:ti + 1]; sh = h15[fi:ti + 1]
+                pen = ((ft - sl.min()) / sz if ftype == 'bullish'
+                       else (sh.max() - fb) / sz) if sz > 0 else 1.0
+                if pen > 0.75: return False
+            return True
+
+        pnl = []
+        for i in range(2, bars15 - 1):
+            if not (13 <= hrs15[i] < 19): continue
+            if wday15[i] >= 5: continue
+            av15 = atr15.iloc[i]
+            if not av15 or math.isnan(av15) or av15 < 10: continue
+            b    = int(bias15[i])
+            fvg_ts  = int(ts15[i])
+            max_ts  = int(ts15[min(i + 30, bars15 - 1)])
+            start5  = int(np.searchsorted(ts5, fvg_ts, side='right'))
+
+            # ── Bullish FVG — gap up: lows[right] > highs[left] ───────────
+            fvg_top = l15[i];     fvg_bot = h15[i - 2]
+            if fvg_bot < fvg_top and b >= 0:          # not counter-bearish
+                sz = fvg_top - fvg_bot
+                if sz >= 0.3 * av15:
+                    midpt = fvg_bot + sz * 0.5
+                    for idx in range(start5, bars5):
+                        if ts5[idx] > max_ts: break
+                        if not (13 <= hrs5[idx] < 19): continue
+                        # Entry: bar touched midpoint AND closed bullish above it
+                        if (l5[idx] <= midpt and
+                                c5[idx] >= midpt and c5[idx] > o5[idx]):
+                            age  = (ts5[idx] - fvg_ts) // 900
+                            ti15 = min(i + age + 1, bars15 - 1)
+                            if _quality_ok('bullish', fvg_top, fvg_bot,
+                                           sz, av15, i, ti15):
+                                av5   = (atr5v[idx] if not math.isnan(atr5v[idx])
+                                         else av15 / 3.87)
+                                s     = fvg_bot - av5
+                                risk_r = midpt - s
+                                if risk_r > 0:
+                                    pnl.append(_sim_outcome(
+                                        df5, idx, 'long',
+                                        midpt, s, midpt + 2.5 * risk_r))
+                            break
+
+            # ── Bearish FVG — gap down: highs[right] < lows[left] ─────────
+            fvg_top2 = l15[i - 2]; fvg_bot2 = h15[i]
+            if fvg_bot2 < fvg_top2 and b <= 0:        # not counter-bullish
+                sz2 = fvg_top2 - fvg_bot2
+                if sz2 >= 0.3 * av15:
+                    midpt2 = fvg_top2 - sz2 * 0.5
+                    for idx in range(start5, bars5):
+                        if ts5[idx] > max_ts: break
+                        if not (13 <= hrs5[idx] < 19): continue
+                        if (h5[idx] >= midpt2 and
+                                c5[idx] <= midpt2 and c5[idx] < o5[idx]):
+                            age  = (ts5[idx] - fvg_ts) // 900
+                            ti15 = min(i + age + 1, bars15 - 1)
+                            if _quality_ok('bearish', fvg_top2, fvg_bot2,
+                                           sz2, av15, i, ti15):
+                                av5    = (atr5v[idx] if not math.isnan(atr5v[idx])
+                                          else av15 / 3.87)
+                                s      = fvg_top2 + av5
+                                risk_r = s - midpt2
+                                if risk_r > 0:
+                                    pnl.append(_sim_outcome(
+                                        df5, idx, 'short',
+                                        midpt2, s, midpt2 - 2.5 * risk_r))
+                            break
+
         b = BENCHMARKS['D']
-        return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df), 'D', lookback_days)
+        return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df15), 'D', lookback_days)
     except Exception as e:
         logger.error(f'backtest_setup_d: {e}'); return None
 
@@ -481,37 +575,61 @@ def backtest_setup_e(conn, lookback_days: int = 180) -> Optional[BacktestResult]
 def _backtest_choch_ob(conn, setup_id: str, symbol: str,
                        session_start: int, session_end: int,
                        stop_mult: float, rr: float, lookback_days: int) -> Optional[BacktestResult]:
-    """Shared engine for B/A/C: swing-break + last-candle OB entry."""
+    """Shared engine for B/A/C: swing-break + last-candle OB entry + 4h bias filter."""
     try:
         import pandas as pd
         df5 = _load_ohlcv_df(conn, symbol, '5min', lookback_days)
         if len(df5) < 80: return None
-        df5 = df5.set_index('dt')
-        df15 = df5[['open','high','low','close','volume']].resample('15min').agg(
-            {'open':'first','high':'max','low':'min','close':'last','volume':'sum'}
+        df5_idx = df5.set_index('dt')
+
+        # 4h EMA20 bias — same logic as fvg_engine.get_htf_bias
+        df4h = df5_idx[['open', 'high', 'low', 'close', 'volume']].resample('4h').agg(
+            {'open': 'first', 'high': 'max', 'low': 'min',
+             'close': 'last',  'volume': 'sum'}
+        ).dropna()
+        if len(df4h) >= 21:
+            df4h['ema20'] = df4h['close'].ewm(span=20, adjust=False).mean()
+            _bias_raw = (df4h['close'] > df4h['ema20'] * 1.001).astype(int) - \
+                        (df4h['close'] < df4h['ema20'] * 0.999).astype(int)
+        else:
+            _bias_raw = None
+
+        df15 = df5_idx[['open', 'high', 'low', 'close', 'volume']].resample('15min').agg(
+            {'open': 'first', 'high': 'max', 'low': 'min',
+             'close': 'last',  'volume': 'sum'}
         ).dropna()
         df15['hour'] = df15.index.hour
+        if _bias_raw is not None:
+            df15['bias4h'] = _bias_raw.reindex(
+                df15.index, method='ffill').fillna(0)
+        else:
+            df15['bias4h'] = 0
         df15 = df15.reset_index(drop=True)
-        atr   = _atr14(df15)
+
+        atr    = _atr14(df15)
         highs  = df15['high'].values;  lows   = df15['low'].values
         closes = df15['close'].values; opens  = df15['open'].values
         hours  = df15['hour'].values;  bars   = len(df15); sw = 20
+        bias4h = df15['bias4h'].values
         pnl    = []
         for i in range(sw + 2, bars - 1):
             if not (session_start <= hours[i] < session_end): continue
             atr_val = atr.iloc[i]
             if not atr_val or math.isnan(atr_val): continue
+            b = int(bias4h[i])
             sh = max(highs[i - sw: i - 1]); sl = min(lows[i - sw: i - 1])
-            if closes[i] > sh and closes[i - 1] <= sh:
+            if closes[i] > sh and closes[i - 1] <= sh and b >= 0:
                 for k in range(i - 1, max(i - 15, 0), -1):
                     if closes[k] < opens[k]:
                         e = highs[k]; s = lows[k] - stop_mult * atr_val
-                        pnl.append(_sim_outcome(df15, i, 'long', e, s, e + rr * abs(e - s))); break
-            elif closes[i] < sl and closes[i - 1] >= sl:
+                        pnl.append(_sim_outcome(
+                            df15, i, 'long', e, s, e + rr * abs(e - s))); break
+            elif closes[i] < sl and closes[i - 1] >= sl and b <= 0:
                 for k in range(i - 1, max(i - 15, 0), -1):
                     if closes[k] > opens[k]:
                         e = lows[k]; s = highs[k] + stop_mult * atr_val
-                        pnl.append(_sim_outcome(df15, i, 'short', e, s, e - rr * abs(e - s))); break
+                        pnl.append(_sim_outcome(
+                            df15, i, 'short', e, s, e - rr * abs(e - s))); break
         b = BENCHMARKS[setup_id]
         return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df15), setup_id, lookback_days)
     except Exception as e:
