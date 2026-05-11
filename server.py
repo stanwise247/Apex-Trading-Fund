@@ -1299,6 +1299,12 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
     Only runs when TRADOVATE_ENABLED=true. Silently skips otherwise.
     Updates broker_order_id on the apex_trades row if execution succeeds.
     """
+    # SAFETY: block all order placement in demo/test mode.
+    # TRADOVATE_DEMO=true → local test account. APEX_TESTING=true → test suite running.
+    if (os.environ.get('TRADOVATE_DEMO', 'false').lower() != 'false' or
+            os.environ.get('APEX_TESTING', 'false').lower() == 'true'):
+        logger.info('Tradovate: execution blocked — test/demo mode')
+        return None
     try:
         from tradovate import execute_apex_signal, TRADOVATE_ENABLED, TRADING_ENABLED
         logger.info(
@@ -3493,12 +3499,14 @@ def apex_trade_close(trade_id):
         if not current_price:
             current_price = entry_price  # safe fallback — pnl_r will be ~0
 
-        # 3. Tradovate closing order — fire-and-forget, never blocks DB update
+        # 3. Tradovate closing order — only if a Tradovate order was placed for this trade.
+        # Trades without broker_order_id were never sent to Tradovate (paper/test trades)
+        # so placing a close order would open a new short — never do this.
         tradovate_order_id = None
         tradovate_error    = None
         try:
             from tradovate import place_market_close, TRADOVATE_ENABLED as _TV
-            if _TV:
+            if _TV and trade.get('broker_order_id'):
                 tv = place_market_close(symbol, direction, contracts=1)
                 if tv.get('ok'):
                     tradovate_order_id = tv.get('order_id')
@@ -3671,8 +3679,10 @@ def apex_tradovate_test():
     1. Authenticates and logs token age.
     2. Places 1-contract MNQ market order on demo.
     3. Returns orderId, fill_price, full diagnostics.
-    ONLY callable when TRADOVATE_ENABLED=true.
+    ONLY callable when TRADOVATE_ENABLED=true AND APEX_TESTING=false.
     """
+    if os.environ.get('APEX_TESTING', 'false').lower() == 'true':
+        return jsonify({'ok': False, 'reason': 'APEX_TESTING=true — order placement blocked'})
     diag = {}
     try:
         from tradovate import (

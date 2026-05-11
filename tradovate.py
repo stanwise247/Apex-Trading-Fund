@@ -522,6 +522,10 @@ def place_bracket_order(
 
     Returns {ok, order_id, fill_price, contracts, instrument}
     """
+    if (os.environ.get('TRADOVATE_DEMO', 'false').lower() != 'false' or
+            os.environ.get('APEX_TESTING', 'false').lower() == 'true'):
+        logger.info('Tradovate: place_bracket_order blocked — test/demo mode')
+        return {'ok': False, 'error': 'blocked_test_mode'}
     if not TRADOVATE_ENABLED:
         return {'ok': False, 'error': 'disabled'}
 
@@ -607,6 +611,10 @@ def place_market_close(symbol: str, direction: str, contracts: int = 1) -> dict:
 
     Returns {ok, order_id, fill_price, instrument} or {ok: False, error: ...}
     """
+    if (os.environ.get('TRADOVATE_DEMO', 'false').lower() != 'false' or
+            os.environ.get('APEX_TESTING', 'false').lower() == 'true'):
+        logger.info('Tradovate: place_market_close blocked — test/demo mode')
+        return {'ok': False, 'error': 'blocked_test_mode'}
     if not TRADOVATE_ENABLED:
         return {'ok': False, 'error': 'disabled'}
 
@@ -686,6 +694,10 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
 
     Returns {ok, contracts, fill_price, dollar_risk, order_id, instrument, skipped_reason}
     """
+    if (os.environ.get('TRADOVATE_DEMO', 'false').lower() != 'false' or
+            os.environ.get('APEX_TESTING', 'false').lower() == 'true'):
+        logger.info('Tradovate: execute_apex_signal blocked — test/demo mode')
+        return {'ok': False, 'skipped_reason': 'blocked_test_mode'}
     if not TRADOVATE_ENABLED:
         return {'ok': False, 'skipped_reason': 'disabled'}
 

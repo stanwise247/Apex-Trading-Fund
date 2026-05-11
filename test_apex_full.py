@@ -21,6 +21,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv()
 
+# ── SAFETY GATE — must be first check after env load ─────────────────────────
+# Real money has been lost twice by tests triggering live Tradovate orders.
+# APEX_TESTING=true in .env blocks ALL order placement in tradovate.py.
+# This assert ensures the suite can never run without that env var set.
+assert os.environ.get('APEX_TESTING') == 'true', (
+    '\n\nAPEX_TESTING must be set to true before running tests.\n'
+    'Add APEX_TESTING=true to your .env file.\n'
+    'This prevents test runs from placing real Tradovate orders.\n'
+)
+# ─────────────────────────────────────────────────────────────────────────────
+
 RAILWAY_BASE = 'https://apex-trading-production-ddb3.up.railway.app'
 
 def _api(path: str, timeout: int = 15):
@@ -219,6 +230,10 @@ def test_4_tradovate_order():
         )
         import requests
 
+        # SAFETY: never place an order when APEX_TESTING=true (always true in .env)
+        if os.environ.get('APEX_TESTING', 'false').lower() == 'true':
+            _pass('TEST 4  Tradovate order', 'APEX_TESTING=true — order placement blocked (safe)')
+            return
         if not TRADOVATE_ENABLED:
             _pass('TEST 4  Tradovate order', 'TRADOVATE_ENABLED=false — skipped (expected)')
             return
