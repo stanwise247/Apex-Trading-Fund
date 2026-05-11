@@ -197,6 +197,60 @@ def _ensure_research_schema():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  RESEARCH STATE — DB-backed dedup for scheduled jobs
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _health_check_ran_recently() -> bool:
+    """Return True if run_weekly_health_check ran within the last 24 hours.
+
+    Queries the research_state table so the guard survives server restarts.
+    Returns False (allow run) on any DB error so a broken state table never
+    permanently blocks the health check.
+    """
+    c = _conn()
+    try:
+        row = c.execute(
+            "SELECT value FROM research_state WHERE key = 'last_health_check_run'"
+        ).fetchone()
+        if not row:
+            return False
+        last_run = datetime.fromisoformat(row[0])
+        if last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_run) < timedelta(hours=24)
+    except Exception as e:
+        logger.warning(f'Research state read failed: {e}')
+        return False
+    finally:
+        _close(c)
+
+
+def _mark_health_check_ran() -> None:
+    """Persist the current UTC time as the last successful health check timestamp."""
+    c = _conn()
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if _db.IS_POSTGRES:
+            c.execute(
+                "INSERT INTO research_state (key, value) VALUES ('last_health_check_run', ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (now_iso,)
+            )
+        else:
+            c.execute(
+                "INSERT OR REPLACE INTO research_state (key, value) "
+                "VALUES ('last_health_check_run', ?)",
+                (now_iso,)
+            )
+        c.commit()
+    except Exception as e:
+        logger.warning(f'Research state write failed: {e}')
+        _rollback(c)
+    finally:
+        _close(c)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  BACKTEST HELPERS (read-only, accept conn param for isolation)
 # ═══════════════════════════════════════════════════════════════════════════
 

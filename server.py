@@ -433,6 +433,9 @@ def init_db():
         sharpe_vs_benchmark REAL, wr_vs_benchmark REAL,
         edge_score INTEGER, bars_analysed INTEGER,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS research_state (
+        key TEXT PRIMARY KEY,
+        value TEXT)''')
     # Migrate: add dual-score columns to strategy_health_log if missing
     for col in ('backtest_score INTEGER', 'live_score INTEGER'):
         try:
@@ -1587,6 +1590,8 @@ def background_scheduler():
                     logger.error(f'Research Division daily backtest failed: {_bte}')
 
         # ── Research Division — weekly health check (Monday 06:00 UTC) ──
+        # DB-backed guard: persists across restarts so the check runs exactly once
+        # per week even if Railway restarts the server multiple times on Monday morning.
         _now_rd = datetime.now(timezone.utc)
         if _now_rd.weekday() == 0 and _now_rd.hour == 6:
             if not hasattr(background_scheduler, '_last_research_monday') or \
@@ -1594,10 +1599,14 @@ def background_scheduler():
                 background_scheduler._last_research_monday = _today_utc
                 try:
                     import research_division as _rd_mod
-                    _rd_mod.run_weekly_health_check()
-                    _rd_mod.score_shadow_lab()
-                    _rd_mod.generate_weekly_telegram_report()
-                    logger.info('Research Division: weekly check complete')
+                    if _rd_mod._health_check_ran_recently():
+                        logger.info('Research Division: weekly check skipped — ran within last 24h')
+                    else:
+                        _rd_mod.run_weekly_health_check()
+                        _rd_mod.score_shadow_lab()
+                        _rd_mod.generate_weekly_telegram_report()
+                        _rd_mod._mark_health_check_ran()
+                        logger.info('Research Division: weekly check complete')
                 except Exception as _rde:
                     logger.error(f'Research Division weekly check failed: {_rde}')
 
