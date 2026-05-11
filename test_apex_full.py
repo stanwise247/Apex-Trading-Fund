@@ -45,6 +45,28 @@ def _api_post(path: str, timeout: int = 15):
     except Exception as e:
         return None
 
+def _api_post_json(path: str, body: dict = None, timeout: int = 15):
+    """POST with JSON body; returns (data, status_code). Never raises."""
+    import requests
+    try:
+        r = requests.post(f'{RAILWAY_BASE}{path}', json=body or {}, timeout=timeout)
+        try:    data = r.json()
+        except Exception: data = {}
+        return data, r.status_code
+    except Exception:
+        return None, None
+
+def _api_get_raw(path: str, timeout: int = 15):
+    """GET; returns (data, status_code). Never raises."""
+    import requests
+    try:
+        r = requests.get(f'{RAILWAY_BASE}{path}', timeout=timeout)
+        try:    data = r.json()
+        except Exception: data = {}
+        return data, r.status_code
+    except Exception:
+        return None, None
+
 # ─────────────────────────────────────────────────────────────
 #  Test harness
 # ─────────────────────────────────────────────────────────────
@@ -739,6 +761,143 @@ def _count_open_trades() -> int:
 #  Cleanup test rows
 # ─────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────
+#  TEST GROUP C — Manual Close + Minimum Contract Fix
+# ─────────────────────────────────────────────────────────────
+
+def test_c1_close_wrong_method():
+    """TEST C1 — GET on a POST-only endpoint must return 405."""
+    _, status = _api_get_raw('/api/apex/trades/999/close')
+    if status == 405:
+        _pass('TEST C1  close endpoint rejects GET (405)')
+    else:
+        _fail('TEST C1  close endpoint rejects GET (405)',
+              f'expected 405 got {status}')
+
+
+def test_c2_close_nonexistent_trade():
+    """TEST C2 — Close non-existent trade must return ok=false."""
+    data, status = _api_post_json('/api/apex/trades/99999/close')
+    if data and data.get('ok') is False and 'not found' in (data.get('error') or '').lower():
+        _pass('TEST C2  close non-existent trade returns ok=false')
+    else:
+        _fail('TEST C2  close non-existent trade returns ok=false',
+              f'status={status} response={data}')
+
+
+def test_c3_close_already_closed():
+    """TEST C3 — Close an already-closed trade must return ok=false."""
+    trades = _api('/api/apex/trades')
+    all_t  = (trades or {}).get('all_trades', [])
+    closed = [t for t in all_t if t.get('status') == 'closed'
+              and t.get('exit_reason') not in ('test_endpoint', 'test_cleanup')]
+    if not closed:
+        _fail('TEST C3  close already-closed trade', 'no closed trades available to test')
+        return
+    tid  = closed[0]['id']
+    data, status = _api_post_json(f'/api/apex/trades/{tid}/close')
+    if data and data.get('ok') is False and 'not found' in (data.get('error') or '').lower():
+        _pass('TEST C3  close already-closed trade returns ok=false')
+    else:
+        _fail('TEST C3  close already-closed trade returns ok=false',
+              f'trade_id={tid} status={status} response={data}')
+
+
+def test_c4_full_manual_close_cycle():
+    """TEST C4 — Full cycle: create open trade, close it, verify DB + Telegram."""
+    # Step 1: create an open test trade via test_log with keep_open=true
+    sig_body = {
+        'symbol': 'MNQ', 'direction': 'long', 'setup': 'E_ema50_pullback',
+        'entry': 29400.0, 'stop': 29356.0, 'target': 29510.0, 'rr': 2.5,
+        'quality': 'test', 'keep_open': True,
+    }
+    create_data, _ = _api_post_json('/api/apex/test_log', sig_body)
+    if not create_data or not create_data.get('ok'):
+        _fail('TEST C4  manual close full cycle', f'test_log failed: {create_data}')
+        return
+
+    trade_id = create_data.get('trade_id')
+    _cleanup_ids.append(trade_id)   # safety net if close fails
+
+    # Step 2: confirm it's open
+    trades = _api('/api/apex/trades')
+    open_ids = [t['id'] for t in (trades or {}).get('open_trades', [])]
+    if trade_id not in open_ids:
+        _fail('TEST C4  manual close full cycle',
+              f'trade {trade_id} not in open_trades after test_log keep_open=true')
+        return
+
+    # Step 3: close it
+    close_data, close_status = _api_post_json(f'/api/apex/trades/{trade_id}/close')
+    if not close_data or not close_data.get('ok'):
+        _fail('TEST C4  manual close full cycle',
+              f'close returned status={close_status} data={close_data}')
+        return
+
+    if close_data.get('exit_price') is None or close_data.get('pnl_r') is None:
+        _fail('TEST C4  manual close full cycle',
+              f'missing exit_price or pnl_r in response: {close_data}')
+        return
+
+    # Step 4: confirm DB shows closed with exit_reason=manual_close
+    trades2 = _api('/api/apex/trades')
+    all_t2  = (trades2 or {}).get('all_trades', [])
+    db_trade = next((t for t in all_t2 if t['id'] == trade_id), None)
+    if not db_trade:
+        _fail('TEST C4  manual close full cycle', f'trade {trade_id} not found after close')
+        return
+
+    if db_trade.get('status') != 'closed':
+        _fail('TEST C4  manual close full cycle',
+              f'expected status=closed got {db_trade.get("status")}')
+        return
+
+    if db_trade.get('exit_reason') != 'manual_close':
+        _fail('TEST C4  manual close full cycle',
+              f'expected exit_reason=manual_close got {db_trade.get("exit_reason")}')
+        return
+
+    if trade_id in _cleanup_ids:
+        _cleanup_ids.remove(trade_id)  # already closed — no cleanup needed
+
+    telegram_ok = close_data.get('telegram_sent', False)
+    _pass(
+        'TEST C4  manual close full cycle',
+        f'trade={trade_id} pnl={close_data["pnl_r"]:+.3f}R '
+        f'telegram={telegram_ok}'
+    )
+
+
+def test_c5_minimum_contracts():
+    """TEST C5 — Min-contract override: $1000 balance + 44pt stop must return 1 contract."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from tradovate import calculate_position_size
+        result = calculate_position_size(
+            account_balance=1000.0,
+            risk_pct=0.01,
+            stop_pts=44.0,
+            symbol='MNQ',
+        )
+        contracts    = result.get('contracts', 0)
+        min_override = result.get('min_override', False)
+        if contracts == 1 and min_override is True:
+            _pass(
+                'TEST C5  min-contract override',
+                f'contracts=1 (budget=${result["budget"]:.2f}, '
+                f'cost=${result["cost_per_contract"]:.2f}/contract, '
+                f'actual_risk={(result["dollar_risk"]/1000*100):.1f}%)'
+            )
+        else:
+            _fail(
+                'TEST C5  min-contract override',
+                f'expected contracts=1 min_override=True got {result}'
+            )
+    except Exception as e:
+        _fail('TEST C5  min-contract override', str(e))
+
+
 def _cleanup():
     if not _cleanup_ids:
         return
@@ -1059,6 +1218,13 @@ if __name__ == '__main__':
     test_r6_research_endpoints()
     test_r7_init_safe()
     test_r8_telegram_report()
+
+    # Manual close + minimum contract tests
+    test_c1_close_wrong_method()
+    test_c2_close_nonexistent_trade()
+    test_c3_close_already_closed()
+    test_c4_full_manual_close_cycle()
+    test_c5_minimum_contracts()
 
     _cleanup()
     _print_results()

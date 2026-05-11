@@ -3433,6 +3433,120 @@ def apex_trades():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/trades/<int:trade_id>/close', methods=['POST'])
+def apex_trade_close(trade_id):
+    """
+    POST /api/apex/trades/{trade_id}/close
+
+    Manually close an open trade via dashboard.
+    Places a market order on Tradovate to exit the position,
+    updates apex_trades with exit details, sends Telegram alert.
+
+    Safe to call even if Tradovate fails — DB is always updated.
+    Only works on open trades. Returns 400 if already closed.
+
+    Returns:
+      {ok, trade_id, exit_price, pnl_r, telegram_sent, tradovate_order_id}
+    """
+    try:
+        from trade_tracker import get_current_price, close_trade, init_trades_table
+        import db as _mc_db
+        init_trades_table()
+
+        # 1. Verify trade is open
+        cols = ['id','symbol','direction','setup','mode','entry_price','stop',
+                'target','rr_planned','session','quality','entry_time','exit_price',
+                'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
+        conn = _mc_db.connect()
+        row  = conn.execute(
+            "SELECT * FROM apex_trades WHERE id=? AND status='open'", (trade_id,)
+        ).fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({'ok': False, 'error': 'Trade not found or already closed'}), 400
+
+        trade       = dict(zip(cols, row))
+        symbol      = trade['symbol']
+        direction   = trade['direction']
+        entry_price = float(trade['entry_price'])
+
+        # 2. Get current price from live feed
+        current_price = get_current_price(symbol)
+        if not current_price:
+            current_price = entry_price  # safe fallback — pnl_r will be ~0
+
+        # 3. Tradovate closing order — fire-and-forget, never blocks DB update
+        tradovate_order_id = None
+        tradovate_error    = None
+        try:
+            from tradovate import place_market_close, TRADOVATE_ENABLED as _TV
+            if _TV:
+                tv = place_market_close(symbol, direction, contracts=1)
+                if tv.get('ok'):
+                    tradovate_order_id = tv.get('order_id')
+                    if tv.get('fill_price'):
+                        current_price = float(tv['fill_price'])
+                else:
+                    tradovate_error = tv.get('error', 'unknown')
+                    logger.warning(
+                        f'manual_close #{trade_id}: Tradovate failed — {tradovate_error}. '
+                        f'DB update will still proceed.'
+                    )
+        except Exception as _tv_exc:
+            tradovate_error = str(_tv_exc)
+            logger.warning(f'manual_close #{trade_id}: Tradovate exception — {_tv_exc}')
+
+        # 4. Close in DB — always happens regardless of Tradovate result
+        closed = close_trade(trade_id, current_price, 'manual_close')
+        if not closed:
+            return jsonify({'ok': False, 'error': 'DB close failed'}), 500
+
+        pnl_r = closed.get('pnl_r', 0.0)
+
+        if tradovate_order_id:
+            try:
+                conn = _mc_db.connect()
+                conn.execute('UPDATE apex_trades SET broker_order_id=? WHERE id=?',
+                             (tradovate_order_id, trade_id))
+                conn.commit(); conn.close()
+            except Exception:
+                pass
+
+        # 5. Telegram alert
+        telegram_sent = False
+        try:
+            from live_scanner import send_telegram as _mc_tg
+            arrow = '🟢' if (pnl_r or 0) >= 0 else '🔴'
+            _mc_tg(
+                f'{arrow} <b>WISE MERIDIAN CAPITAL — Manual Close</b>\n'
+                f'{symbol} {direction.upper()} · {trade["setup"]}\n'
+                f'Entry: {entry_price:.2f} → Exit: {current_price:.2f}\n'
+                f'P&amp;L: {pnl_r:+.2f}R\n'
+                f'Reason: Manual close via dashboard'
+            )
+            telegram_sent = True
+        except Exception as _tg_exc:
+            logger.warning(f'manual_close #{trade_id}: Telegram failed — {_tg_exc}')
+
+        logger.info(
+            f'Manual close: #{trade_id} {symbol} {direction} {trade["setup"]} '
+            f'exit={current_price:.2f} pnl={pnl_r:+.2f}R tv_order={tradovate_order_id}'
+        )
+
+        resp = {'ok': True, 'trade_id': trade_id, 'exit_price': current_price,
+                'pnl_r': pnl_r, 'telegram_sent': telegram_sent,
+                'tradovate_order_id': tradovate_order_id}
+        if tradovate_error:
+            resp['tradovate_error'] = tradovate_error
+            resp['note'] = 'DB updated. Tradovate may still have open position.'
+        return jsonify(resp)
+
+    except Exception as e:
+        logger.error(f'apex_trade_close error: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 @app.route('/api/apex/risk', methods=['GET'])
 def apex_risk():
     """Return current risk management status — regime, daily P&L, drawdown, multiplier."""
@@ -4429,11 +4543,15 @@ def apex_test_log():
     Test endpoint: call log_trade() directly with provided signal dict.
     Lets us verify DB writes work independently of the signal pipeline.
     Immediately closes the trade as 'test' after verifying the insert.
+
+    Pass keep_open=true in the JSON body to leave the trade open (for
+    manual-close cycle tests). The caller is responsible for cleanup.
     """
     try:
         from trade_tracker import log_trade
         import db as _tl_db
         data = request.get_json(force=True) or {}
+        keep_open = bool(data.get('keep_open', False))
         sig = {
             'symbol':    data.get('symbol', 'MNQ'),
             'direction': data.get('direction', 'short'),
@@ -4447,15 +4565,17 @@ def apex_test_log():
             'quality':   data.get('quality', 'test'),
         }
         trade_id = log_trade(sig)
-        # Mark it closed immediately so it doesn't pollute open trades
-        conn = _tl_db.connect()
-        conn.execute(
-            "UPDATE apex_trades SET status='closed', exit_reason='test_endpoint', exit_time=? WHERE id=?",
-            (datetime.now(timezone.utc).isoformat(), trade_id)
-        )
-        conn.commit()
-        conn.close()
-        return jsonify({'ok': True, 'trade_id': trade_id, 'signal': sig})
+        if not keep_open:
+            # Mark it closed immediately so it doesn't pollute open trades
+            conn = _tl_db.connect()
+            conn.execute(
+                "UPDATE apex_trades SET status='closed', exit_reason='test_endpoint', exit_time=? WHERE id=?",
+                (datetime.now(timezone.utc).isoformat(), trade_id)
+            )
+            conn.commit()
+            conn.close()
+        return jsonify({'ok': True, 'trade_id': trade_id, 'signal': sig,
+                        'kept_open': keep_open})
     except Exception as e:
         logger.error(f'test_log endpoint failed: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e), 'type': type(e).__name__}), 500

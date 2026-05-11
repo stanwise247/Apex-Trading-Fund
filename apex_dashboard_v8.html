@@ -251,6 +251,19 @@ tr:hover td { background: var(--bg3); }
 .pill-short { background: rgba(255,59,48,0.1);   color: var(--red); }
 .pill-open  { background: rgba(0,113,227,0.1);   color: var(--blue); }
 .pill-closed{ background: rgba(110,110,115,0.1); color: var(--text2); }
+/* ── Manual close button & modal ─────────────────────────────────── */
+.btn-close-trade { padding:3px 10px;border-radius:6px;border:1px solid rgba(255,59,48,.35);background:rgba(255,59,48,.08);color:#ff3b30;cursor:pointer;font-size:.76em;font-weight:600;white-space:nowrap;transition:background .15s; }
+.btn-close-trade:hover { background:rgba(255,59,48,.18); }
+.close-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9998;opacity:0;pointer-events:none;transition:opacity .15s; }
+.close-modal-overlay.active { opacity:1;pointer-events:auto; }
+.close-modal-card { background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:24px 28px;min-width:300px;max-width:400px;box-shadow:0 24px 64px rgba(0,0,0,.55); }
+.close-modal-title { font-weight:700;font-size:1.05em;margin-bottom:14px;color:var(--text); }
+.close-modal-actions { display:flex;gap:10px;margin-top:20px;justify-content:flex-end; }
+.close-modal-cancel { padding:8px 18px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);cursor:pointer;font-size:.88em; }
+.close-modal-cancel:hover { background:var(--bg4); }
+.close-modal-confirm { padding:8px 20px;border-radius:8px;border:none;background:#ff3b30;color:#fff;cursor:pointer;font-weight:600;font-size:.88em; }
+.close-modal-confirm:hover { background:#d93025; }
+.close-modal-confirm:disabled { opacity:.45;cursor:not-allowed; }
 .pill-win   { background: rgba(52,199,89,0.12);  color: var(--green); }
 .pill-loss  { background: rgba(255,59,48,0.1);   color: var(--red); }
 .pill-a { background: rgba(52,199,89,0.12);  color: var(--green); }
@@ -1437,6 +1450,7 @@ function renderOpenPositions(trades) {
     const minIn   = Math.floor((Date.now() - new Date(t.entry_time).getTime()) / 60000);
     const timeStr = minIn >= 60 ? `${Math.floor(minIn/60)}h ${minIn%60}m` : `${minIn}m`;
 
+    const closeJs = `openCloseModal(${t.id},'${t.symbol}','${t.direction}','${t.setup||''}',${entryF},${curF||0},${uR??'null'},${uDol??'null'})`;
     return `<tr>
       <td>${setupPill(t.setup)}</td>
       <td style="font-family:var(--mono);font-weight:600">${t.symbol}</td>
@@ -1449,13 +1463,14 @@ function renderOpenPositions(trades) {
       <td style="${pStyle};font-weight:700;font-family:var(--mono)">${uRStr}</td>
       <td style="${pStyle};font-weight:600">${uDolStr}</td>
       <td style="color:var(--text2)">${timeStr}</td>
+      <td><button class="btn-close-trade" onclick="${closeJs}">Close</button></td>
     </tr>`;
   }).join('');
   document.getElementById('openPosTbl').innerHTML = `<table>
     <thead><tr>
       <th>Setup</th><th>Symbol</th><th>Dir</th>
       <th>Entry</th><th>Current</th><th>Stop</th><th>Target</th>
-      <th>Dist (stop/tgt)</th><th>Unreal R</th><th>Unreal $</th><th>Time</th>
+      <th>Dist (stop/tgt)</th><th>Unreal R</th><th>Unreal $</th><th>Time</th><th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -1613,6 +1628,14 @@ function renderTradesTable() {
     const rLabel = t.status === 'open'
       ? (displayR != null ? fmtR(displayR) + ' <span style="opacity:.5;font-size:.8em">unreal</span>' : '—')
       : fmtR(displayR);
+    const entryF2 = parseFloat(t.entry_price)||0;
+    const curF2   = parseFloat(t.current_price)||0;
+    const pv2     = POINT_VALUE_MAP[t.symbol]||2;
+    const stopPts2 = Math.abs(entryF2 - (parseFloat(t.stop)||0));
+    const uDol2   = (displayR != null && stopPts2 > 0) ? Math.round(displayR * stopPts2 * pv2) : null;
+    const closeCell = t.status === 'open'
+      ? `<td><button class="btn-close-trade" onclick="openCloseModal(${t.id},'${t.symbol}','${t.direction}','${t.setup||''}',${entryF2},${curF2||0},${displayR??'null'},${uDol2??'null'})">Close</button></td>`
+      : '<td></td>';
     return `<tr class="${cls}">
       <td>${t.id||'—'}</td>
       <td>${setupPill(t.setup)}</td>
@@ -1625,10 +1648,11 @@ function renderTradesTable() {
       <td><span class="pill pill-${t.status}">${t.status}</span></td>
       <td style="color:var(--text2)">${(t.entry_time||'').slice(0,16)}</td>
       <td style="color:var(--text2)">${(t.exit_time||'').slice(0,16)||'—'}</td>
+      ${closeCell}
     </tr>`;
   }).join('');
   document.getElementById('tradesTbl').innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Setup</th><th>Symbol</th><th>Dir</th><th>Entry</th><th>Stop</th><th>Target</th><th>R</th><th>Status</th><th>Entry Time</th><th>Exit Time</th></tr></thead>
+    <thead><tr><th>ID</th><th>Setup</th><th>Symbol</th><th>Dir</th><th>Entry</th><th>Stop</th><th>Target</th><th>R</th><th>Status</th><th>Entry Time</th><th>Exit Time</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 
@@ -3003,6 +3027,77 @@ window.addEventListener('DOMContentLoaded', () => {
   startRefreshLoop();
   loadOverview();
 });
+
+// ── Manual Close Modal ────────────────────────────────────────────
+let _closeModalTradeId = null;
+
+function openCloseModal(tradeId, symbol, direction, setup, entryF, curF, uR, uDol) {
+  _closeModalTradeId = tradeId;
+  const pStyle  = uR > 0 ? 'color:var(--green)' : uR < 0 ? 'color:var(--red)' : '';
+  const pSign   = uR != null && uR >= 0 ? '+' : '';
+  const pRStr   = uR != null ? `${pSign}${uR.toFixed(2)}R` : '—';
+  const pDolStr = uDol != null ? ` (${uDol >= 0 ? '+' : ''}$${Math.abs(uDol)})` : '';
+  const curStr  = curF ? fmtNum(curF, 2) : '—';
+  document.getElementById('closeModalBody').innerHTML = `
+    <div style="font-weight:600;font-size:1em;margin-bottom:8px">${symbol} ${direction.toUpperCase()} — ${(setup||'').replace(/_/g,' ')}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:.87em;color:var(--text2);margin-bottom:12px">
+      <span>Entry</span><span style="font-family:var(--mono)">${fmtNum(entryF,2)}</span>
+      <span>Current</span><span style="font-family:var(--mono)">${curStr}</span>
+    </div>
+    <div style="font-size:1.05em;font-weight:700;margin-bottom:10px">
+      Unrealised P&amp;L: <span style="${pStyle}">${pRStr}${pDolStr}</span>
+    </div>
+    <div style="font-size:.82em;color:var(--text2)">This will place a market order immediately.</div>`;
+  const btn = document.getElementById('closeModalConfirmBtn');
+  btn.disabled    = false;
+  btn.textContent = 'Close Trade';
+  document.getElementById('closeModalOverlay').classList.add('active');
+}
+
+function dismissCloseModal() {
+  document.getElementById('closeModalOverlay').classList.remove('active');
+  _closeModalTradeId = null;
+}
+
+async function confirmCloseTrade() {
+  if (!_closeModalTradeId) return;
+  const btn = document.getElementById('closeModalConfirmBtn');
+  btn.disabled    = true;
+  btn.textContent = 'Closing…';
+  try {
+    const resp = await fetch(`/api/apex/trades/${_closeModalTradeId}/close`, {method: 'POST'});
+    const data = await resp.json();
+    if (data.ok) {
+      dismissCloseModal();
+      if (typeof loadOverview === 'function') loadOverview();
+      if (typeof loadTrades   === 'function') loadTrades();
+    } else {
+      document.getElementById('closeModalBody').innerHTML +=
+        `<div style="color:var(--red);margin-top:10px;font-size:.85em">⚠ ${data.error || 'Close failed'}</div>`;
+      btn.disabled    = false;
+      btn.textContent = 'Close Trade';
+    }
+  } catch(e) {
+    document.getElementById('closeModalBody').innerHTML +=
+      `<div style="color:var(--red);margin-top:10px;font-size:.85em">⚠ ${e.message}</div>`;
+    btn.disabled    = false;
+    btn.textContent = 'Close Trade';
+  }
+}
 </script>
+
+<!-- Manual Close Modal -->
+<div class="close-modal-overlay" id="closeModalOverlay"
+     onclick="if(event.target===this)dismissCloseModal()">
+  <div class="close-modal-card">
+    <div class="close-modal-title">Close Trade</div>
+    <div id="closeModalBody"></div>
+    <div class="close-modal-actions">
+      <button class="close-modal-cancel" onclick="dismissCloseModal()">Cancel</button>
+      <button class="close-modal-confirm" id="closeModalConfirmBtn"
+              onclick="confirmCloseTrade()">Close Trade</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

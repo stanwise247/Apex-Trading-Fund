@@ -424,18 +424,23 @@ def calculate_position_size(
     contracts_raw      = dollar_risk_budget / (stop_pts * pv)
     contracts          = int(contracts_raw)
 
-    if contracts <= 0:
-        return {'contracts': 0, 'dollar_risk': 0.0,
-                'instrument': instrument, 'point_value': pv}
+    # Minimum 1 contract floor — never skip a valid signal due to small account.
+    # When the calculated size is 0, override to 1 and flag for warning log.
+    min_override = contracts <= 0
+    if min_override:
+        contracts = 1
 
     contracts   = max(MIN_CONTRACTS, min(MAX_CONTRACTS, contracts))
     dollar_risk = round(contracts * stop_pts * pv, 2)
 
     return {
-        'contracts':   contracts,
-        'dollar_risk': dollar_risk,
-        'instrument':  instrument,
-        'point_value': pv,
+        'contracts':        contracts,
+        'dollar_risk':      dollar_risk,
+        'instrument':       instrument,
+        'point_value':      pv,
+        'min_override':     min_override,
+        'budget':           round(dollar_risk_budget, 2),
+        'cost_per_contract': round(stop_pts * pv, 2),
     }
 
 
@@ -586,6 +591,78 @@ def place_bracket_order(
 
 
 # ─────────────────────────────────────────────────────────────
+#  MARKET CLOSE ORDER
+# ─────────────────────────────────────────────────────────────
+
+def place_market_close(symbol: str, direction: str, contracts: int = 1) -> dict:
+    """
+    Place a market order to close an existing position.
+    direction is the OPEN position direction (long → Sell, short → Buy).
+
+    Returns {ok, order_id, fill_price, instrument} or {ok: False, error: ...}
+    """
+    if not TRADOVATE_ENABLED:
+        return {'ok': False, 'error': 'disabled'}
+
+    headers = _auth_header()
+    if not headers:
+        return {'ok': False, 'error': 'auth_failed'}
+
+    account_id = _token_cache.get('account_id')
+    if not account_id:
+        return {'ok': False, 'error': 'no_account_id'}
+
+    instrument   = _tradovate_symbol(symbol)
+    close_action = 'Sell' if direction == 'long' else 'Buy'
+
+    payload = {
+        'accountSpec': TRADOVATE_ACCOUNT,
+        'accountId':   account_id,
+        'action':      close_action,
+        'symbol':      instrument,
+        'orderQty':    contracts,
+        'orderType':   'Market',
+        'isAutomated': True,
+    }
+
+    logger.info(
+        f'place_market_close: {contracts}x {instrument} {close_action} '
+        f'(closing {direction}) accountId={account_id}'
+    )
+
+    try:
+        resp = requests.post(
+            f'{BASE_URL}/order/placeOrder',
+            json=payload,
+            headers={**headers, 'Content-Type': 'application/json'},
+            timeout=15,
+        )
+        if not resp.ok:
+            err = resp.text
+            try:   err = resp.json()
+            except Exception: pass
+            logger.error(f'place_market_close {resp.status_code}: {err}')
+            return {'ok': False, 'error': f'HTTP {resp.status_code}: {err}'}
+
+        data       = resp.json()
+        order_id   = (data.get('orderId') or
+                      data.get('orderStatus', {}).get('orderId') or
+                      str(data))
+        fill_price = float(data.get('fillPrice') or data.get('price') or 0)
+
+        logger.info(
+            f'Market close placed: {contracts} {instrument} {close_action} '
+            f'@ {fill_price:.2f} orderId={order_id}'
+        )
+        return {'ok': True, 'order_id': str(order_id),
+                'fill_price': fill_price, 'instrument': instrument}
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f'place_market_close request failed: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
+# ─────────────────────────────────────────────────────────────
 #  EXECUTE APEX SIGNAL
 # ─────────────────────────────────────────────────────────────
 
@@ -638,13 +715,23 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
     if limit_check['blocked']:
         return {'ok': False, 'skipped_reason': limit_check['reason']}
 
-    # Calculate size
-    sizing = calculate_position_size(balance, risk_pct, stop_pts, sym)
-    if sizing['contracts'] == 0:
-        msg = (f'Signal skipped — 0 contracts: balance={balance:.0f} '
-               f'risk_pct={risk_pct:.1%} stop_pts={stop_pts:.1f}')
-        logger.info(msg)
-        return {'ok': False, 'skipped_reason': 'zero_contracts', 'detail': msg}
+    # Calculate size — always returns >= 1 contract
+    sizing          = calculate_position_size(balance, risk_pct, stop_pts, sym)
+    pv              = sizing['point_value']
+    actual_risk_pct = (sizing['contracts'] * stop_pts * pv / balance * 100) if balance > 0 else 0
+
+    if sizing.get('min_override'):
+        logger.warning(
+            f'Tradovate: min-contract override — calculated 0 contracts '
+            f'(budget=${sizing["budget"]:.2f}, cost=${sizing["cost_per_contract"]:.2f}/contract) '
+            f'— placing 1 contract, actual risk {actual_risk_pct:.1f}% of account'
+        )
+
+    logger.info(
+        f'Tradovate: placing {sizing["contracts"]} contract(s) | '
+        f'symbol={sym} | stop_pts={stop_pts:.1f} | '
+        f'budget=${sizing["budget"]:.2f} | actual_risk={actual_risk_pct:.1f}%'
+    )
 
     # Place bracket order
     result = place_bracket_order(
