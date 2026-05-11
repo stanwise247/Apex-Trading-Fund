@@ -1300,7 +1300,7 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
             f'kill_switch={_kill_switch_active}'
         )
         if not TRADOVATE_ENABLED:
-            logger.info('_execute_via_tradovate: TRADOVATE_ENABLED=false — skipping')
+            logger.warning('_execute_via_tradovate: TRADOVATE_ENABLED=false — skipping (set TRADOVATE_ENABLED=true in Railway env to enable live execution)')
             return
         if not TRADING_ENABLED:
             logger.warning('_execute_via_tradovate: TRADING_ENABLED=false — order blocked')
@@ -1818,6 +1818,7 @@ def background_scheduler():
                         f'\n⚙️ <i>Regime: {_regime.label} | '
                         f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
                     )
+                    logger.info('Scanning FVG for MNQ')
                     fvg_signals = scan_fvg('MNQ', now_utc)
                     for sig in fvg_signals:
                         # ── FILTER 1: max 1 concurrent per instrument ─────
@@ -1887,6 +1888,7 @@ def background_scheduler():
                     f'\n⚙️ <i>Regime: {_regime.label} | '
                     f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
                 )
+                logger.info('Scanning Setups A/B/C/E...')
                 signals = run_scan()
                 for result in signals:
                     _sym   = result.symbol
@@ -1987,10 +1989,14 @@ def background_scheduler():
                         send_telegram(msg + _risk_footer)
                     except Exception as _apex_te:
                         logger.error(f'{_setup} send_telegram failed {_sym}: {_apex_te}')
-                    _execute_via_tradovate(_sig_dict, _apex_tid)
+                    if _apex_tid:
+                        logger.info(f'Calling _execute_via_tradovate: {_sym} {_dirn} {_setup} trade_id={_apex_tid}')
+                        _execute_via_tradovate(_sig_dict, _apex_tid)
+                    else:
+                        logger.warning(f'Skipping _execute_via_tradovate — log_trade returned None for {_sym} {_dirn} {_setup}')
                     logger.info(f'APEX signal: {_sym} {_dirn} {_setup} regime={_regime.label} dd_mult={_dd_mult:.2f}×')
                 if not signals:
-                    logger.debug('APEX scan: no signals')
+                    logger.info('APEX scan: no signals this tick')
         except Exception as e:
             logger.warning(f'APEX scanner error: {e}', exc_info=True)
 
@@ -2118,6 +2124,7 @@ def background_scheduler():
                             if _rg_i.daily.is_daily_limit_hit():
                                 logger.info(f'Setup I {_sym}: daily limit hit — suppressed')
                                 continue
+                            logger.info(f'Scanning Setup I for {_sym}')
                             sig = scan_setup_i(_sym, _now_utc_i)
                             if sig:
                                 if _cal_block(_sym, sig['setup']):
@@ -2186,6 +2193,7 @@ def background_scheduler():
                     _now_utc_d = datetime.now(timezone.utc)
                     for _sym_d in ['MNQ', 'ES']:  # GC disabled — feed unverified
                         try:
+                            logger.info(f'Scanning Setup D for {_sym_d}')
                             sig_d = scan_setup_d(_sym_d, _now_utc_d)
                             if not sig_d:
                                 continue
@@ -2228,7 +2236,10 @@ def background_scheduler():
                             except Exception as _d_te:
                                 logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
                             if _d_tid:
+                                logger.info(f'Calling _execute_via_tradovate: {_sym_d} {sig_d["direction"]} {sig_d["setup"]} trade_id={_d_tid}')
                                 _execute_via_tradovate(sig_d, _d_tid)
+                            else:
+                                logger.warning(f'Skipping _execute_via_tradovate — log_trade returned None for Setup D {_sym_d}')
                             logger.info(f'Setup D signal: {_sym_d} {sig_d["direction"].upper()} score={sig_d.get("fvg_score")} db_id={_d_tid}')
                         except Exception as _de:
                             logger.warning(f'Setup D {_sym_d} error: {_de}')
@@ -2271,6 +2282,7 @@ def background_scheduler():
                     )
                     try:
                         if not _rg.daily.is_daily_limit_hit():
+                            logger.info('Scanning Setup H for ES (live)')
                             sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
                             if sig_es:
                                 if SIGNAL_FILTERS['max_concurrent_per_instrument']:
@@ -2298,7 +2310,10 @@ def background_scheduler():
                                                 except Exception as _h_te:
                                                     logger.error(f'Setup H send_telegram failed ES: {_h_te}')
                                                 if _h_tid:
+                                                    logger.info(f'Calling _execute_via_tradovate: ES {sig_es["direction"]} {sig_es["setup"]} trade_id={_h_tid}')
                                                     _execute_via_tradovate(sig_es, _h_tid)
+                                                else:
+                                                    logger.warning('Skipping _execute_via_tradovate — log_trade returned None for Setup H ES')
                                                 logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
                                 else:
                                     logger.info('Setup H ES suppressed — opposite swing trade open')
@@ -2307,6 +2322,7 @@ def background_scheduler():
                     except Exception as _he:
                         logger.warning(f'Setup H ES error: {_he}')
                     try:
+                        logger.info('Scanning Setup H for MNQ (paper)')
                         sig_mnq = scan_setup_h('MNQ', _now_utc, paper_only=True)
                         if sig_mnq:
                             log_h_paper(sig_mnq)
