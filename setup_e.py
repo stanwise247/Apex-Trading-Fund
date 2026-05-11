@@ -16,7 +16,7 @@ Walk-forward validation (NQ, Sep 2024 – Mar 2026):
   All 9 OOS months profitable.
 
 Entry rules (all must be true):
-  1. NY session — 13:00–18:59 UTC, weekday only
+  1. NY session — 13:00–17:59 UTC, weekday only
   2. 4h EMA20 bias — bullish (close > EMA20 × 1.001) or bearish
   3. Current 5min bar close within 0.30 × ATR of EMA50
   4. Current bar closes in bias direction (bull bar for long, bear for short)
@@ -25,7 +25,7 @@ Entry rules (all must be true):
 Exit:
   Stop:   ±1.5 × ATR from entry
   Target: ±3.75 × ATR from entry  (2.5:1 RR)
-  Max hold: end of session (19:00 UTC)
+  Max hold: end of session (18:00 UTC monitor exit)
 
 Min gap: 12 bars (60 min) between trades.
 """
@@ -53,7 +53,7 @@ ATR_PERIOD    = 14
 STOP_ATR      = 1.50
 TARGET_ATR    = 3.75  # 1.5 stop × 2.5 RR = 3.75 ATR target
 SESSION_START = 13     # UTC inclusive
-SESSION_END   = 20     # UTC exclusive — MNQ last entry at 19:29 (cutoff enforced at :30 below)
+SESSION_END   = 18     # UTC exclusive — last entry 17:59 UTC (NY session close, no new entries after 18:00)
 BIAS_EMA      = 20     # 4hour EMA period
 BIAS_THRESH   = 0.001  # ±0.1% neutral zone
 MIN_GAP_BARS  = 12     # 60 min minimum between trades
@@ -129,10 +129,7 @@ def gate1_session(dt: datetime) -> EGateResult:
         return EGateResult(False, 1, 'Session', 'Weekend — no trading')
     if not (SESSION_START <= dt.hour < SESSION_END):
         return EGateResult(False, 1, 'Session',
-                           f'Hour {dt.hour:02d}:00 UTC outside 13-19:30 UTC window')
-    if dt.hour == 19 and dt.minute >= 30:
-        return EGateResult(False, 1, 'Session',
-                           f'MNQ session ended at 19:30 UTC ({dt.hour:02d}:{dt.minute:02d})')
+                           f'Hour {dt.hour:02d}:00 UTC outside 13-18:00 UTC window')
     return EGateResult(True, 1, 'Session',
                        f'NY session {dt.hour:02d}:{dt.minute:02d} UTC')
 
