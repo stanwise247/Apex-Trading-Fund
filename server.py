@@ -2113,6 +2113,7 @@ def background_scheduler():
                     logger.warning(f'Setup F scanner error: {e}')
 
         # ── Setup I — Mathematical Alpha (every 5 min) ─────────────
+        # MNQ: paper only (stops too large). ES: live Tradovate execution.
         if not hasattr(background_scheduler, '_last_setup_i'):
             background_scheduler._last_setup_i = 0
         if now - background_scheduler._last_setup_i >= 300:
@@ -2146,57 +2147,103 @@ def background_scheduler():
                                 continue
                             logger.info(f'Scanning Setup I for {_sym}')
                             sig = scan_setup_i(_sym, _now_utc_i)
-                            if sig:
-                                if _cal_block(_sym, sig['setup']):
-                                    continue
-                                if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
-                                    continue
-                                if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
-                                    continue
-                                _i_tid = None
-                                try:
-                                    logger.info(
-                                        f'[I-3/6] Calling log_trade: entry={sig.get("entry")} '
-                                        f'stop={sig.get("stop")} target={sig.get("target")} '
-                                        f'setup={sig.get("setup")} keys={list(sig.keys())}'
-                                    )
-                                    _i_tid = log_trade(sig)
-                                    logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
-                                    if not _i_tid:
-                                        logger.critical(
-                                            f'[I-4/6] CRITICAL: Setup I log_trade() returned None — '
-                                            f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
-                                        )
-                                except Exception as _i_lte:
+                            if not sig:
+                                continue
+
+                            # ── Post-signal filters — every drop is logged, nothing silent ──
+                            if _cal_block(_sym, sig['setup']):
+                                logger.info(
+                                    f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
+                                    f'calendar blackout — signal dropped'
+                                )
+                                continue
+                            if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
+                                logger.info(
+                                    f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
+                                    f'_fired_today dedup fired — signal dropped'
+                                )
+                                continue
+                            if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
+                                logger.info(
+                                    f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
+                                    f'signal already active in DB — dropped'
+                                )
+                                continue
+
+                            # ── [I-3/6] log_trade — CRITICAL on any failure ────────────
+                            _i_tid = None
+                            try:
+                                logger.info(
+                                    f'[I-3/6] Calling log_trade: {_sym} {sig["direction"]} '
+                                    f'entry={sig.get("entry")} stop={sig.get("stop")} '
+                                    f'target={sig.get("target")} setup={sig.get("setup")}'
+                                )
+                                _i_tid = log_trade(sig)
+                                logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
+                                if not _i_tid:
                                     logger.critical(
-                                        f'[I-4/6] CRITICAL: Setup I log_trade() EXCEPTION — '
-                                        f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
+                                        f'[I-4/6] CRITICAL: Setup I log_trade() returned None — '
+                                        f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
+                                    )
+                            except Exception as _i_lte:
+                                logger.critical(
+                                    f'[I-4/6] CRITICAL: Setup I log_trade() EXCEPTION — '
+                                    f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
+                                    exc_info=True
+                                )
+
+                            # ── [I-5/6] send_telegram — CRITICAL on any failure ───────
+                            try:
+                                logger.info(f'[I-5/6] Calling send_telegram for {_sym}')
+                                msg = format_i_alert(sig) + _i_risk_footer
+                                send_telegram(msg)
+                            except Exception as _i_te:
+                                logger.critical(
+                                    f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}',
+                                    exc_info=True
+                                )
+
+                            # ── [I-6/6] Tradovate — MNQ paper only, ES live ───────────
+                            if _sym == 'MNQ':
+                                logger.info(
+                                    f'[I-6/6] MNQ Setup I: paper only — '
+                                    f'stops too large for current account size '
+                                    f'(trade logged id={_i_tid}, no Tradovate order)'
+                                )
+                            elif _i_tid:
+                                logger.info(
+                                    f'[I-6/6] ES Setup I: executing on Tradovate live '
+                                    f'(trade_id={_i_tid})'
+                                )
+                                try:
+                                    _execute_via_tradovate(sig, _i_tid)
+                                except Exception as _i_exe:
+                                    logger.critical(
+                                        f'[I-6/6] CRITICAL: _execute_via_tradovate raised '
+                                        f'for ES: {_i_exe}',
                                         exc_info=True
                                     )
-                                try:
-                                    logger.info(f'[I-5/6] Calling send_telegram')
-                                    msg = format_i_alert(sig) + _i_risk_footer
-                                    send_telegram(msg)
-                                except Exception as _i_te:
-                                    logger.critical(f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}', exc_info=True)
-                                from tradovate import TRADOVATE_ENABLED as _i_tv_enabled
-                                logger.info(f'[I-6/6] Calling execute_via_tradovate: enabled={_i_tv_enabled}')
-                                if _i_tid:
-                                    try:
-                                        _execute_via_tradovate(sig, _i_tid)
-                                    except Exception as _i_exe:
-                                        logger.critical(f'[I-6/6] CRITICAL: _execute_via_tradovate raised: {_i_exe}', exc_info=True)
-                                else:
-                                    logger.critical(f'[I-6/6] CRITICAL: skipping execute — no trade_id for {_sym} (log_trade failed)')
-                                logger.info(
-                                    f'Setup I signal complete: {_sym} {sig["direction"].upper()} '
-                                    f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
-                                    f'h={sig.get("hurst","?"):.2f} db_id={_i_tid}'
+                            else:
+                                logger.critical(
+                                    f'[I-6/6] CRITICAL: ES Setup I — skipping Tradovate, '
+                                    f'no trade_id (log_trade failed)'
                                 )
+
+                            logger.info(
+                                f'Setup I signal complete: {_sym} {sig["direction"].upper()} '
+                                f'xgb={sig["xgb_prob"]:.2f} lr={sig["lr_prob"]:.2f} '
+                                f'db_id={_i_tid}'
+                            )
                         except Exception as _i_sym_e:
-                            logger.warning(f'Setup I {_sym} error: {_i_sym_e}')
+                            logger.critical(
+                                f'[I-FAIL] CRITICAL: Setup I {_sym} unhandled exception: {_i_sym_e}',
+                                exc_info=True
+                            )
                 except Exception as _i_e:
-                    logger.warning(f'Setup I scanner error: {_i_e}')
+                    logger.critical(
+                        f'[I-FAIL] CRITICAL: Setup I scanner fatal error: {_i_e}',
+                        exc_info=True
+                    )
 
         # ── Setup D — FVG Fill (every 5 min, NQ+ES only) ─────────
         if not hasattr(background_scheduler, '_last_setup_d'):
@@ -3128,6 +3175,7 @@ def _startup():
     logger.info(f'  Daily loss limit:  ${DAILY_LOSS_LIMIT}')
     logger.info(f'  Paper-only setups (no Tradovate execution): '
                 f'{", ".join(sorted(PAPER_ONLY_SETUPS)) or "none"}')
+    logger.info('  Setup I: MNQ=paper only | ES=live execution')
     logger.info('  Server running at: http://localhost:5000')
     logger.info('  Open apex_dashboard_v8.html in your browser')
     logger.info('=' * 55)
