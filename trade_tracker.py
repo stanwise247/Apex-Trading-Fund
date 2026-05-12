@@ -173,13 +173,26 @@ def close_trade(trade_id: int, exit_price: float, reason: str):
     stop   = float(t['stop'])
     risk   = abs(entry - stop)
 
-    if risk > 0:
+    if risk >= 1.0:
         if t['direction'] == 'long':
             pnl_r = round((exit_price - entry) / risk, 3)
         else:
             pnl_r = round((entry - exit_price) / risk, 3)
+        # Sanity cap — anything beyond ±10R is a data/calculation error
+        if abs(pnl_r) > 10.0:
+            logger.warning(
+                f'close_trade #{trade_id}: pnl_r={pnl_r:.2f}R exceeds ±10R cap '
+                f'(entry={entry}, exit={exit_price}, risk={risk:.2f}pt) — '
+                f'storing None to prevent bad data'
+            )
+            pnl_r = None
     else:
-        pnl_r = 0.0
+        # risk < 1pt — dividing by near-zero stop distance produces nonsense R
+        logger.warning(
+            f'close_trade #{trade_id}: stop_distance={risk:.3f}pt < 1pt — '
+            f'pnl_r calculation skipped (calculation_error)'
+        )
+        pnl_r = None
 
     now = datetime.now(timezone.utc).isoformat()
     conn.execute('''
@@ -382,13 +395,17 @@ def get_stats() -> dict:
 
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     today_trades = conn.execute(
-        'SELECT pnl_r FROM apex_trades WHERE status=? AND entry_time LIKE ?',
-        ('closed', f'{today}%')
+        "SELECT pnl_r FROM apex_trades "
+        "WHERE status='closed' AND entry_time LIKE ? "
+        "AND quality NOT IN ('test') "
+        "AND exit_reason NOT IN ('test_endpoint', 'test_cleanup', 'test_simulation') "
+        "AND pnl_r IS NOT NULL AND ABS(pnl_r) <= 10",
+        (f'{today}%',)
     ).fetchall()
     conn.close()
 
-    all_r    = [r[0] for r in closed if r[0] is not None]
-    today_r  = [r[0] for r in today_trades if r[0] is not None]
+    all_r   = [r[0] for r in closed if r[0] is not None and abs(r[0]) <= 10]
+    today_r = [r[0] for r in today_trades]
     winners  = [r for r in all_r if r > 0]
 
     return {

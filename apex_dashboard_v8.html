@@ -1269,6 +1269,13 @@ function startClock() {
 const fmtNum = (v, dec=2) => v == null || isNaN(v) ? '—' : Number(v).toFixed(dec);
 const fmtPct = (v, dec=2) => v == null || isNaN(v) ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(dec) + '%';
 const fmtR   = v => v == null || isNaN(v) ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + 'R';
+// Safe R display: values beyond ±5R are calculation errors (test trades closed at wrong prices)
+const fmtRSafe = v => {
+  if (v == null || isNaN(v)) return '—';
+  if (Math.abs(v) > 5) return '<span style="color:var(--text3);font-size:.85em" title="Calculation error — stop distance too small or test trade">⚠ err</span>';
+  return fmtR(v);
+};
+const colorRSafe = v => (v == null || Math.abs(v) > 5) ? '' : colorR(v);
 
 function colorR(v) {
   if (v == null || isNaN(v)) return '';
@@ -1445,7 +1452,12 @@ function renderOpenPositions(trades) {
     const tgtDist   = (curF && tgtF)  ? fmtNum(Math.abs(tgtF  - curF), 1) : '—';
     const uRStr     = uR  != null ? fmtR(uR)  : '—';
     const uDolStr   = uDol != null ? (uDol >= 0 ? '+$' : '-$') + Math.abs(uDol) : '—';
-    const pStyle    = uR  >  0 ? 'color:var(--green)' : uR < 0 ? 'color:var(--red)' : '';
+    const uRCalcErr = uR != null && Math.abs(uR) > 5;
+    const pStyle    = uRCalcErr ? '' : uR > 0 ? 'color:var(--green)' : uR < 0 ? 'color:var(--red)' : '';
+    const uRDisplay = uRCalcErr
+      ? '<span style="color:var(--text3);font-size:.85em" title="Calculation error — verify entry/stop">⚠ err</span>'
+      : uRStr;
+    const uDolDisplay = uRCalcErr ? '—' : uDolStr;
 
     const minIn   = Math.floor((Date.now() - new Date(t.entry_time).getTime()) / 60000);
     const timeStr = minIn >= 60 ? `${Math.floor(minIn/60)}h ${minIn%60}m` : `${minIn}m`;
@@ -1460,8 +1472,8 @@ function renderOpenPositions(trades) {
       <td style="font-family:var(--mono);color:var(--red)">${fmtNum(stopF,2)}</td>
       <td style="font-family:var(--mono);color:var(--green)">${fmtNum(tgtF,2)}</td>
       <td style="font-family:var(--mono);color:var(--text2)">${stopDist} / ${tgtDist}</td>
-      <td style="${pStyle};font-weight:700;font-family:var(--mono)">${uRStr}</td>
-      <td style="${pStyle};font-weight:600">${uDolStr}</td>
+      <td style="${pStyle};font-weight:700;font-family:var(--mono)">${uRDisplay}</td>
+      <td style="${pStyle};font-weight:600">${uDolDisplay}</td>
       <td style="color:var(--text2)">${timeStr}</td>
       <td><button class="btn-close-trade" onclick="${closeJs}">Close</button></td>
     </tr>`;
@@ -1624,10 +1636,13 @@ function renderTradesTable() {
   const rows = trades.map(t => {
     // Open trades: show live unrealised R (current_pnl_r). Closed: show final pnl_r.
     const displayR = t.status === 'open' ? (t.current_pnl_r ?? t.pnl_r) : t.pnl_r;
-    const cls = displayR > 0 ? 'win' : displayR < 0 ? 'loss' : '';
-    const rLabel = t.status === 'open'
-      ? (displayR != null ? fmtR(displayR) + ' <span style="opacity:.5;font-size:.8em">unreal</span>' : '—')
-      : fmtR(displayR);
+    const isCalcErr = displayR != null && Math.abs(displayR) > 5;
+    const cls = isCalcErr ? '' : (displayR > 0 ? 'win' : displayR < 0 ? 'loss' : '');
+    const rLabel = isCalcErr
+      ? '<span style="color:var(--text3);font-size:.85em" title="Calculation error">⚠ err</span>'
+      : t.status === 'open'
+        ? (displayR != null ? fmtR(displayR) + ' <span style="opacity:.5;font-size:.8em">unreal</span>' : '—')
+        : fmtR(displayR);
     const entryF2 = parseFloat(t.entry_price)||0;
     const curF2   = parseFloat(t.current_price)||0;
     const pv2     = POINT_VALUE_MAP[t.symbol]||2;
@@ -1644,7 +1659,7 @@ function renderTradesTable() {
       <td>${fmtNum(t.entry_price,2)}</td>
       <td>${fmtNum(t.stop,2)}</td>
       <td>${fmtNum(t.target,2)}</td>
-      <td style="${colorR(displayR)};font-weight:600">${rLabel}</td>
+      <td style="${isCalcErr ? '' : colorR(displayR)};font-weight:600">${rLabel}</td>
       <td><span class="pill pill-${t.status}">${t.status}</span></td>
       <td style="color:var(--text2)">${(t.entry_time||'').slice(0,16)}</td>
       <td style="color:var(--text2)">${(t.exit_time||'').slice(0,16)||'—'}</td>

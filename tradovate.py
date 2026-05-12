@@ -93,22 +93,33 @@ def get_risk_tier(balance: float) -> dict:
 
 
 def _get_today_dollar_pnl() -> float:
-    """Sum of dollar P&L for all closed trades today (midnight UTC onward)."""
+    """
+    Sum actual dollar P&L for real closed trades today.
+    Uses (exit_price - entry_price) × point_value per direction — NOT pnl_r × stop_pts,
+    which is corrupted when test trades are closed at live market prices far from entry.
+    Excludes test/cleanup trades and any trade with |pnl_r| > 10 (calculation errors).
+    """
     try:
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         conn = _db.connect()
         rows = conn.execute(
-            "SELECT symbol, entry_price, stop, pnl_r FROM apex_trades "
-            "WHERE status='closed' AND DATE(entry_time)=?", (today,)
+            "SELECT symbol, direction, entry_price, exit_price, pnl_r FROM apex_trades "
+            "WHERE status='closed' AND DATE(entry_time)=? "
+            "AND quality NOT IN ('test') "
+            "AND exit_reason NOT IN ('test_endpoint', 'test_cleanup', 'test_simulation')",
+            (today,)
         ).fetchall()
         conn.close()
         total = 0.0
-        for sym, entry, stop, pnl_r in rows:
-            if None in (entry, stop, pnl_r):
+        for sym, direction, entry, exit_p, pnl_r in rows:
+            if None in (entry, exit_p):
                 continue
-            stop_pts = abs(float(entry) - float(stop))
-            pv = POINT_VALUE.get(sym, 2.0)
-            total += float(pnl_r) * stop_pts * pv
+            # Skip trades flagged as calculation errors
+            if pnl_r is not None and abs(float(pnl_r)) > 10:
+                continue
+            pv   = POINT_VALUE.get(sym, 2.0)
+            mult = 1.0 if direction == 'long' else -1.0
+            total += mult * (float(exit_p) - float(entry)) * pv
         return round(total, 2)
     except Exception as e:
         logger.warning(f'_get_today_dollar_pnl error: {e}')
