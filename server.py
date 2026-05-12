@@ -2888,6 +2888,31 @@ def _startup():
                 logger.info(f'  Migrated {_migrated} legacy NQ open trades to MNQ')
         except Exception as _me:
             logger.warning(f'  NQ→MNQ migration failed: {_me}')
+        # ── Cleanup test trades that pollute P&L calculations ──────────
+        # Deletes: quality='test', exit_reason in test_*, |pnl_r| > 10.
+        # Real trades never match these conditions. Safe to run on every startup.
+        try:
+            _cc = _db.connect()
+            _before = _cc.execute("SELECT COUNT(*) FROM apex_trades").fetchone()[0]
+            _deleted = _cc.execute("""
+                DELETE FROM apex_trades
+                WHERE quality='test'
+                   OR exit_reason IN ('test_endpoint','test_cleanup','test_simulation')
+                   OR (pnl_r IS NOT NULL AND ABS(pnl_r) > 10)
+            """).rowcount
+            _cc.commit()
+            _after = _cc.execute("SELECT COUNT(*) FROM apex_trades").fetchone()[0]
+            _real_r = _cc.execute(
+                "SELECT COALESCE(SUM(pnl_r),0) FROM apex_trades "
+                "WHERE status='closed' AND pnl_r IS NOT NULL"
+            ).fetchone()[0]
+            _cc.close()
+            logger.info(
+                f'  Test-trade cleanup: removed {_deleted} rows '
+                f'({_before} → {_after} remaining, total_R={_real_r:+.2f}R)'
+            )
+        except Exception as _ce:
+            logger.warning(f'  Test-trade cleanup failed: {_ce}')
     except Exception as e:
         logger.warning('  apex_trades init failed: ' + str(e))
     try:
