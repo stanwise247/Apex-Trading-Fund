@@ -2121,6 +2121,7 @@ def background_scheduler():
             if not is_setup_enabled('I'):
                 logger.info('Setup I: disabled via Control Centre — skipping')
             else:
+                logger.info('Setup I: block entered — scanning MNQ and ES')
                 try:
                     from setup_i_mathematical import scan_setup_i, format_i_alert
                     from live_scanner import send_telegram
@@ -2130,11 +2131,10 @@ def background_scheduler():
                         from risk_manager import RiskGate
                         background_scheduler._risk_gate = RiskGate()
                     _rg_i = background_scheduler._risk_gate
-                    _i_risk_footer = (
-                        f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
-                        f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
-                        f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
-                    )
+                    # NOTE: _i_risk_footer is computed per-signal inside the loop —
+                    # computing it here (before the scan) caused AttributeError on
+                    # get_regime().label when no regime data was available, which
+                    # silently aborted the entire Setup I block.
                     for _sym in ['MNQ', 'ES']:
                         try:
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
@@ -2147,6 +2147,12 @@ def background_scheduler():
                                 continue
                             logger.info(f'Scanning Setup I for {_sym}')
                             sig = scan_setup_i(_sym, _now_utc_i)
+                            # ← CRITICAL visibility: log every scan result so we know
+                            #   whether the model fired or not
+                            logger.info(
+                                f'scan_setup_i {_sym} returned: '
+                                f'{"SIGNAL dir=" + sig["direction"] + " entry=" + str(sig.get("entry")) if sig else "None (no signal this tick)"}'
+                            )
                             if not sig:
                                 continue
 
@@ -2192,9 +2198,17 @@ def background_scheduler():
                                     exc_info=True
                                 )
 
-                            # ── [I-5/6] send_telegram — CRITICAL on any failure ───────
+                            # ── [I-5/6] send_telegram — risk footer computed here, not before loop ─
                             try:
                                 logger.info(f'[I-5/6] Calling send_telegram for {_sym}')
+                                try:
+                                    _i_risk_footer = (
+                                        f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
+                                        f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
+                                        f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
+                                    )
+                                except Exception:
+                                    _i_risk_footer = ''
                                 msg = format_i_alert(sig) + _i_risk_footer
                                 send_telegram(msg)
                             except Exception as _i_te:
