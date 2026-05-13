@@ -57,7 +57,12 @@ def load_telegram_config():
     return token, chat_id
 
 
-def send_telegram(message: str):
+def send_telegram(message: str, message_type: str = 'trade_signal') -> bool:
+    _ALLOWED_TYPES = {'trade_signal', 'trade_close', 'kill_switch', 'daily_limit'}
+    if message_type not in _ALLOWED_TYPES:
+        logger.debug(f'Telegram: suppressed non-trade message (type={message_type})')
+        return False
+
     token, chat_id = load_telegram_config()
     if not token or not chat_id:
         logger.warning('Telegram not configured — alert not sent')

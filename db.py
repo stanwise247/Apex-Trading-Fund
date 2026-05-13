@@ -39,6 +39,7 @@ _OR_IGNORE = re.compile(r'(?i)\bINSERT\s+OR\s+IGNORE\s+INTO\b')
 _AUTOINC   = re.compile(r'(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b')
 _PRAGMA    = re.compile(r'(?i)^\s*PRAGMA\b')
 _CHANGES   = re.compile(r'(?i)\bSELECT\s+changes\(\)')
+_BLOB      = re.compile(r'(?i)\bBLOB\b')
 
 
 def _pg(sql: str):
@@ -48,6 +49,7 @@ def _pg(sql: str):
     sql = _PH.sub('%s', sql)
     sql = _AUTOINC.sub('SERIAL PRIMARY KEY', sql)
     sql = _CHANGES.sub('SELECT 0', sql)
+    sql = _BLOB.sub('BYTEA', sql)
     if _OR_IGNORE.search(sql):
         sql = _OR_IGNORE.sub('INSERT INTO', sql)
         sql = sql.rstrip().rstrip(';') + ' ON CONFLICT DO NOTHING'
@@ -442,7 +444,19 @@ _PG_DDL = [
         disabled_at     TIMESTAMP,
         enabled_at      TIMESTAMP,
         updated_by      VARCHAR(50) DEFAULT 'dashboard',
+        optimal_regimes TEXT,
+        regime_gating_enabled INTEGER DEFAULT 0,
         created_at      TIMESTAMP DEFAULT NOW()
+    )""",
+    """CREATE TABLE IF NOT EXISTS ml_models (
+        id               SERIAL PRIMARY KEY,
+        model_name       TEXT UNIQUE NOT NULL,
+        model_bytes      BYTEA NOT NULL,
+        trained_at       TEXT NOT NULL,
+        oos_auc          REAL,
+        feature_count    INTEGER,
+        training_samples INTEGER,
+        created_at       TEXT DEFAULT CURRENT_TIMESTAMP
     )""",
     # Indexes
     'CREATE INDEX IF NOT EXISTS idx_ohlcv_sym_tf_ts ON ohlcv (symbol, timeframe, ts)',
@@ -467,6 +481,9 @@ _PG_MIGRATIONS = [
     'ALTER TABLE strategy_health_log ADD COLUMN IF NOT EXISTS live_score INT',
     # Index on backtest_results for fast per-setup lookups
     'CREATE INDEX IF NOT EXISTS idx_backtest_setup_date ON backtest_results (setup_id, run_date)',
+    # Phase 2.4 — regime gating columns on strategy_config
+    'ALTER TABLE strategy_config ADD COLUMN IF NOT EXISTS optimal_regimes TEXT',
+    'ALTER TABLE strategy_config ADD COLUMN IF NOT EXISTS regime_gating_enabled INTEGER DEFAULT 0',
 ]
 
 

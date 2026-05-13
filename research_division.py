@@ -427,125 +427,163 @@ def _edge_score(win_rate: float, sharpe: Optional[float], total_signals: int,
 
 def backtest_setup_d(conn, lookback_days: int = 180) -> Optional[BacktestResult]:
     """
-    FVG Fill — matches live scan_setup_d logic exactly:
-    - 15min FVGs (same as live scanner, not 5min)
-    - 4h EMA20 bias filter (same computation as fvg_engine.get_htf_bias)
-    - 5min entry trigger: price retraces to FVG midpoint with confirming close
-    - Stop: 1.0 × ATR(5min) beyond FVG edge (live uses ATR_1min; 5min is closest proxy)
+    FVG Fill — uses actual live fvg_engine functions (detect_fvgs, score_fvg) to
+    guarantee backtest logic matches live execution exactly.
+
+    - Loads 15min MNQ bars for FVG detection via detect_fvgs()
+    - Loads 5min MNQ bars for 4h EMA20 bias (same resample as get_htf_bias)
+    - detect_fvgs() called with min_atr_mult=0.3, lookback=96 (SETUP_D_PARAMS)
+    - Entry trigger: 5min bar touches FVG midpoint with confirming close
+    - Score via score_fvg() — only trade if score >= 70 (SETUP_D_PARAMS['min_score'])
+    - Stop: fvg_bottom - ATR_5min (bullish), fvg_top + ATR_5min (bearish)
     - RR 2.5, session 13-19 UTC, weekdays only
-    - Quality gate: size >= 0.4×ATR, age <= 16 15min bars, penetration <= 75%
     """
     try:
-        import pandas as pd, numpy as np
+        import pandas as pd
+        import numpy as np
+        from fvg_engine import detect_fvgs, score_fvg, SETUP_D_PARAMS
 
         df15 = _load_ohlcv_df(conn, 'MNQ', '15min', lookback_days)
-        if len(df15) < 50: return None
-        df5  = _load_ohlcv_df(conn, 'MNQ', '5min',  lookback_days)
-        if len(df5)  < 50: return None
+        if len(df15) < 50:
+            return None
+        df5 = _load_ohlcv_df(conn, 'MNQ', '5min', lookback_days)
+        if len(df5) < 50:
+            return None
 
-        # ── 4h EMA20 bias — identical to fvg_engine.get_htf_bias() ────────
+        # ── 4h EMA20 bias — identical to fvg_engine.get_htf_bias() ─────────
+        # Resample 5min bars to 4h, compute EMA20, forward-fill onto 15min index
         df5_idx = df5.set_index('dt')
         df4h = df5_idx[['open', 'high', 'low', 'close', 'volume']].resample('4h').agg(
             {'open': 'first', 'high': 'max', 'low': 'min',
-             'close': 'last',  'volume': 'sum'}
+             'close': 'last', 'volume': 'sum'}
         ).dropna()
-        if len(df4h) < 21: return None
+        if len(df4h) < 21:
+            return None
         df4h['ema20'] = df4h['close'].ewm(span=20, adjust=False).mean()
-        _bias_raw = (df4h['close'] > df4h['ema20'] * 1.001).astype(int) - \
-                    (df4h['close'] < df4h['ema20'] * 0.999).astype(int)
-        df15['bias4h'] = _bias_raw.reindex(
-            df15.set_index('dt').index, method='ffill').fillna(0).values
-        df5['bias4h']  = _bias_raw.reindex(
-            df5_idx.index,              method='ffill').fillna(0).values
+        _bias_raw = (
+            (df4h['close'] > df4h['ema20'] * 1.001).astype(int)
+            - (df4h['close'] < df4h['ema20'] * 0.999).astype(int)
+        )
+        # Forward-fill 4h bias onto 15min and 5min indices
+        df15_idx = df15.set_index('dt')
+        df15['bias4h'] = _bias_raw.reindex(df15_idx.index, method='ffill').fillna(0).values
+        df5['bias4h']  = _bias_raw.reindex(df5_idx.index,  method='ffill').fillna(0).values
 
-        atr15  = _atr14(df15);  atr5 = _atr14(df5)
-        h15    = df15['high'].values;  l15  = df15['low'].values
-        v15    = df15['volume'].values; hrs15 = df15['hour'].values
-        wday15 = df15['weekday'].values; ts15  = df15['ts'].values
-        bias15 = df15['bias4h'].values;  bars15 = len(df15)
+        # Prepare 15min indexed frame for score_fvg (needs datetime index)
+        df15_scored = df15.set_index('dt')
 
-        h5   = df5['high'].values;  l5  = df5['low'].values
-        c5   = df5['close'].values; o5  = df5['open'].values
-        ts5  = df5['ts'].values;    hrs5 = df5['hour'].values
-        atr5v = atr5.values;        bars5 = len(df5)
+        atr5  = _atr14(df5)
+        atr15 = _atr14(df15)
 
-        def _quality_ok(ftype, ft, fb, sz, av, fi, ti):
-            """Lightweight quality gate mirroring score_fvg thresholds."""
-            if sz < 0.4 * av: return False          # too small
-            if (ti - fi) > 16: return False          # stale — > 4h old
-            if ti > fi:                              # check penetration
-                sl = l15[fi:ti + 1]; sh = h15[fi:ti + 1]
-                pen = ((ft - sl.min()) / sz if ftype == 'bullish'
-                       else (sh.max() - fb) / sz) if sz > 0 else 1.0
-                if pen > 0.75: return False
-            return True
+        ts5   = df5['ts'].values
+        hrs5  = df5['hour'].values
+        wday5 = df5['weekday'].values
+        c5    = df5['close'].values
+        o5    = df5['open'].values
+        h5    = df5['high'].values
+        l5    = df5['low'].values
+        bias5 = df5['bias4h'].values
+        atr5v = atr5.values
+        bars5 = len(df5)
+
+        # Volume baseline for score_fvg (20-bar rolling mean on 15min)
+        vol_baseline_15m = float(df15['volume'].tail(20).mean())
 
         pnl = []
-        for i in range(2, bars15 - 1):
-            if not (13 <= hrs15[i] < 19): continue
-            if wday15[i] >= 5: continue
-            av15 = atr15.iloc[i]
-            if not av15 or math.isnan(av15) or av15 < 10: continue
-            b    = int(bias15[i])
-            fvg_ts  = int(ts15[i])
-            max_ts  = int(ts15[min(i + 30, bars15 - 1)])
-            start5  = int(np.searchsorted(ts5, fvg_ts, side='right'))
+        # Walk through 5min bars; for each qualifying bar, detect FVGs on the
+        # 15min data available up to that point and check for entry trigger.
+        # We chunk by day to avoid look-ahead: only 15min bars whose ts <= current 5min bar ts.
+        for i in range(50, bars5 - 1):
+            if wday5[i] >= 5:
+                continue
+            if not (13 <= hrs5[i] < 19):
+                continue
+            atr5_val = atr5v[i]
+            if not atr5_val or math.isnan(atr5_val):
+                continue
 
-            # ── Bullish FVG — gap up: lows[right] > highs[left] ───────────
-            fvg_top = l15[i];     fvg_bot = h15[i - 2]
-            if fvg_bot < fvg_top and b >= 0:          # not counter-bearish
-                sz = fvg_top - fvg_bot
-                if sz >= 0.3 * av15:
-                    midpt = fvg_bot + sz * 0.5
-                    for idx in range(start5, bars5):
-                        if ts5[idx] > max_ts: break
-                        if not (13 <= hrs5[idx] < 19): continue
-                        # Entry: bar touched midpoint AND closed bullish above it
-                        if (l5[idx] <= midpt and
-                                c5[idx] >= midpt and c5[idx] > o5[idx]):
-                            age  = (ts5[idx] - fvg_ts) // 900
-                            ti15 = min(i + age + 1, bars15 - 1)
-                            if _quality_ok('bullish', fvg_top, fvg_bot,
-                                           sz, av15, i, ti15):
-                                av5   = (atr5v[idx] if not math.isnan(atr5v[idx])
-                                         else av15 / 3.87)
-                                s     = fvg_bot - av5
-                                risk_r = midpt - s
-                                if risk_r > 0:
-                                    pnl.append(_sim_outcome(
-                                        df5, idx, 'long',
-                                        midpt, s, midpt + 2.5 * risk_r))
-                            break
+            b_int = int(bias5[i])
+            if b_int == 0:
+                # neutral bias — skip (matches live get_htf_bias returning 'neutral')
+                continue
+            bias_str = 'bullish' if b_int > 0 else 'bearish'
 
-            # ── Bearish FVG — gap down: highs[right] < lows[left] ─────────
-            fvg_top2 = l15[i - 2]; fvg_bot2 = h15[i]
-            if fvg_bot2 < fvg_top2 and b <= 0:        # not counter-bullish
-                sz2 = fvg_top2 - fvg_bot2
-                if sz2 >= 0.3 * av15:
-                    midpt2 = fvg_top2 - sz2 * 0.5
-                    for idx in range(start5, bars5):
-                        if ts5[idx] > max_ts: break
-                        if not (13 <= hrs5[idx] < 19): continue
-                        if (h5[idx] >= midpt2 and
-                                c5[idx] <= midpt2 and c5[idx] < o5[idx]):
-                            age  = (ts5[idx] - fvg_ts) // 900
-                            ti15 = min(i + age + 1, bars15 - 1)
-                            if _quality_ok('bearish', fvg_top2, fvg_bot2,
-                                           sz2, av15, i, ti15):
-                                av5    = (atr5v[idx] if not math.isnan(atr5v[idx])
-                                          else av15 / 3.87)
-                                s      = fvg_top2 + av5
-                                risk_r = s - midpt2
-                                if risk_r > 0:
-                                    pnl.append(_sim_outcome(
-                                        df5, idx, 'short',
-                                        midpt2, s, midpt2 - 2.5 * risk_r))
-                            break
+            current_ts = int(ts5[i])
+            # Slice 15min bars available up to current 5min bar
+            df15_slice = df15[df15['ts'] <= current_ts].copy()
+            if len(df15_slice) < 3:
+                continue
+            atr15_slice = _atr14(df15_slice)
+            df15_slice_idx = df15_slice.set_index('dt')
+
+            # Detect FVGs using actual live function
+            fvgs = detect_fvgs(
+                df15_slice_idx,
+                atr15_slice.set_axis(df15_slice_idx.index),
+                min_atr_mult=SETUP_D_PARAMS['min_fvg_atr'],
+                lookback=SETUP_D_PARAMS['fvg_lookback_bars'],
+            )
+            if not fvgs:
+                continue
+
+            # Current 5min bar OHLC
+            bar_close = float(c5[i])
+            bar_open  = float(o5[i])
+            bar_high  = float(h5[i])
+            bar_low   = float(l5[i])
+
+            for fvg in fvgs:
+                direction = None
+                if (fvg['type'] == 'bullish'
+                        and bias_str == 'bullish'
+                        and bar_low  <= fvg['top']
+                        and bar_close >= fvg['mid']
+                        and bar_close > bar_open):
+                    direction = 'long'
+                elif (fvg['type'] == 'bearish'
+                        and bias_str == 'bearish'
+                        and bar_high >= fvg['bottom']
+                        and bar_close <= fvg['mid']
+                        and bar_close < bar_open):
+                    direction = 'short'
+
+                if direction is None:
+                    continue
+
+                # Quality gate — score_fvg using actual live function
+                fvg_score = score_fvg(
+                    fvg,
+                    df15_slice_idx,
+                    df5_idx.index[i] if i < len(df5_idx.index) else df15_slice_idx.index[-1],
+                    vol_baseline_15m,
+                )
+                if fvg_score < SETUP_D_PARAMS['min_score']:
+                    continue
+
+                # Stop: 1× ATR(5min) beyond FVG edge (SETUP_D_PARAMS stop_atr=1.0)
+                stop_atr_mult = SETUP_D_PARAMS.get('stop_atr', 1.0)
+                if direction == 'long':
+                    entry  = bar_close
+                    stop   = fvg['bottom'] - stop_atr_mult * atr5_val
+                    target = entry + SETUP_D_PARAMS['target_rr'] * (entry - stop)
+                else:
+                    entry  = bar_close
+                    stop   = fvg['top'] + stop_atr_mult * atr5_val
+                    target = entry - SETUP_D_PARAMS['target_rr'] * (stop - entry)
+
+                risk = abs(entry - stop)
+                if risk <= 0:
+                    continue
+
+                pnl.append(_sim_outcome(df5, i, direction, entry, stop, target))
+                # One trade per bar — take the first qualifying FVG
+                break
 
         b = BENCHMARKS['D']
         return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df15), 'D', lookback_days)
     except Exception as e:
-        logger.error(f'backtest_setup_d: {e}'); return None
+        logger.error(f'backtest_setup_d: {e}', exc_info=True)
+        return None
 
 
 def backtest_setup_e(conn, lookback_days: int = 180) -> Optional[BacktestResult]:
@@ -683,47 +721,129 @@ def backtest_setup_h(conn, lookback_days: int = 180) -> Optional[BacktestResult]
 
 
 def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]:
-    """Mathematical Alpha — MNQ 5min, Hurst + momentum, Tue-Thu, 13-19 UTC."""
+    """
+    Mathematical Alpha — MNQ 5min, Hurst + momentum, Tue-Thu, 13-19 UTC.
+
+    Prefers stored XGB predictions from regime_log (hurst, autocorr, vol_ratio).
+    Falls back to mathematical calculation when regime_log has insufficient data.
+    Threshold: hurst > 0.55 AND autocorr > 0.05 (long) or < -0.05 (short).
+    """
     try:
         import numpy as np
+
+        cutoff_ts = int(
+            (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp()
+        )
+
+        # ── Attempt 1: use stored regime_log predictions ─────────────────
+        regime_rows = []
+        try:
+            regime_rows = conn.execute(
+                "SELECT ts, hurst, autocorr, vol_ratio FROM regime_log "
+                "WHERE symbol='MNQ' AND ts > ? ORDER BY ts ASC",
+                (cutoff_ts,)
+            ).fetchall()
+        except Exception as _rl_err:
+            logger.debug(f'backtest_setup_i: regime_log unavailable — {_rl_err}')
+
+        if len(regime_rows) >= 10:
+            # ── Path A: regime_log has data — simulate signals from stored values ──
+            df5 = _load_ohlcv_df(conn, 'MNQ', '5min', lookback_days)
+            if len(df5) < 50:
+                return None
+            atr    = _atr14(df5)
+            ts5    = df5['ts'].values
+            closes = df5['close'].values
+            hours  = df5['hour'].values
+            wdays  = df5['weekday'].values
+            atr5v  = atr.values
+            bars5  = len(df5)
+            pnl    = []
+
+            for row in regime_rows:
+                row_ts, hurst, autocorr, vol_ratio = row
+                if hurst is None or autocorr is None:
+                    continue
+                if hurst < 0.55:
+                    continue
+                # Find matching 5min bar
+                bar_idx = int(np.searchsorted(ts5, row_ts, side='right')) - 1
+                if bar_idx < 1 or bar_idx >= bars5 - 1:
+                    continue
+                if wdays[bar_idx] not in (1, 2, 3):
+                    continue
+                if not (13 <= hours[bar_idx] < 19):
+                    continue
+                atr_val = float(atr5v[bar_idx])
+                if not atr_val or math.isnan(atr_val):
+                    continue
+                e = float(closes[bar_idx])
+                if autocorr > 0.05:
+                    # momentum long
+                    pnl.append(_sim_outcome(df5, bar_idx, 'long',
+                                            e, e - atr_val, e + 3.0 * atr_val))
+                elif autocorr < -0.05:
+                    # momentum short
+                    pnl.append(_sim_outcome(df5, bar_idx, 'short',
+                                            e, e + atr_val, e - 3.0 * atr_val))
+
+            b = BENCHMARKS['I']
+            return _backtest_stats(pnl, b['sharpe'], b['wr'], bars5, 'I', lookback_days)
+
+        # ── Path B: fall back to mathematical calculation ─────────────────
+        logger.debug(
+            f'backtest_setup_i: regime_log has {len(regime_rows)} rows '
+            f'(< 10) — falling back to mathematical Hurst calculation'
+        )
         df = _load_ohlcv_df(conn, 'MNQ', '5min', lookback_days)
-        if len(df) < 150: return None
+        if len(df) < 150:
+            return None
         atr    = _atr14(df)
-        closes = df['close'].values; hours = df['hour'].values
-        wdays  = df['weekday'].values; bars  = len(df)
+        closes = df['close'].values
+        hours  = df['hour'].values
+        wdays  = df['weekday'].values
+        bars   = len(df)
         hw     = 100; aw = 50; pnl = []
 
         def _hurst(x):
             n = len(x)
-            if n < 20: return 0.5
+            if n < 20:
+                return 0.5
             m = x.mean(); dv = np.cumsum(x - m)
             r = dv.max() - dv.min(); s = x.std()
-            if s == 0: return 0.5
+            if s == 0:
+                return 0.5
             rs = r / s
             return math.log(rs) / math.log(n) if rs > 0 else 0.5
 
         for i in range(hw + aw, bars - 1):
-            if wdays[i] not in (1, 2, 3): continue
-            if not (13 <= hours[i] < 19): continue
+            if wdays[i] not in (1, 2, 3):
+                continue
+            if not (13 <= hours[i] < 19):
+                continue
             atr_val = atr.iloc[i]
-            if not atr_val or math.isnan(atr_val): continue
-            log_ret = np.diff(np.log(closes[i - hw: i + 1]))
-            hurst   = _hurst(log_ret)
-            if hurst < 0.55: continue
-            ret50   = np.diff(closes[i - aw: i + 1])
+            if not atr_val or math.isnan(atr_val):
+                continue
+            log_ret  = np.diff(np.log(closes[i - hw: i + 1]))
+            hurst    = _hurst(log_ret)
+            if hurst < 0.55:
+                continue
+            ret50    = np.diff(closes[i - aw: i + 1])
             autocorr = float(np.corrcoef(ret50[:-1], ret50[1:])[0, 1]) if len(ret50) > 5 else 0.0
-            if math.isnan(autocorr): autocorr = 0.0
+            if math.isnan(autocorr):
+                autocorr = 0.0
             mom = closes[i] - closes[i - 20]
+            e   = closes[i]
             if autocorr > 0.05 and mom > 0.5 * atr_val:
-                e = closes[i]
                 pnl.append(_sim_outcome(df, i, 'long',  e, e - atr_val, e + 3.0 * atr_val))
-            elif autocorr > 0.05 and mom < -0.5 * atr_val:
-                e = closes[i]
+            elif autocorr < -0.05 and mom < -0.5 * atr_val:
                 pnl.append(_sim_outcome(df, i, 'short', e, e + atr_val, e - 3.0 * atr_val))
+
         b = BENCHMARKS['I']
         return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df), 'I', lookback_days)
     except Exception as e:
-        logger.error(f'backtest_setup_i: {e}'); return None
+        logger.error(f'backtest_setup_i: {e}', exc_info=True)
+        return None
 
 
 BACKTEST_FUNCS = {
@@ -817,35 +937,30 @@ def run_daily_backtest() -> dict:
 
 
 def _check_edge_degradation():
-    """Send Telegram alert if any setup has edge_score < 50 for 3 consecutive days."""
+    """Log degradation warning if any setup has edge_score < 50 for 3 consecutive days.
+    Dashboard Research Health tab is the destination — no Telegram from research functions."""
     c = _conn()
     try:
-        from telegram_alerts import load_telegram_config, send_telegram
-        token, chat_id = load_telegram_config()
-        if not token or not chat_id:
-            return
         for sid in BACKTEST_FUNCS:
             rows = c.execute(
                 "SELECT edge_score, sharpe, run_date FROM backtest_results "
                 "WHERE setup_id=? ORDER BY run_date DESC LIMIT 3",
                 (sid,)
             ).fetchall()
-            if len(rows) < 3: continue
+            if len(rows) < 3:
+                continue
             scores = [r[0] for r in rows]
             if all(s is not None and s < 50 for s in scores):
                 latest_sharpe = rows[0][1] or 0
                 bench_s = BENCHMARKS.get(sid, {}).get('sharpe', 0)
                 pct = ((latest_sharpe / bench_s) - 1) * 100 if bench_s else 0
-                send_telegram(
-                    f'⚠️ <b>WISE MERIDIAN CAPITAL — Research Alert</b>\n\n'
-                    f'Setup {sid} ({SETUP_NAMES.get(sid, sid)}) edge degrading\n'
-                    f'Backtest Sharpe: {latest_sharpe:.2f} (benchmark {bench_s}) '
-                    f'— {pct:.0f}% {"above" if pct >= 0 else "below"} benchmark\n'
-                    f'3 consecutive days below threshold\n\n'
-                    f'<b>Action required:</b> review parameters',
-                    token, chat_id, parse_mode='HTML'
+                logger.info(
+                    f'Research: edge degradation — Setup {sid} ({SETUP_NAMES.get(sid, sid)}) '
+                    f'edge degrading; Backtest Sharpe: {latest_sharpe:.2f} (benchmark {bench_s}) '
+                    f'— {pct:.0f}% {"above" if pct >= 0 else "below"} benchmark; '
+                    f'3 consecutive days below threshold; Action required: review parameters '
+                    f'— dashboard only'
                 )
-                logger.warning(f'Research: edge degradation alert sent for Setup {sid}')
     except Exception as e:
         logger.error(f'_check_edge_degradation: {e}')
     finally:
@@ -1196,19 +1311,10 @@ def score_shadow_lab() -> list:
 
 def generate_weekly_telegram_report() -> bool:
     """
-    Compose and send the weekly Research Division Telegram report.
+    Compose the weekly Research Division report and log it for the dashboard.
     Opens its own connection, closes in finally. Never raises — returns True/False.
+    Dashboard Research Health tab is the destination — no Telegram from research functions.
     """
-    try:
-        from telegram_alerts import load_telegram_config, send_telegram
-        token, chat_id = load_telegram_config()
-        if not token or not chat_id:
-            logger.warning('Research report: Telegram not configured')
-            return False
-    except Exception as e:
-        logger.error(f'Research report: Telegram import failed — {e}')
-        return False
-
     today    = date.today()
     week_str = today.strftime('%d %b %Y')
     sep      = '━' * 21
@@ -1248,16 +1354,16 @@ def generate_weekly_telegram_report() -> bool:
     finally:
         _close(c)
 
-    emoji_map = {'HEALTHY': '✅', 'WATCH': '⚠️', 'ALERT': '🔴'}
+    status_map = {'HEALTHY': '[OK]', 'WATCH': '[WATCH]', 'ALERT': '[ALERT]'}
     health_lines = []
     for row in health_rows:
         sid, score, alert, sharpe, sbm, wr, bts, lv = row
-        name  = SETUP_NAMES.get(sid, sid)
-        emoji = emoji_map.get(alert, '—')
+        name   = SETUP_NAMES.get(sid, sid)
+        status = status_map.get(alert, '—')
         if score is None:
-            health_lines.append(f'—  {sid} {name}: no data')
+            health_lines.append(f'  {sid} {name}: no data')
         else:
-            parts = [f'{emoji}  {sid} {name}: <b>{score}/100</b>']
+            parts = [f'{status}  {sid} {name}: {score}/100']
             if bts is not None: parts.append(f'BT={bts}')
             if lv  is not None: parts.append(f'Live={lv}')
             if sharpe and sbm:
@@ -1275,25 +1381,19 @@ def generate_weekly_telegram_report() -> bool:
         f'  {r[0]}  Week {r[1] or 0}/{r[2]}  BT Sharpe: {r[3]:.2f}'
         for r in shadow_rows
     ] or ['  No active candidates']
-    dec_lines = [f'  ▸ {r[0]}' for r in dec_rows] or ['  None this week']
+    dec_lines = [f'  > {r[0]}' for r in dec_rows] or ['  None this week']
 
     msg = (
-        '<b>WISE MERIDIAN CAPITAL</b>\n'
+        'WISE MERIDIAN CAPITAL\n'
         f'Research Division — Week of {week_str}\n'
         f'{sep}\n\n'
-        '<b>STRATEGY HEALTH</b>\n' + '\n'.join(health_lines or ['No health data yet']) +
-        ('\n\n<b>DAILY BACKTEST</b>\n' + '\n'.join(bt_lines) if bt_lines else '') +
-        '\n\n<b>SHADOW LAB</b>\n' + '\n'.join(shadow_lines) +
-        '\n\n<b>DECISIONS PENDING</b>\n' + '\n'.join(dec_lines) +
+        'STRATEGY HEALTH\n' + '\n'.join(health_lines or ['No health data yet']) +
+        ('\n\nDAILY BACKTEST\n' + '\n'.join(bt_lines) if bt_lines else '') +
+        '\n\nSHADOW LAB\n' + '\n'.join(shadow_lines) +
+        '\n\nDECISIONS PENDING\n' + '\n'.join(dec_lines) +
         f'\n\n{sep}\n'
-        '<i>Wise Meridian Capital · Research Division</i>'
+        'Wise Meridian Capital - Research Division'
     )
 
-    try:
-        result = send_telegram(msg, token, chat_id, parse_mode='HTML')
-        if result:
-            logger.info('Research Division: weekly report sent via Telegram')
-        return bool(result)
-    except Exception as e:
-        logger.error(f'Research Division: Telegram send failed — {e}')
-        return False
+    logger.info(f'Research: weekly report — dashboard only\n{msg}')
+    return True

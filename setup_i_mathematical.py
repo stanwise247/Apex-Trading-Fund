@@ -533,14 +533,21 @@ def train_model_i(symbol: str) -> dict:
 
     def _save(direction, xgb_model, oos_auc):
         path = f'apex_xi_{symbol}_{direction}.pkl'
+        model_dict = {
+            'xgb': xgb_model, 'lr': lr_f, 'scaler': scaler_f,
+            'direction': direction, 'oos_auc': oos_auc,
+            'trained_at': now_str, 'symbol': symbol,
+            'n_features': len(FEATURE_NAMES_I),
+        }
         with open(path, 'wb') as fh:
-            pickle.dump({
-                'xgb': xgb_model, 'lr': lr_f, 'scaler': scaler_f,
-                'direction': direction, 'oos_auc': oos_auc,
-                'trained_at': now_str, 'symbol': symbol,
-                'n_features': len(FEATURE_NAMES_I),
-            }, fh)
+            pickle.dump(model_dict, fh)
         logger.info(f'Setup I: saved {path} (AUC={oos_auc:.3f})')
+        # Also persist to DB so models survive Railway restarts
+        _save_model_to_db(
+            f'apex_xi_{symbol}_{direction}', model_dict,
+            oos_auc=oos_auc, feature_count=len(FEATURE_NAMES_I),
+            training_samples=len(X),
+        )
 
     if short_ok:
         _i_disabled_short.discard(symbol)
@@ -568,6 +575,75 @@ def train_model_i(symbol: str) -> dict:
             'short_ok': short_ok, 'long_ok': long_ok}
 
 
+def _save_model_to_db(model_name: str, model_obj, oos_auc: float = None,
+                      feature_count: int = None, training_samples: int = None):
+    """Serialize model and save/update in ml_models table."""
+    try:
+        model_bytes  = pickle.dumps(model_obj)
+        trained_at   = datetime.now(timezone.utc).isoformat()
+        conn = _db.connect()
+        if _db.IS_POSTGRES:
+            import psycopg2.extras
+            conn.execute(
+                "INSERT INTO ml_models "
+                "(model_name, model_bytes, trained_at, oos_auc, feature_count, training_samples) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (model_name) DO UPDATE SET "
+                "model_bytes = EXCLUDED.model_bytes, "
+                "trained_at  = EXCLUDED.trained_at, "
+                "oos_auc     = EXCLUDED.oos_auc, "
+                "feature_count = EXCLUDED.feature_count, "
+                "training_samples = EXCLUDED.training_samples",
+                (model_name, model_bytes, trained_at, oos_auc, feature_count, training_samples)
+            )
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO ml_models "
+                "(model_name, model_bytes, trained_at, oos_auc, feature_count, training_samples) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (model_name, model_bytes, trained_at, oos_auc, feature_count, training_samples)
+            )
+        conn.commit()
+        conn.close()
+        logger.info(f'ML model saved to DB: {model_name}')
+    except Exception as _e:
+        logger.warning(f'ML model DB save failed for {model_name}: {_e}')
+
+
+def _load_model_from_db(model_name: str, max_age_days: int = 7):
+    """Load model from ml_models table if found and fresh. Returns model or None."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT model_bytes, trained_at, oos_auc FROM ml_models WHERE model_name=?",
+            (model_name,)
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        model_bytes, trained_at_str, oos_auc = row
+        # Parse trained_at — handles both ISO with and without timezone suffix
+        try:
+            trained_at = datetime.fromisoformat(trained_at_str.replace('Z', '+00:00'))
+            if trained_at.tzinfo is None:
+                trained_at = trained_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+        age_days = (datetime.now(timezone.utc) - trained_at).days
+        if age_days >= max_age_days:
+            logger.info(f'ML model DB stale ({age_days}d): {model_name} — will retrain')
+            return None
+        model_obj = pickle.loads(bytes(model_bytes))
+        logger.info(
+            f'ML model loaded from DB: {model_name} '
+            f'(trained {trained_at_str[:10]}, AUC={oos_auc})'
+        )
+        return model_obj
+    except Exception as _e:
+        logger.warning(f'ML model DB load failed for {model_name}: {_e}')
+        return None
+
+
 def load_or_train_model_i(symbol: str):
     """Load (xgb_short, xgb_long, lr, scaler) from pkl or retrain both direction models."""
     now = datetime.now(timezone.utc)
@@ -575,6 +651,19 @@ def load_or_train_model_i(symbol: str):
         cached_at, xs, xl, lr, sc = _i_model_cache[symbol]
         if (now - cached_at).total_seconds() < 300:
             return xs, xl, lr, sc
+
+    # Step 1: try DB first (survives Railway restarts)
+    short_d = None
+    long_d  = None
+    for suffix in ['short', 'long']:
+        model_name = f'apex_xi_{symbol}_{suffix}'
+        from_db    = _load_model_from_db(model_name)
+        if from_db is not None:
+            # from_db is the full pkl dict stored as a serialized object
+            if suffix == 'short':
+                short_d = from_db
+            else:
+                long_d = from_db
 
     def _load_pkl(path):
         if not os.path.exists(path):
@@ -597,8 +686,11 @@ def load_or_train_model_i(symbol: str):
             logger.error(f'Setup I failed to load {path}: {e}')
             return None
 
-    short_d = _load_pkl(f'apex_xi_{symbol}_short.pkl')
-    long_d  = _load_pkl(f'apex_xi_{symbol}_long.pkl')
+    # Step 2: fall back to pkl files if DB didn't supply a model
+    if short_d is None:
+        short_d = _load_pkl(f'apex_xi_{symbol}_short.pkl')
+    if long_d is None:
+        long_d  = _load_pkl(f'apex_xi_{symbol}_long.pkl')
 
     if short_d is None and long_d is None:
         logger.warning(f'Setup I {symbol}: no models loaded — triggering train_model_i()')
@@ -606,8 +698,21 @@ def load_or_train_model_i(symbol: str):
             train_model_i(symbol)
         except Exception as _train_err:
             logger.error(f'Setup I {symbol}: train_model_i() failed: {_train_err}', exc_info=True)
+        # After training, pkl files exist — load them and persist to DB
         short_d = _load_pkl(f'apex_xi_{symbol}_short.pkl')
         long_d  = _load_pkl(f'apex_xi_{symbol}_long.pkl')
+        if short_d is not None:
+            _save_model_to_db(
+                f'apex_xi_{symbol}_short', short_d,
+                oos_auc=short_d.get('oos_auc'),
+                feature_count=short_d.get('n_features'),
+            )
+        if long_d is not None:
+            _save_model_to_db(
+                f'apex_xi_{symbol}_long', long_d,
+                oos_auc=long_d.get('oos_auc'),
+                feature_count=long_d.get('n_features'),
+            )
 
     xgb_short = short_d['xgb'] if short_d else None
     xgb_long  = long_d['xgb']  if long_d  else None

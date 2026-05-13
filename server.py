@@ -79,7 +79,7 @@ PAPER_ONLY_SETUPS = set(
 # ── Strategy Control Centre — in-memory cache ─────────────────────────────
 # Refreshed every 60 s so there is no DB hit on every scan tick.
 # None means "not yet loaded"; each value is True=enabled, False=disabled.
-_strategy_enabled_cache: dict = {}   # {'A': True, 'B': True, ...}
+_strategy_enabled_cache: dict = {}   # {'A': {'enabled': True, 'optimal_regimes': [...], 'regime_gating_enabled': False}}
 _strategy_cache_ts: float = 0.0      # last refresh time (time.time())
 _STRATEGY_CACHE_TTL = 60             # seconds
 
@@ -96,22 +96,31 @@ def _refresh_strategy_cache():
     try:
         conn = _db.connect()
         rows = conn.execute(
-            "SELECT setup_id, enabled FROM strategy_config"
+            "SELECT setup_id, enabled, optimal_regimes, regime_gating_enabled FROM strategy_config"
         ).fetchall()
         conn.close()
         _strategy_cache_ts = time.time()  # always advance — prevents hammering on empty table
         if rows:
-            _strategy_enabled_cache = {r[0]: bool(r[1]) for r in rows}
+            _strategy_enabled_cache = {
+                r[0]: {
+                    'enabled':               bool(r[1]),
+                    'optimal_regimes':       r[2] or '',
+                    'regime_gating_enabled': bool(r[3]),
+                }
+                for r in rows
+            }
     except Exception as _sce:
         _strategy_cache_ts = time.time()  # advance even on failure to prevent per-call hammering
         logger.warning(f'Strategy config: cache refresh failed — {_sce}')
 
 
-def is_setup_enabled(setup_id: str) -> bool:
+def is_setup_enabled(setup_id: str, symbol: str = None) -> bool:
     """Return True if the setup is enabled in strategy_config.
 
-    Defaults to True on any exception or missing config row — a missing
-    or unreadable row must never disable a live strategy.
+    When symbol is provided and regime_gating_enabled is set, also checks
+    get_current_regime(symbol) against optimal_regimes. Fails open on any
+    exception or low-confidence regime — a missing row must never disable a
+    live strategy.
     """
     global _strategy_cache_ts
     sid = setup_id.upper().strip()
@@ -119,9 +128,38 @@ def is_setup_enabled(setup_id: str) -> bool:
         if time.time() - _strategy_cache_ts > _STRATEGY_CACHE_TTL:
             _refresh_strategy_cache()
         if sid in _strategy_enabled_cache:
-            enabled = _strategy_enabled_cache[sid]
+            row     = _strategy_enabled_cache[sid]
+            enabled = row['enabled']
             logger.info(f'Strategy config: Setup {sid} enabled={enabled}')
-            return enabled
+            if not enabled:
+                return False
+            # Regime gate — only when symbol provided and gating active
+            if row.get('regime_gating_enabled') and symbol:
+                try:
+                    from regime_engine import get_current_regime
+                    regime_info = get_current_regime(symbol)
+                    if regime_info and regime_info.get('confidence', 0) >= 0.33:
+                        current_regime = regime_info.get('regime', 'UNKNOWN')
+                        optimal = [
+                            r.strip()
+                            for r in (row.get('optimal_regimes') or '').split(',')
+                            if r.strip()
+                        ]
+                        if optimal and current_regime not in optimal:
+                            logger.info(
+                                f'Setup {sid}: regime gate blocked — '
+                                f'current={current_regime} optimal={optimal}'
+                            )
+                            return False
+                        elif optimal and current_regime in optimal:
+                            logger.debug(
+                                f'Setup {sid}: regime gate passed — '
+                                f'{current_regime} in {optimal}'
+                            )
+                    # confidence < 0.33 or no regime data: fail open (allow)
+                except Exception as _rge:
+                    logger.debug(f'Setup {sid}: regime gate error (fail open): {_rge}')
+            return True
         # No row in cache — safe default, never block a live strategy
         default = _STRATEGY_DEFAULTS.get(sid, True)
         logger.info(f'Strategy config: Setup {sid} enabled={default} (default — no DB row)')
@@ -133,28 +171,54 @@ def is_setup_enabled(setup_id: str) -> bool:
         return True
 
 
+SETUP_REGIME_CONFIG = {
+    'A': ({'TRENDING'},                True),
+    'B': ({'TRENDING'},                True),
+    'C': ({'TRENDING'},                True),
+    'D': ({'TRENDING', 'CHOPPY'},      True),
+    'E': ({'TRENDING'},                True),
+    'H': ({'CHOPPY', 'MEAN_REVERTING'}, True),
+    'I': ({'TRENDING'},                True),
+    'F': ({'TRENDING', 'CHOPPY'},      False),  # suspended anyway
+}
+
+
 def _seed_strategy_config():
     """Upsert all setups into strategy_config, enforcing correct defaults on every startup."""
     try:
         conn = _db.connect()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
+            regime_regimes, regime_gating = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            optimal_str = ','.join(sorted(regime_regimes)) if regime_regimes else ''
+            gating_int  = 1 if regime_gating else 0
             if _db.IS_POSTGRES:
                 conn.execute(
-                    "INSERT INTO strategy_config (setup_id, enabled) VALUES (?, ?) "
-                    "ON CONFLICT (setup_id) DO UPDATE SET enabled = EXCLUDED.enabled",
-                    (sid, enabled)
+                    "INSERT INTO strategy_config "
+                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (setup_id) DO UPDATE SET "
+                    "enabled = EXCLUDED.enabled, "
+                    "optimal_regimes = EXCLUDED.optimal_regimes, "
+                    "regime_gating_enabled = EXCLUDED.regime_gating_enabled",
+                    (sid, enabled, optimal_str, gating_int)
                 )
             else:
                 conn.execute(
-                    "INSERT OR REPLACE INTO strategy_config (setup_id, enabled) "
-                    "VALUES (?, ?)",
-                    (sid, enabled)
+                    "INSERT OR REPLACE INTO strategy_config "
+                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled) "
+                    "VALUES (?, ?, ?, ?)",
+                    (sid, enabled, optimal_str, gating_int)
                 )
         conn.commit()
         conn.close()
         _refresh_strategy_cache()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
-            logger.info(f'Strategy config: Setup {sid} seeded enabled={enabled}')
+            _, gating = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            regimes, _ = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            logger.info(
+                f'Strategy config: Setup {sid} seeded enabled={enabled} '
+                f'regime_gating={gating} optimal_regimes={sorted(regimes)}'
+            )
     except Exception as e:
         logger.warning(f'Strategy Control Centre seed failed: {e}')
 
@@ -481,6 +545,8 @@ def init_db():
             disabled_at TEXT,
             enabled_at TEXT,
             updated_by TEXT DEFAULT 'dashboard',
+            optimal_regimes TEXT,
+            regime_gating_enabled INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
         conn.commit()
     except Exception as _scfg_e:
@@ -489,6 +555,32 @@ def init_db():
         except Exception:
             pass
         logger.error(f'strategy_config table creation failed (non-fatal): {_scfg_e}')
+    # Phase 2.4 — migrate strategy_config: add regime gating columns if missing
+    for col in ('optimal_regimes TEXT', 'regime_gating_enabled INTEGER DEFAULT 0'):
+        try:
+            c.execute(f'ALTER TABLE strategy_config ADD COLUMN {col}')
+            conn.commit()
+        except Exception:
+            pass  # already exists
+    # Phase 2.3 — ml_models table: persist trained ML models across restarts
+    try:
+        conn.rollback()
+        c.execute('''CREATE TABLE IF NOT EXISTS ml_models (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_name TEXT UNIQUE NOT NULL,
+            model_bytes BLOB NOT NULL,
+            trained_at TEXT NOT NULL,
+            oos_auc REAL,
+            feature_count INTEGER,
+            training_samples INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        conn.commit()
+    except Exception as _ml_e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error(f'ml_models table creation failed (non-fatal): {_ml_e}')
     conn.close()
     logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
     _migrate_htf_prices()
