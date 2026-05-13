@@ -437,16 +437,17 @@ _PG_DDL = [
         created_at          TIMESTAMP DEFAULT NOW()
     )""",
     """CREATE TABLE IF NOT EXISTS strategy_config (
-        id              SERIAL PRIMARY KEY,
-        setup_id        VARCHAR(10) UNIQUE NOT NULL,
-        enabled         BOOLEAN DEFAULT TRUE,
-        disabled_reason TEXT,
-        disabled_at     TIMESTAMP,
-        enabled_at      TIMESTAMP,
-        updated_by      VARCHAR(50) DEFAULT 'dashboard',
-        optimal_regimes TEXT,
+        id                    SERIAL PRIMARY KEY,
+        setup_id              VARCHAR(10) UNIQUE NOT NULL,
+        enabled               BOOLEAN DEFAULT TRUE,
+        disabled_reason       TEXT,
+        disabled_at           TIMESTAMP,
+        enabled_at            TIMESTAMP,
+        updated_by            VARCHAR(50) DEFAULT 'dashboard',
+        optimal_regimes       TEXT DEFAULT '',
         regime_gating_enabled INTEGER DEFAULT 0,
-        created_at      TIMESTAMP DEFAULT NOW()
+        paper_instruments     TEXT DEFAULT '',
+        created_at            TIMESTAMP DEFAULT NOW()
     )""",
     """CREATE TABLE IF NOT EXISTS ml_models (
         id               SERIAL PRIMARY KEY,
@@ -482,8 +483,55 @@ _PG_MIGRATIONS = [
     # Index on backtest_results for fast per-setup lookups
     'CREATE INDEX IF NOT EXISTS idx_backtest_setup_date ON backtest_results (setup_id, run_date)',
     # Phase 2.4 — regime gating columns on strategy_config
-    'ALTER TABLE strategy_config ADD COLUMN IF NOT EXISTS optimal_regimes TEXT',
+    'ALTER TABLE strategy_config ADD COLUMN IF NOT EXISTS optimal_regimes TEXT DEFAULT \'\'',
     'ALTER TABLE strategy_config ADD COLUMN IF NOT EXISTS regime_gating_enabled INTEGER DEFAULT 0',
+    # Phase 2.6 — instrument-level paper/live execution control
+    'ALTER TABLE strategy_config ADD COLUMN IF NOT EXISTS paper_instruments TEXT DEFAULT \'\'',
+    # Phase 3 — Discovery Engine tables
+    """CREATE TABLE IF NOT EXISTS hypothesis_log (
+        id                     SERIAL PRIMARY KEY,
+        hypothesis_id          TEXT UNIQUE NOT NULL,
+        description            TEXT,
+        category               TEXT,
+        instrument             TEXT,
+        lookback_days          INTEGER,
+        signals_generated      INTEGER,
+        win_rate               REAL,
+        sharpe                 REAL,
+        avg_r                  REAL,
+        information_coefficient REAL,
+        p_value                REAL,
+        status                 TEXT DEFAULT 'TESTING',
+        run_date               TEXT,
+        created_at             TEXT DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS feature_combinations (
+        id         SERIAL PRIMARY KEY,
+        features   TEXT NOT NULL,
+        oos_ic     REAL,
+        oos_auc    REAL,
+        run_date   TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS pattern_library (
+        id                      SERIAL PRIMARY KEY,
+        pattern_id              TEXT UNIQUE NOT NULL,
+        name                    TEXT,
+        description             TEXT,
+        discovery_source        TEXT,
+        instrument              TEXT,
+        signals_observed        INTEGER DEFAULT 0,
+        win_rate                REAL,
+        sharpe                  REAL,
+        information_coefficient REAL,
+        first_observed          TEXT,
+        last_validated          TEXT,
+        decay_score             REAL DEFAULT 1.0,
+        status                  TEXT DEFAULT 'ACTIVE',
+        created_at              TEXT DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # Add reason column to research_decisions if missing
+    'ALTER TABLE research_decisions ADD COLUMN IF NOT EXISTS reason TEXT',
 ]
 
 

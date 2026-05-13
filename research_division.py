@@ -827,15 +827,22 @@ def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]
         )
 
         # ── Attempt 1: use stored regime_log predictions ─────────────────
+        # regime_log stores timestamp as TIMESTAMPTZ (PG) so convert cutoff to ISO.
+        # On failure we MUST rollback so the PG connection isn't left in aborted state.
         regime_rows = []
         try:
+            cutoff_iso = datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()
             regime_rows = conn.execute(
-                "SELECT ts, hurst, autocorr, vol_ratio FROM regime_log "
-                "WHERE symbol='MNQ' AND ts > ? ORDER BY ts ASC",
-                (cutoff_ts,)
+                "SELECT EXTRACT(EPOCH FROM timestamp)::BIGINT, hurst, autocorr, vol_ratio "
+                "FROM regime_log WHERE symbol='MNQ' AND timestamp > ? ORDER BY timestamp ASC",
+                (cutoff_iso,)
             ).fetchall()
         except Exception as _rl_err:
             logger.debug(f'backtest_setup_i: regime_log unavailable — {_rl_err}')
+            try:
+                conn.rollback()   # ← critical: clear PG aborted-transaction state
+            except Exception:
+                pass
 
         if len(regime_rows) >= 10:
             # ── Path A: regime_log has data — simulate signals from stored values ──
