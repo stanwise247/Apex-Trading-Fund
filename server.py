@@ -79,7 +79,7 @@ PAPER_ONLY_SETUPS = set(
 # ── Strategy Control Centre — in-memory cache ─────────────────────────────
 # Refreshed every 60 s so there is no DB hit on every scan tick.
 # None means "not yet loaded"; each value is True=enabled, False=disabled.
-_strategy_enabled_cache: dict = {}   # {'A': True, 'B': True, ...}
+_strategy_enabled_cache: dict = {}   # {'A': {'enabled': True, 'optimal_regimes': [...], 'regime_gating_enabled': False}}
 _strategy_cache_ts: float = 0.0      # last refresh time (time.time())
 _STRATEGY_CACHE_TTL = 60             # seconds
 
@@ -96,22 +96,33 @@ def _refresh_strategy_cache():
     try:
         conn = _db.connect()
         rows = conn.execute(
-            "SELECT setup_id, enabled FROM strategy_config"
+            "SELECT setup_id, enabled, optimal_regimes, regime_gating_enabled, "
+            "       paper_instruments FROM strategy_config"
         ).fetchall()
         conn.close()
         _strategy_cache_ts = time.time()  # always advance — prevents hammering on empty table
         if rows:
-            _strategy_enabled_cache = {r[0]: bool(r[1]) for r in rows}
+            _strategy_enabled_cache = {
+                r[0]: {
+                    'enabled':               bool(r[1]),
+                    'optimal_regimes':       r[2] or '',
+                    'regime_gating_enabled': bool(r[3]),
+                    'paper_instruments':     r[4] or '',
+                }
+                for r in rows
+            }
     except Exception as _sce:
         _strategy_cache_ts = time.time()  # advance even on failure to prevent per-call hammering
         logger.warning(f'Strategy config: cache refresh failed — {_sce}')
 
 
-def is_setup_enabled(setup_id: str) -> bool:
+def is_setup_enabled(setup_id: str, symbol: str = None) -> bool:
     """Return True if the setup is enabled in strategy_config.
 
-    Defaults to True on any exception or missing config row — a missing
-    or unreadable row must never disable a live strategy.
+    When symbol is provided and regime_gating_enabled is set, also checks
+    get_current_regime(symbol) against optimal_regimes. Fails open on any
+    exception or low-confidence regime — a missing row must never disable a
+    live strategy.
     """
     global _strategy_cache_ts
     sid = setup_id.upper().strip()
@@ -119,9 +130,38 @@ def is_setup_enabled(setup_id: str) -> bool:
         if time.time() - _strategy_cache_ts > _STRATEGY_CACHE_TTL:
             _refresh_strategy_cache()
         if sid in _strategy_enabled_cache:
-            enabled = _strategy_enabled_cache[sid]
+            row     = _strategy_enabled_cache[sid]
+            enabled = row['enabled']
             logger.info(f'Strategy config: Setup {sid} enabled={enabled}')
-            return enabled
+            if not enabled:
+                return False
+            # Regime gate — only when symbol provided and gating active
+            if row.get('regime_gating_enabled') and symbol:
+                try:
+                    from regime_engine import get_current_regime
+                    regime_info = get_current_regime(symbol)
+                    if regime_info and regime_info.get('confidence', 0) >= 0.33:
+                        current_regime = regime_info.get('regime', 'UNKNOWN')
+                        optimal = [
+                            r.strip()
+                            for r in (row.get('optimal_regimes') or '').split(',')
+                            if r.strip()
+                        ]
+                        if optimal and current_regime not in optimal:
+                            logger.info(
+                                f'Setup {sid}: regime gate blocked — '
+                                f'current={current_regime} optimal={optimal}'
+                            )
+                            return False
+                        elif optimal and current_regime in optimal:
+                            logger.debug(
+                                f'Setup {sid}: regime gate passed — '
+                                f'{current_regime} in {optimal}'
+                            )
+                    # confidence < 0.33 or no regime data: fail open (allow)
+                except Exception as _rge:
+                    logger.debug(f'Setup {sid}: regime gate error (fail open): {_rge}')
+            return True
         # No row in cache — safe default, never block a live strategy
         default = _STRATEGY_DEFAULTS.get(sid, True)
         logger.info(f'Strategy config: Setup {sid} enabled={default} (default — no DB row)')
@@ -133,28 +173,68 @@ def is_setup_enabled(setup_id: str) -> bool:
         return True
 
 
+SETUP_REGIME_CONFIG = {
+    'A': ({'TRENDING'},                True),
+    'B': ({'TRENDING'},                True),
+    'C': ({'TRENDING'},                True),
+    'D': ({'TRENDING', 'CHOPPY'},      True),
+    'E': ({'TRENDING'},                True),
+    'H': ({'CHOPPY', 'MEAN_REVERTING'}, True),
+    'I': ({'TRENDING'},                True),
+    'F': ({'TRENDING', 'CHOPPY'},      False),  # suspended anyway
+}
+
+# ── Instrument-level paper/live defaults (2.6) ────────────────────────────
+# Format: {setup_id: set_of_paper_instruments}
+# MNQ = paper for Setup I (stops too large). E = paper for all instruments.
+# Empty set = all instruments execute live (subject to PAPER_ONLY_SETUPS env).
+SETUP_PAPER_INSTRUMENTS: dict = {
+    'I': {'MNQ'},          # Setup I: MNQ paper, ES live
+    'E': {'MNQ', 'ES'},    # Setup E fully paper (already in PAPER_ONLY_SETUPS)
+    'F': {'MNQ', 'ES', 'GC'},  # Setup F suspended — all paper
+}
+
+
 def _seed_strategy_config():
     """Upsert all setups into strategy_config, enforcing correct defaults on every startup."""
     try:
         conn = _db.connect()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
+            regime_regimes, regime_gating = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            optimal_str   = ','.join(sorted(regime_regimes)) if regime_regimes else ''
+            gating_int    = 1 if regime_gating else 0
+            paper_instrs  = ','.join(sorted(SETUP_PAPER_INSTRUMENTS.get(sid, set())))
             if _db.IS_POSTGRES:
                 conn.execute(
-                    "INSERT INTO strategy_config (setup_id, enabled) VALUES (?, ?) "
-                    "ON CONFLICT (setup_id) DO UPDATE SET enabled = EXCLUDED.enabled",
-                    (sid, enabled)
+                    "INSERT INTO strategy_config "
+                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled, paper_instruments) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT (setup_id) DO UPDATE SET "
+                    "enabled = EXCLUDED.enabled, "
+                    "optimal_regimes = EXCLUDED.optimal_regimes, "
+                    "regime_gating_enabled = EXCLUDED.regime_gating_enabled, "
+                    "paper_instruments = EXCLUDED.paper_instruments",
+                    (sid, enabled, optimal_str, gating_int, paper_instrs)
                 )
             else:
                 conn.execute(
-                    "INSERT OR REPLACE INTO strategy_config (setup_id, enabled) "
-                    "VALUES (?, ?)",
-                    (sid, enabled)
+                    "INSERT OR REPLACE INTO strategy_config "
+                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled, paper_instruments) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (sid, enabled, optimal_str, gating_int, paper_instrs)
                 )
         conn.commit()
         conn.close()
         _refresh_strategy_cache()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
-            logger.info(f'Strategy config: Setup {sid} seeded enabled={enabled}')
+            _, gating   = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            regimes, _  = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            paper_i     = sorted(SETUP_PAPER_INSTRUMENTS.get(sid, set()))
+            logger.info(
+                f'Strategy config: Setup {sid} seeded enabled={enabled} '
+                f'regime_gating={gating} optimal_regimes={sorted(regimes)} '
+                f'paper_instruments={paper_i}'
+            )
     except Exception as e:
         logger.warning(f'Strategy Control Centre seed failed: {e}')
 
@@ -463,12 +543,56 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS research_state (
         key TEXT PRIMARY KEY,
         value TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS hypothesis_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hypothesis_id TEXT UNIQUE NOT NULL,
+        description TEXT,
+        category TEXT,
+        instrument TEXT,
+        lookback_days INTEGER,
+        signals_generated INTEGER,
+        win_rate REAL,
+        sharpe REAL,
+        avg_r REAL,
+        information_coefficient REAL,
+        p_value REAL,
+        status TEXT DEFAULT 'TESTING',
+        run_date TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS feature_combinations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        features TEXT NOT NULL,
+        oos_ic REAL,
+        oos_auc REAL,
+        run_date TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pattern_library (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern_id TEXT UNIQUE NOT NULL,
+        name TEXT,
+        description TEXT,
+        discovery_source TEXT,
+        instrument TEXT,
+        signals_observed INTEGER DEFAULT 0,
+        win_rate REAL,
+        sharpe REAL,
+        information_coefficient REAL,
+        first_observed TEXT,
+        last_validated TEXT,
+        decay_score REAL DEFAULT 1.0,
+        status TEXT DEFAULT 'ACTIVE',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
     # Migrate: add dual-score columns to strategy_health_log if missing
     for col in ('backtest_score INTEGER', 'live_score INTEGER'):
         try:
             c.execute(f'ALTER TABLE strategy_health_log ADD COLUMN {col}')
         except Exception:
             pass  # already exists
+    # Migrate: add reason column to research_decisions if missing
+    try:
+        c.execute('ALTER TABLE research_decisions ADD COLUMN reason TEXT')
+    except Exception:
+        pass  # already exists
     conn.commit()
     # strategy_config — isolated commit so any prior aborted tx cannot block it
     try:
@@ -481,6 +605,8 @@ def init_db():
             disabled_at TEXT,
             enabled_at TEXT,
             updated_by TEXT DEFAULT 'dashboard',
+            optimal_regimes TEXT,
+            regime_gating_enabled INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
         conn.commit()
     except Exception as _scfg_e:
@@ -489,6 +615,33 @@ def init_db():
         except Exception:
             pass
         logger.error(f'strategy_config table creation failed (non-fatal): {_scfg_e}')
+    # Phase 2.4 — migrate strategy_config: add regime gating columns if missing
+    for col in ('optimal_regimes TEXT', 'regime_gating_enabled INTEGER DEFAULT 0',
+                'paper_instruments TEXT'):  # 2.6 instrument-level paper/live control
+        try:
+            c.execute(f'ALTER TABLE strategy_config ADD COLUMN {col}')
+            conn.commit()
+        except Exception:
+            pass  # already exists
+    # Phase 2.3 — ml_models table: persist trained ML models across restarts
+    try:
+        conn.rollback()
+        c.execute('''CREATE TABLE IF NOT EXISTS ml_models (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_name TEXT UNIQUE NOT NULL,
+            model_bytes BLOB NOT NULL,
+            trained_at TEXT NOT NULL,
+            oos_auc REAL,
+            feature_count INTEGER,
+            training_samples INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        conn.commit()
+    except Exception as _ml_e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error(f'ml_models table creation failed (non-fatal): {_ml_e}')
     conn.close()
     logger.info('Database initialised (' + ('PostgreSQL' if _db.IS_POSTGRES else DB_PATH) + ')')
     _migrate_htf_prices()
@@ -1621,6 +1774,33 @@ def background_scheduler():
                     logger.info('Research Division: daily backtest complete')
                 except Exception as _bte:
                     logger.error(f'Research Division daily backtest failed: {_bte}')
+
+        # ── Research Division — hypothesis engine (02:00 UTC daily) ──
+        _now_hyp = datetime.now(timezone.utc)
+        if _now_hyp.hour == 2:
+            if not hasattr(background_scheduler, '_last_hypothesis_day') or \
+                    background_scheduler._last_hypothesis_day != _today_utc:
+                background_scheduler._last_hypothesis_day = _today_utc
+                try:
+                    import research_division as _rd_mod
+                    _rd_mod.run_hypothesis_engine()
+                    _rd_mod.update_pattern_library()
+                    logger.info('Research Division: hypothesis engine complete')
+                except Exception as _hye:
+                    logger.error(f'Research Division hypothesis engine failed: {_hye}')
+
+        # ── Research Division — combination explorer (Saturday 03:00 UTC) ──
+        _now_combo = datetime.now(timezone.utc)
+        if _now_combo.weekday() == 5 and _now_combo.hour == 3:
+            if not hasattr(background_scheduler, '_last_combo_day') or \
+                    background_scheduler._last_combo_day != _today_utc:
+                background_scheduler._last_combo_day = _today_utc
+                try:
+                    import research_division as _rd_mod
+                    _rd_mod.run_combination_explorer()
+                    logger.info('Research Division: combination explorer complete')
+                except Exception as _cbe:
+                    logger.error(f'Research Division combination explorer failed: {_cbe}')
 
         # ── Research Division — weekly health check (Monday 06:00 UTC) ──
         # DB-backed guard: persists across restarts so the check runs exactly once
@@ -4454,7 +4634,8 @@ def control_toggle(setup_id):
             _ctl_tg(
                 f'{emoji} <b>WISE MERIDIAN CAPITAL</b>\n'
                 f'Setup {sid} ({setup_name}) <b>{action}</b> via Control Centre{reason_txt}\n'
-                f'<i>Changes take effect within 60 seconds</i>'
+                f'<i>Changes take effect within 60 seconds</i>',
+                message_type='kill_switch'  # use permitted type for control-centre alerts
             )
         except Exception as _tg_e:
             logger.warning(f'Control Centre Telegram alert failed: {_tg_e}')
@@ -4473,6 +4654,134 @@ def control_toggle(setup_id):
     except Exception as e:
         logger.error(f'control_toggle {sid}: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+def is_instrument_paper(setup_id: str, symbol: str) -> bool:
+    """
+    Return True if this setup/instrument combination is paper-only (no Tradovate execution).
+    Checks strategy_config.paper_instruments from DB cache, falls back to SETUP_PAPER_INSTRUMENTS.
+    Called from _execute_via_tradovate wrappers per setup.
+    """
+    sid = setup_id.upper().strip()[0]  # take first char: 'I_mathematical_alpha' → 'I'
+    sym = symbol.upper().strip()
+    # Check live cache first
+    row = _strategy_enabled_cache.get(sid, {})
+    paper_str = row.get('paper_instruments', '') if isinstance(row, dict) else ''
+    if paper_str:
+        return sym in {p.strip() for p in paper_str.split(',') if p.strip()}
+    # Fall back to compile-time defaults
+    return sym in SETUP_PAPER_INSTRUMENTS.get(sid, set())
+
+
+@app.route('/api/control/strategies/<setup_id>/instruments/<symbol>/toggle', methods=['POST'])
+def control_instrument_toggle(setup_id, symbol):
+    """
+    Toggle paper/live execution for a specific setup+instrument combination.
+    E.g. POST /api/control/strategies/I/instruments/MNQ/toggle
+    Paper = signal fires, trade logged, Telegram sent — but NO Tradovate order.
+    Live  = full execution including Tradovate bracket order.
+    """
+    sid = setup_id.upper().strip()
+    sym = symbol.upper().strip()
+    if sid not in _STRATEGY_DEFAULTS:
+        return jsonify({'ok': False, 'error': f'Unknown setup: {sid}'}), 400
+    if sym not in ('MNQ', 'ES', 'GC', 'NQ'):
+        return jsonify({'ok': False, 'error': f'Unknown instrument: {sym}'}), 400
+    try:
+        conn    = _db.connect()
+        row     = conn.execute(
+            "SELECT paper_instruments FROM strategy_config WHERE setup_id=?", (sid,)
+        ).fetchone()
+        current_paper = set(
+            p.strip() for p in (row[0] or '').split(',') if p.strip()
+        ) if row else set(SETUP_PAPER_INSTRUMENTS.get(sid, set()))
+
+        if sym in current_paper:
+            current_paper.discard(sym)
+            new_status = 'LIVE'
+        else:
+            current_paper.add(sym)
+            new_status = 'PAPER'
+
+        new_paper_str = ','.join(sorted(current_paper))
+        conn.execute(
+            "UPDATE strategy_config SET paper_instruments=? WHERE setup_id=?",
+            (new_paper_str, sid)
+        )
+        conn.commit()
+        conn.close()
+        _refresh_strategy_cache()
+        logger.info(f'Control Centre: Setup {sid} {sym} set to {new_status} (paper={new_paper_str})')
+        return jsonify({
+            'ok': True, 'setup_id': sid, 'symbol': sym,
+            'status': new_status, 'paper_instruments': sorted(current_paper),
+        })
+    except Exception as e:
+        logger.error(f'control_instrument_toggle {sid}/{sym}: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/control/strategies/<setup_id>/regime_gate/toggle', methods=['POST'])
+def control_regime_gate_toggle(setup_id):
+    """Toggle regime gating on/off for a specific setup."""
+    sid = setup_id.upper().strip()
+    if sid not in _STRATEGY_DEFAULTS:
+        return jsonify({'ok': False, 'error': f'Unknown setup: {sid}'}), 400
+    try:
+        conn = _db.connect()
+        row  = conn.execute(
+            "SELECT regime_gating_enabled FROM strategy_config WHERE setup_id=?", (sid,)
+        ).fetchone()
+        current = bool(row[0]) if row else False
+        new_val  = not current
+        conn.execute(
+            "UPDATE strategy_config SET regime_gating_enabled=? WHERE setup_id=?",
+            (1 if new_val else 0, sid)
+        )
+        conn.commit()
+        conn.close()
+        _refresh_strategy_cache()
+        logger.info(f'Control Centre: Setup {sid} regime gating set to {new_val}')
+        return jsonify({'ok': True, 'setup_id': sid, 'regime_gating_enabled': new_val})
+    except Exception as e:
+        logger.error(f'control_regime_gate_toggle {sid}: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# Update control_strategies to include paper_instruments and regime fields
+@app.route('/api/control/strategies/full', methods=['GET'])
+def control_strategies_full():
+    """Return full strategy config including paper_instruments and regime gating."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT setup_id, enabled, disabled_reason, optimal_regimes, "
+            "       regime_gating_enabled, paper_instruments "
+            "FROM strategy_config ORDER BY setup_id"
+        ).fetchall()
+        conn.close()
+        SETUP_NAMES_MAP = {
+            'A': 'Sweep + OB', 'B': 'ChoCh + OB', 'C': 'BOS + OB',
+            'D': 'FVG Fill',   'E': 'EMA50 Pullback', 'F': 'ML Probability',
+            'H': 'VWAP Reversion', 'I': 'Mathematical Alpha',
+        }
+        result = []
+        for sid, enabled, reason, opt_r, rg_enabled, paper_i in rows:
+            paper_set  = {p.strip() for p in (paper_i or '').split(',') if p.strip()}
+            result.append({
+                'setup_id':             sid,
+                'name':                 SETUP_NAMES_MAP.get(sid, sid),
+                'enabled':              bool(enabled),
+                'disabled_reason':      reason,
+                'optimal_regimes':      [r.strip() for r in (opt_r or '').split(',') if r.strip()],
+                'regime_gating_enabled': bool(rg_enabled),
+                'paper_instruments':    sorted(paper_set),
+                'live_instruments':     sorted({'MNQ', 'ES', 'GC'} - paper_set),
+            })
+        return jsonify({'ok': True, 'strategies': result})
+    except Exception as e:
+        logger.error(f'control_strategies_full error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'strategies': []}), 500
 
 
 @app.route('/api/research/backtest_ping', methods=['GET'])
@@ -4628,6 +4937,217 @@ def research_decisions():
     except Exception as e:
         logger.error(f'research_decisions error: {e}')
         return jsonify({'ok': False, 'error': str(e), 'decisions': []})
+
+
+# ─── Phase 3 decision workflow endpoints ────────────────────────────────────
+
+@app.route('/api/research/decisions/<int:decision_id>/approve', methods=['POST'])
+def research_decision_approve(decision_id):
+    """Approve a pending research decision (PROMOTION_REVIEW → APPROVED)."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id, decision_type, subject, status FROM research_decisions WHERE id = ?",
+            (decision_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'ok': False, 'error': 'Decision not found'}), 404
+        if row[3] not in ('PENDING',):
+            conn.close()
+            return jsonify({'ok': False, 'error': f'Cannot approve decision in status {row[3]}'}), 400
+        data = request.get_json(force=True) or {}
+        note = data.get('note', '')
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE research_decisions SET status='APPROVED', decided_at=?, outcome=? WHERE id=?",
+            (now_iso, f'APPROVED{": " + note if note else ""}', decision_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Research Decision {decision_id} ({row[2]}): APPROVED')
+        return jsonify({'ok': True, 'decision_id': decision_id, 'status': 'APPROVED'})
+    except Exception as e:
+        logger.error(f'research_decision_approve: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/research/decisions/<int:decision_id>/reject', methods=['POST'])
+def research_decision_reject(decision_id):
+    """Reject a pending research decision with an optional reason."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id, decision_type, subject, status FROM research_decisions WHERE id = ?",
+            (decision_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'ok': False, 'error': 'Decision not found'}), 404
+        if row[3] not in ('PENDING',):
+            conn.close()
+            return jsonify({'ok': False, 'error': f'Cannot reject decision in status {row[3]}'}), 400
+        data = request.get_json(force=True) or {}
+        reason = data.get('reason', 'Manual rejection')
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE research_decisions SET status='REJECTED', decided_at=?, outcome=? WHERE id=?",
+            (now_iso, f'REJECTED: {reason}', decision_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Research Decision {decision_id} ({row[2]}): REJECTED — {reason}')
+        return jsonify({'ok': True, 'decision_id': decision_id, 'status': 'REJECTED',
+                        'reason': reason})
+    except Exception as e:
+        logger.error(f'research_decision_reject: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/research/decisions/<int:decision_id>/extend', methods=['POST'])
+def research_decision_extend(decision_id):
+    """Extend shadow lab by 4 weeks: reset week_number to current-4 and continue paper trading."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id, decision_type, subject, status FROM research_decisions WHERE id = ?",
+            (decision_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'ok': False, 'error': 'Decision not found'}), 404
+        subject = row[2]
+        # Find matching shadow lab entry
+        shadow_row = conn.execute(
+            "SELECT id, week_number, total_weeks FROM shadow_lab WHERE strategy_name = ?",
+            (subject,)
+        ).fetchone()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if shadow_row:
+            shadow_id, week_num, total_weeks = shadow_row
+            new_week = max(0, int(week_num or 0) - 4)
+            conn.execute(
+                "UPDATE shadow_lab SET week_number=?, status='ACTIVE' WHERE id=?",
+                (new_week, shadow_id)
+            )
+        conn.execute(
+            "UPDATE research_decisions SET status='EXTENDED', decided_at=?, "
+            "outcome='Extended by 4 weeks for continued paper trading' WHERE id=?",
+            (now_iso, decision_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Research Decision {decision_id} ({subject}): EXTENDED 4 weeks')
+        return jsonify({'ok': True, 'decision_id': decision_id, 'status': 'EXTENDED'})
+    except Exception as e:
+        logger.error(f'research_decision_extend: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ─── Phase 3 Discovery Engine endpoints ──────────────────────────────────────
+
+@app.route('/api/research/hypotheses', methods=['GET'])
+def research_hypotheses():
+    """Return hypothesis_log results. Optional ?status=SIGNIFICANT filter."""
+    try:
+        conn = _db.connect()
+        status_filter = request.args.get('status', None)
+        if status_filter:
+            rows = conn.execute(
+                "SELECT id, hypothesis_id, description, category, instrument, "
+                "       lookback_days, signals_generated, win_rate, sharpe, avg_r, "
+                "       information_coefficient, p_value, status, run_date, created_at "
+                "FROM hypothesis_log WHERE status = ? "
+                "ORDER BY COALESCE(ABS(information_coefficient), 0) DESC LIMIT 200",
+                (status_filter.upper(),)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, hypothesis_id, description, category, instrument, "
+                "       lookback_days, signals_generated, win_rate, sharpe, avg_r, "
+                "       information_coefficient, p_value, status, run_date, created_at "
+                "FROM hypothesis_log "
+                "ORDER BY run_date DESC, COALESCE(ABS(information_coefficient), 0) DESC LIMIT 200"
+            ).fetchall()
+        conn.close()
+        cols = ['id', 'hypothesis_id', 'description', 'category', 'instrument',
+                'lookback_days', 'signals_generated', 'win_rate', 'sharpe', 'avg_r',
+                'information_coefficient', 'p_value', 'status', 'run_date', 'created_at']
+        hypotheses = [dict(zip(cols, r)) for r in rows]
+
+        # Summary counts
+        all_rows = _db.connect()
+        try:
+            counts = all_rows.execute(
+                "SELECT status, COUNT(*) FROM hypothesis_log GROUP BY status"
+            ).fetchall()
+            summary = {r[0]: r[1] for r in counts}
+            in_shadow = all_rows.execute(
+                "SELECT COUNT(*) FROM shadow_lab WHERE status='ACTIVE'"
+            ).fetchone()
+            patterns_active = all_rows.execute(
+                "SELECT COUNT(*) FROM pattern_library WHERE status='ACTIVE'"
+            ).fetchone()
+        finally:
+            all_rows.close()
+
+        return jsonify({
+            'ok': True,
+            'hypotheses': hypotheses,
+            'summary': {
+                'tested_this_week': sum(summary.values()),
+                'significant': summary.get('SIGNIFICANT', 0),
+                'testing': summary.get('TESTING', 0),
+                'rejected': summary.get('REJECTED', 0),
+                'in_shadow_lab': in_shadow[0] if in_shadow else 0,
+                'patterns_active': patterns_active[0] if patterns_active else 0,
+            }
+        })
+    except Exception as e:
+        logger.error(f'research_hypotheses error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'hypotheses': []})
+
+
+@app.route('/api/research/combinations', methods=['GET'])
+def research_combinations():
+    """Return top 10 feature combinations by OOS IC."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT id, features, oos_ic, oos_auc, run_date, created_at "
+            "FROM feature_combinations "
+            "ORDER BY ABS(COALESCE(oos_ic, 0)) DESC LIMIT 10"
+        ).fetchall()
+        conn.close()
+        cols = ['id', 'features', 'oos_ic', 'oos_auc', 'run_date', 'created_at']
+        combinations = [dict(zip(cols, r)) for r in rows]
+        return jsonify({'ok': True, 'combinations': combinations})
+    except Exception as e:
+        logger.error(f'research_combinations error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'combinations': []})
+
+
+@app.route('/api/research/patterns', methods=['GET'])
+def research_patterns():
+    """Return pattern_library ACTIVE patterns."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT id, pattern_id, name, description, discovery_source, instrument, "
+            "       signals_observed, win_rate, sharpe, information_coefficient, "
+            "       first_observed, last_validated, decay_score, status, created_at "
+            "FROM pattern_library WHERE status != 'DEAD' "
+            "ORDER BY decay_score DESC, COALESCE(information_coefficient, 0) DESC"
+        ).fetchall()
+        conn.close()
+        cols = ['id', 'pattern_id', 'name', 'description', 'discovery_source', 'instrument',
+                'signals_observed', 'win_rate', 'sharpe', 'information_coefficient',
+                'first_observed', 'last_validated', 'decay_score', 'status', 'created_at']
+        patterns = [dict(zip(cols, r)) for r in rows]
+        return jsonify({'ok': True, 'patterns': patterns})
+    except Exception as e:
+        logger.error(f'research_patterns error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'patterns': []})
 
 
 @app.route('/api/apex/regime', methods=['GET'])
