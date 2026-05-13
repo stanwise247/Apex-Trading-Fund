@@ -96,7 +96,8 @@ def _refresh_strategy_cache():
     try:
         conn = _db.connect()
         rows = conn.execute(
-            "SELECT setup_id, enabled, optimal_regimes, regime_gating_enabled FROM strategy_config"
+            "SELECT setup_id, enabled, optimal_regimes, regime_gating_enabled, "
+            "       paper_instruments FROM strategy_config"
         ).fetchall()
         conn.close()
         _strategy_cache_ts = time.time()  # always advance — prevents hammering on empty table
@@ -106,6 +107,7 @@ def _refresh_strategy_cache():
                     'enabled':               bool(r[1]),
                     'optimal_regimes':       r[2] or '',
                     'regime_gating_enabled': bool(r[3]),
+                    'paper_instruments':     r[4] or '',
                 }
                 for r in rows
             }
@@ -182,6 +184,16 @@ SETUP_REGIME_CONFIG = {
     'F': ({'TRENDING', 'CHOPPY'},      False),  # suspended anyway
 }
 
+# ── Instrument-level paper/live defaults (2.6) ────────────────────────────
+# Format: {setup_id: set_of_paper_instruments}
+# MNQ = paper for Setup I (stops too large). E = paper for all instruments.
+# Empty set = all instruments execute live (subject to PAPER_ONLY_SETUPS env).
+SETUP_PAPER_INSTRUMENTS: dict = {
+    'I': {'MNQ'},          # Setup I: MNQ paper, ES live
+    'E': {'MNQ', 'ES'},    # Setup E fully paper (already in PAPER_ONLY_SETUPS)
+    'F': {'MNQ', 'ES', 'GC'},  # Setup F suspended — all paper
+}
+
 
 def _seed_strategy_config():
     """Upsert all setups into strategy_config, enforcing correct defaults on every startup."""
@@ -189,35 +201,39 @@ def _seed_strategy_config():
         conn = _db.connect()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
             regime_regimes, regime_gating = SETUP_REGIME_CONFIG.get(sid, (set(), False))
-            optimal_str = ','.join(sorted(regime_regimes)) if regime_regimes else ''
-            gating_int  = 1 if regime_gating else 0
+            optimal_str   = ','.join(sorted(regime_regimes)) if regime_regimes else ''
+            gating_int    = 1 if regime_gating else 0
+            paper_instrs  = ','.join(sorted(SETUP_PAPER_INSTRUMENTS.get(sid, set())))
             if _db.IS_POSTGRES:
                 conn.execute(
                     "INSERT INTO strategy_config "
-                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled) "
-                    "VALUES (?, ?, ?, ?) "
+                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled, paper_instruments) "
+                    "VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT (setup_id) DO UPDATE SET "
                     "enabled = EXCLUDED.enabled, "
                     "optimal_regimes = EXCLUDED.optimal_regimes, "
-                    "regime_gating_enabled = EXCLUDED.regime_gating_enabled",
-                    (sid, enabled, optimal_str, gating_int)
+                    "regime_gating_enabled = EXCLUDED.regime_gating_enabled, "
+                    "paper_instruments = EXCLUDED.paper_instruments",
+                    (sid, enabled, optimal_str, gating_int, paper_instrs)
                 )
             else:
                 conn.execute(
                     "INSERT OR REPLACE INTO strategy_config "
-                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled) "
-                    "VALUES (?, ?, ?, ?)",
-                    (sid, enabled, optimal_str, gating_int)
+                    "(setup_id, enabled, optimal_regimes, regime_gating_enabled, paper_instruments) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (sid, enabled, optimal_str, gating_int, paper_instrs)
                 )
         conn.commit()
         conn.close()
         _refresh_strategy_cache()
         for sid, enabled in _STRATEGY_DEFAULTS.items():
-            _, gating = SETUP_REGIME_CONFIG.get(sid, (set(), False))
-            regimes, _ = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            _, gating   = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            regimes, _  = SETUP_REGIME_CONFIG.get(sid, (set(), False))
+            paper_i     = sorted(SETUP_PAPER_INSTRUMENTS.get(sid, set()))
             logger.info(
                 f'Strategy config: Setup {sid} seeded enabled={enabled} '
-                f'regime_gating={gating} optimal_regimes={sorted(regimes)}'
+                f'regime_gating={gating} optimal_regimes={sorted(regimes)} '
+                f'paper_instruments={paper_i}'
             )
     except Exception as e:
         logger.warning(f'Strategy Control Centre seed failed: {e}')
@@ -556,7 +572,8 @@ def init_db():
             pass
         logger.error(f'strategy_config table creation failed (non-fatal): {_scfg_e}')
     # Phase 2.4 — migrate strategy_config: add regime gating columns if missing
-    for col in ('optimal_regimes TEXT', 'regime_gating_enabled INTEGER DEFAULT 0'):
+    for col in ('optimal_regimes TEXT', 'regime_gating_enabled INTEGER DEFAULT 0',
+                'paper_instruments TEXT'):  # 2.6 instrument-level paper/live control
         try:
             c.execute(f'ALTER TABLE strategy_config ADD COLUMN {col}')
             conn.commit()
@@ -4546,7 +4563,8 @@ def control_toggle(setup_id):
             _ctl_tg(
                 f'{emoji} <b>WISE MERIDIAN CAPITAL</b>\n'
                 f'Setup {sid} ({setup_name}) <b>{action}</b> via Control Centre{reason_txt}\n'
-                f'<i>Changes take effect within 60 seconds</i>'
+                f'<i>Changes take effect within 60 seconds</i>',
+                message_type='kill_switch'  # use permitted type for control-centre alerts
             )
         except Exception as _tg_e:
             logger.warning(f'Control Centre Telegram alert failed: {_tg_e}')
@@ -4565,6 +4583,134 @@ def control_toggle(setup_id):
     except Exception as e:
         logger.error(f'control_toggle {sid}: {e}', exc_info=True)
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+def is_instrument_paper(setup_id: str, symbol: str) -> bool:
+    """
+    Return True if this setup/instrument combination is paper-only (no Tradovate execution).
+    Checks strategy_config.paper_instruments from DB cache, falls back to SETUP_PAPER_INSTRUMENTS.
+    Called from _execute_via_tradovate wrappers per setup.
+    """
+    sid = setup_id.upper().strip()[0]  # take first char: 'I_mathematical_alpha' → 'I'
+    sym = symbol.upper().strip()
+    # Check live cache first
+    row = _strategy_enabled_cache.get(sid, {})
+    paper_str = row.get('paper_instruments', '') if isinstance(row, dict) else ''
+    if paper_str:
+        return sym in {p.strip() for p in paper_str.split(',') if p.strip()}
+    # Fall back to compile-time defaults
+    return sym in SETUP_PAPER_INSTRUMENTS.get(sid, set())
+
+
+@app.route('/api/control/strategies/<setup_id>/instruments/<symbol>/toggle', methods=['POST'])
+def control_instrument_toggle(setup_id, symbol):
+    """
+    Toggle paper/live execution for a specific setup+instrument combination.
+    E.g. POST /api/control/strategies/I/instruments/MNQ/toggle
+    Paper = signal fires, trade logged, Telegram sent — but NO Tradovate order.
+    Live  = full execution including Tradovate bracket order.
+    """
+    sid = setup_id.upper().strip()
+    sym = symbol.upper().strip()
+    if sid not in _STRATEGY_DEFAULTS:
+        return jsonify({'ok': False, 'error': f'Unknown setup: {sid}'}), 400
+    if sym not in ('MNQ', 'ES', 'GC', 'NQ'):
+        return jsonify({'ok': False, 'error': f'Unknown instrument: {sym}'}), 400
+    try:
+        conn    = _db.connect()
+        row     = conn.execute(
+            "SELECT paper_instruments FROM strategy_config WHERE setup_id=?", (sid,)
+        ).fetchone()
+        current_paper = set(
+            p.strip() for p in (row[0] or '').split(',') if p.strip()
+        ) if row else set(SETUP_PAPER_INSTRUMENTS.get(sid, set()))
+
+        if sym in current_paper:
+            current_paper.discard(sym)
+            new_status = 'LIVE'
+        else:
+            current_paper.add(sym)
+            new_status = 'PAPER'
+
+        new_paper_str = ','.join(sorted(current_paper))
+        conn.execute(
+            "UPDATE strategy_config SET paper_instruments=? WHERE setup_id=?",
+            (new_paper_str, sid)
+        )
+        conn.commit()
+        conn.close()
+        _refresh_strategy_cache()
+        logger.info(f'Control Centre: Setup {sid} {sym} set to {new_status} (paper={new_paper_str})')
+        return jsonify({
+            'ok': True, 'setup_id': sid, 'symbol': sym,
+            'status': new_status, 'paper_instruments': sorted(current_paper),
+        })
+    except Exception as e:
+        logger.error(f'control_instrument_toggle {sid}/{sym}: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/control/strategies/<setup_id>/regime_gate/toggle', methods=['POST'])
+def control_regime_gate_toggle(setup_id):
+    """Toggle regime gating on/off for a specific setup."""
+    sid = setup_id.upper().strip()
+    if sid not in _STRATEGY_DEFAULTS:
+        return jsonify({'ok': False, 'error': f'Unknown setup: {sid}'}), 400
+    try:
+        conn = _db.connect()
+        row  = conn.execute(
+            "SELECT regime_gating_enabled FROM strategy_config WHERE setup_id=?", (sid,)
+        ).fetchone()
+        current = bool(row[0]) if row else False
+        new_val  = not current
+        conn.execute(
+            "UPDATE strategy_config SET regime_gating_enabled=? WHERE setup_id=?",
+            (1 if new_val else 0, sid)
+        )
+        conn.commit()
+        conn.close()
+        _refresh_strategy_cache()
+        logger.info(f'Control Centre: Setup {sid} regime gating set to {new_val}')
+        return jsonify({'ok': True, 'setup_id': sid, 'regime_gating_enabled': new_val})
+    except Exception as e:
+        logger.error(f'control_regime_gate_toggle {sid}: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# Update control_strategies to include paper_instruments and regime fields
+@app.route('/api/control/strategies/full', methods=['GET'])
+def control_strategies_full():
+    """Return full strategy config including paper_instruments and regime gating."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT setup_id, enabled, disabled_reason, optimal_regimes, "
+            "       regime_gating_enabled, paper_instruments "
+            "FROM strategy_config ORDER BY setup_id"
+        ).fetchall()
+        conn.close()
+        SETUP_NAMES_MAP = {
+            'A': 'Sweep + OB', 'B': 'ChoCh + OB', 'C': 'BOS + OB',
+            'D': 'FVG Fill',   'E': 'EMA50 Pullback', 'F': 'ML Probability',
+            'H': 'VWAP Reversion', 'I': 'Mathematical Alpha',
+        }
+        result = []
+        for sid, enabled, reason, opt_r, rg_enabled, paper_i in rows:
+            paper_set  = {p.strip() for p in (paper_i or '').split(',') if p.strip()}
+            result.append({
+                'setup_id':             sid,
+                'name':                 SETUP_NAMES_MAP.get(sid, sid),
+                'enabled':              bool(enabled),
+                'disabled_reason':      reason,
+                'optimal_regimes':      [r.strip() for r in (opt_r or '').split(',') if r.strip()],
+                'regime_gating_enabled': bool(rg_enabled),
+                'paper_instruments':    sorted(paper_set),
+                'live_instruments':     sorted({'MNQ', 'ES', 'GC'} - paper_set),
+            })
+        return jsonify({'ok': True, 'strategies': result})
+    except Exception as e:
+        logger.error(f'control_strategies_full error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'strategies': []}), 500
 
 
 @app.route('/api/research/backtest_ping', methods=['GET'])
