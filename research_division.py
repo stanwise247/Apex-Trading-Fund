@@ -169,6 +169,52 @@ def _ensure_research_schema():
             ("CREATE INDEX IF NOT EXISTS idx_backtest_setup_date "
              "ON backtest_results (setup_id, run_date)",
              "backtest index"),
+            # Phase 3 tables
+            ("""CREATE TABLE IF NOT EXISTS hypothesis_log (
+                id SERIAL PRIMARY KEY,
+                hypothesis_id TEXT UNIQUE NOT NULL,
+                description TEXT,
+                category TEXT,
+                instrument TEXT,
+                lookback_days INTEGER,
+                signals_generated INTEGER,
+                win_rate REAL,
+                sharpe REAL,
+                avg_r REAL,
+                information_coefficient REAL,
+                p_value REAL,
+                status TEXT DEFAULT 'TESTING',
+                run_date TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "hypothesis_log table"),
+            ("""CREATE TABLE IF NOT EXISTS feature_combinations (
+                id SERIAL PRIMARY KEY,
+                features TEXT NOT NULL,
+                oos_ic REAL,
+                oos_auc REAL,
+                run_date TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "feature_combinations table"),
+            ("""CREATE TABLE IF NOT EXISTS pattern_library (
+                id SERIAL PRIMARY KEY,
+                pattern_id TEXT UNIQUE NOT NULL,
+                name TEXT,
+                description TEXT,
+                discovery_source TEXT,
+                instrument TEXT,
+                signals_observed INTEGER DEFAULT 0,
+                win_rate REAL,
+                sharpe REAL,
+                information_coefficient REAL,
+                first_observed TEXT,
+                last_validated TEXT,
+                decay_score REAL DEFAULT 1.0,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "pattern_library table"),
+            # Extend research_decisions with reason column
+            ("ALTER TABLE research_decisions ADD COLUMN IF NOT EXISTS reason TEXT",
+             "research_decisions reason column"),
         ]
     else:
         # SQLite: no IF NOT EXISTS for ALTER TABLE — use try/except with rollback
@@ -177,6 +223,51 @@ def _ensure_research_schema():
              "backtest_score column"),
             ("ALTER TABLE strategy_health_log ADD COLUMN live_score INTEGER",
              "live_score column"),
+            # Phase 3 tables (SQLite supports CREATE TABLE IF NOT EXISTS)
+            ("""CREATE TABLE IF NOT EXISTS hypothesis_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hypothesis_id TEXT UNIQUE NOT NULL,
+                description TEXT,
+                category TEXT,
+                instrument TEXT,
+                lookback_days INTEGER,
+                signals_generated INTEGER,
+                win_rate REAL,
+                sharpe REAL,
+                avg_r REAL,
+                information_coefficient REAL,
+                p_value REAL,
+                status TEXT DEFAULT 'TESTING',
+                run_date TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "hypothesis_log table"),
+            ("""CREATE TABLE IF NOT EXISTS feature_combinations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                features TEXT NOT NULL,
+                oos_ic REAL,
+                oos_auc REAL,
+                run_date TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "feature_combinations table"),
+            ("""CREATE TABLE IF NOT EXISTS pattern_library (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_id TEXT UNIQUE NOT NULL,
+                name TEXT,
+                description TEXT,
+                discovery_source TEXT,
+                instrument TEXT,
+                signals_observed INTEGER DEFAULT 0,
+                win_rate REAL,
+                sharpe REAL,
+                information_coefficient REAL,
+                first_observed TEXT,
+                last_validated TEXT,
+                decay_score REAL DEFAULT 1.0,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "pattern_library table"),
+            ("ALTER TABLE research_decisions ADD COLUMN reason TEXT",
+             "research_decisions reason column"),
         ]
 
     for sql, label in ddl_ops:
@@ -1261,37 +1352,1644 @@ def seed_shadow_lab_candidates() -> None:
         _close(c)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  PHASE 3 — DISCOVERY ENGINE
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Thresholds for promoting a hypothesis to SIGNIFICANT status
+SIGNIFICANCE_THRESHOLDS = {
+    'min_signals': 30,
+    'min_ic': 0.05,
+    'min_sharpe': 3.0,
+    'max_p_value': 0.05,
+    'min_win_rate': 0.52,
+}
+
+
+def _p_value_approx(ic: float, n: int) -> float:
+    """
+    Approximate two-tailed p-value for a Pearson IC using the t-distribution.
+    Uses math.erf for the normal CDF approximation (no scipy).
+    t = IC * sqrt(n-2) / sqrt(1 - IC^2)
+    For large df the t-distribution ≈ normal, so p ≈ 2 * (1 - Phi(|t|)).
+    """
+    try:
+        if n < 4 or abs(ic) >= 1.0:
+            return 1.0
+        t = ic * math.sqrt(n - 2) / math.sqrt(max(1e-12, 1 - ic ** 2))
+        # Normal CDF via erf: Phi(x) = 0.5 * (1 + erf(x / sqrt(2)))
+        p_one_tail = 0.5 * (1 - math.erf(abs(t) / math.sqrt(2)))
+        return min(1.0, 2 * p_one_tail)
+    except Exception:
+        return 1.0
+
+
+def _hypothesis_sharpe(forward_returns, signal_mask) -> Optional[float]:
+    """Annualised Sharpe for signal-triggered forward returns."""
+    try:
+        vals = [float(r) for r, m in zip(forward_returns, signal_mask) if m and r is not None]
+        if len(vals) < 5:
+            return None
+        n = len(vals)
+        mean = sum(vals) / n
+        var = sum((v - mean) ** 2 for v in vals) / max(1, n - 1)
+        std = math.sqrt(var) if var > 0 else 0
+        return float(mean / std * math.sqrt(252)) if std > 0 else None
+    except Exception:
+        return None
+
+
+def _ic_from_lists(x_vals, y_vals) -> float:
+    """Pearson IC between two equal-length lists. Returns 0.0 on failure."""
+    try:
+        n = len(x_vals)
+        if n < 5:
+            return 0.0
+        mx = sum(x_vals) / n
+        my = sum(y_vals) / n
+        cov = sum((a - mx) * (b - my) for a, b in zip(x_vals, y_vals)) / n
+        sx = math.sqrt(sum((a - mx) ** 2 for a in x_vals) / n)
+        sy = math.sqrt(sum((b - my) ** 2 for b in y_vals) / n)
+        if sx * sy < 1e-12:
+            return 0.0
+        return float(cov / (sx * sy))
+    except Exception:
+        return 0.0
+
+
+def _hurst_rs(series_vals: list) -> float:
+    """R/S Hurst exponent on a list of prices. Returns 0.5 (random walk) on failure."""
+    try:
+        n = len(series_vals)
+        if n < 20:
+            return 0.5
+        import math as _m
+        mean = sum(series_vals) / n
+        deviations = [v - mean for v in series_vals]
+        cumdev = []
+        cum = 0.0
+        for d in deviations:
+            cum += d
+            cumdev.append(cum)
+        r = max(cumdev) - min(cumdev)
+        s = _m.sqrt(sum((v - mean) ** 2 for v in series_vals) / n)
+        if s == 0 or r <= 0:
+            return 0.5
+        return float(_m.log(r / s) / _m.log(n))
+    except Exception:
+        return 0.5
+
+
+def _write_hypothesis(result: dict) -> None:
+    """Write/upsert one hypothesis result to hypothesis_log table."""
+    c = _conn()
+    try:
+        if _db.IS_POSTGRES:
+            c.execute(
+                """INSERT INTO hypothesis_log
+                   (hypothesis_id, description, category, instrument, lookback_days,
+                    signals_generated, win_rate, sharpe, avg_r, information_coefficient,
+                    p_value, status, run_date)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT (hypothesis_id) DO UPDATE SET
+                     description=EXCLUDED.description,
+                     signals_generated=EXCLUDED.signals_generated,
+                     win_rate=EXCLUDED.win_rate,
+                     sharpe=EXCLUDED.sharpe,
+                     avg_r=EXCLUDED.avg_r,
+                     information_coefficient=EXCLUDED.information_coefficient,
+                     p_value=EXCLUDED.p_value,
+                     status=EXCLUDED.status,
+                     run_date=EXCLUDED.run_date""",
+                (result['hypothesis_id'], result['description'], result['category'],
+                 result['instrument'], result['lookback_days'], result['signals_generated'],
+                 result['win_rate'], result['sharpe'], result['avg_r'],
+                 result['information_coefficient'], result['p_value'],
+                 result['status'], result['run_date'])
+            )
+        else:
+            c.execute(
+                """INSERT OR REPLACE INTO hypothesis_log
+                   (hypothesis_id, description, category, instrument, lookback_days,
+                    signals_generated, win_rate, sharpe, avg_r, information_coefficient,
+                    p_value, status, run_date)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (result['hypothesis_id'], result['description'], result['category'],
+                 result['instrument'], result['lookback_days'], result['signals_generated'],
+                 result['win_rate'], result['sharpe'], result['avg_r'],
+                 result['information_coefficient'], result['p_value'],
+                 result['status'], result['run_date'])
+            )
+        c.commit()
+    except Exception as e:
+        _rollback(c)
+        logger.warning(f'_write_hypothesis {result.get("hypothesis_id")}: {e}')
+    finally:
+        _close(c)
+
+
+def _score_hypothesis(signals: int, ic: float, sharpe: Optional[float],
+                      p_value: float, win_rate: float) -> str:
+    """Return SIGNIFICANT, TESTING, or REJECTED."""
+    t = SIGNIFICANCE_THRESHOLDS
+    if (signals >= t['min_signals']
+            and abs(ic) >= t['min_ic']
+            and (sharpe is not None and sharpe >= t['min_sharpe'])
+            and p_value <= t['max_p_value']
+            and win_rate >= t['min_win_rate']):
+        return 'SIGNIFICANT'
+    if signals < 5:
+        return 'REJECTED'
+    return 'TESTING'
+
+
+def _promote_significant_to_shadow(hypothesis_id: str, description: str,
+                                   sharpe: float, win_rate: float) -> None:
+    """Auto-create shadow lab entry for a SIGNIFICANT hypothesis."""
+    try:
+        c = _conn()
+        try:
+            # Check if already in shadow lab (by name match)
+            existing = c.execute(
+                "SELECT id FROM shadow_lab WHERE strategy_name = ?",
+                (hypothesis_id,)
+            ).fetchone()
+            if existing:
+                _close(c)
+                return
+            today = date.today()
+            promo = (today + timedelta(weeks=8)).isoformat()
+            c.execute(
+                "INSERT INTO shadow_lab "
+                "(strategy_name, description, entered_date, week_number, total_weeks, "
+                " backtest_sharpe, backtest_win_rate, status, promotion_eligible_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (hypothesis_id, description or '', today.isoformat(), 0, 8,
+                 float(sharpe) if sharpe else 0.0,
+                 float(win_rate) if win_rate else 0.0,
+                 'ACTIVE', promo)
+            )
+            c.commit()
+            logger.info(f'Hypothesis Engine: auto-promoted {hypothesis_id} to shadow lab')
+        except Exception as e:
+            _rollback(c)
+            logger.warning(f'_promote_significant_to_shadow: {e}')
+        finally:
+            _close(c)
+    except Exception as e:
+        logger.warning(f'_promote_significant_to_shadow outer: {e}')
+
+
+# ─── Hypothesis category implementations ────────────────────────────────────
+
+def _test_autocorr_hypotheses(conn) -> list:
+    """
+    Category 1: Autocorrelation pattern hypotheses (4 variants).
+    Tests whether high autocorr + low vol ratio predicts trending next session.
+    """
+    results = []
+    try:
+        import pandas as pd
+        df = _load_ohlcv_df(conn, 'MNQ', '5min', 180)
+        if len(df) < 200:
+            return results
+        atr = _atr14(df)
+        atr20 = atr.rolling(20).mean()
+
+        close = df['close']
+        for ac_thresh, vol_thresh, variant in [
+            (0.05, 0.7, 'v1'), (0.10, 0.8, 'v2'),
+            (0.15, 0.9, 'v3'), (0.10, 0.7, 'v4'),
+        ]:
+            hyp_id = f'autocorr_{ac_thresh}_{vol_thresh}'
+            try:
+                # Rolling lag-1 autocorrelation on 20-bar window
+                autocorr = close.rolling(20).apply(
+                    lambda x: x.autocorr(lag=1) if len(x) > 2 else 0.0, raw=False
+                )
+                vol_ratio = atr / atr20.replace(0, float('nan'))
+
+                # Signal: autocorr > threshold AND vol_ratio < vol_thresh for 3+ consecutive bars
+                ac_cond = (autocorr > ac_thresh).astype(int)
+                vr_cond = (vol_ratio < vol_thresh).fillna(False).astype(int)
+                both = (ac_cond & vr_cond).astype(int)
+                consec = both.rolling(3).sum() >= 3
+                signal_idx = consec[consec].index.tolist()
+
+                # Forward return: 12-bar move magnitude relative to ATR
+                n_fwd = 12
+                fwd_dir = []
+                actual_dir = []
+                for idx in signal_idx:
+                    loc = df.index.get_loc(idx)
+                    if loc + n_fwd >= len(df):
+                        continue
+                    entry_close = float(df['close'].iloc[loc])
+                    fwd_close = float(df['close'].iloc[loc + n_fwd])
+                    atr_val = float(atr.iloc[loc])
+                    if atr_val <= 0:
+                        continue
+                    move = fwd_close - entry_close
+                    # Trending = absolute move > 1 ATR
+                    is_trending = abs(move) > atr_val
+                    fwd_dir.append(float(move / atr_val))  # normalised return
+                    actual_dir.append(1.0 if is_trending else 0.0)
+
+                n = len(fwd_dir)
+                if n < 5:
+                    results.append({
+                        'hypothesis_id': hyp_id,
+                        'description': f'Autocorr>{ac_thresh} vol_ratio<{vol_thresh} 3-bar: next session trending',
+                        'category': 'autocorrelation',
+                        'instrument': 'MNQ',
+                        'lookback_days': 180,
+                        'signals_generated': n,
+                        'win_rate': 0.0, 'sharpe': None, 'avg_r': 0.0,
+                        'information_coefficient': 0.0, 'p_value': 1.0,
+                        'status': 'REJECTED',
+                        'run_date': date.today().isoformat(),
+                    })
+                    continue
+
+                wins = sum(1 for v in actual_dir if v > 0)
+                wr = wins / n
+                avg_r = sum(fwd_dir) / n
+                ic = _ic_from_lists(fwd_dir, actual_dir)
+                p = _p_value_approx(ic, n)
+                sharpe = _hypothesis_sharpe(fwd_dir, [True] * n)
+                status = _score_hypothesis(n, ic, sharpe, p, wr)
+
+                result = {
+                    'hypothesis_id': hyp_id,
+                    'description': f'Autocorr>{ac_thresh} + vol_ratio<{vol_thresh} 3-bar: next session trending (variant {variant})',
+                    'category': 'autocorrelation',
+                    'instrument': 'MNQ',
+                    'lookback_days': 180,
+                    'signals_generated': n,
+                    'win_rate': round(float(wr), 4),
+                    'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                    'avg_r': round(float(avg_r), 4),
+                    'information_coefficient': round(float(ic), 4),
+                    'p_value': round(float(p), 4),
+                    'status': status,
+                    'run_date': date.today().isoformat(),
+                }
+                results.append(result)
+                if status == 'SIGNIFICANT':
+                    _promote_significant_to_shadow(hyp_id, result['description'],
+                                                   sharpe, wr)
+            except Exception as e:
+                logger.warning(f'autocorr hypothesis {hyp_id}: {e}')
+    except Exception as e:
+        logger.warning(f'_test_autocorr_hypotheses: {e}')
+    return results
+
+
+def _test_hurst_hypotheses(conn) -> list:
+    """Category 2: Hurst exponent crossing hypotheses (3 variants)."""
+    results = []
+    try:
+        import pandas as pd
+        df = _load_ohlcv_df(conn, 'MNQ', '5min', 180)
+        if len(df) < 200:
+            return results
+
+        close_vals = df['close'].values
+        n_bars = len(close_vals)
+        window = 100
+        n_fwd = 10
+
+        for hurst_thresh, variant_num in [(0.55, 1), (0.60, 2), (0.65, 3)]:
+            hyp_id = f'hurst_cross_{hurst_thresh}'
+            try:
+                # Rolling Hurst on 100-bar window
+                hurst_vals = []
+                for i in range(n_bars):
+                    if i < window:
+                        hurst_vals.append(0.5)
+                    else:
+                        hurst_vals.append(_hurst_rs(list(close_vals[i - window:i])))
+
+                fwd_ac_vals = []    # forward 10-bar autocorrelation
+                indicator_vals = []  # 1 if hurst crossed above threshold, else 0
+
+                for i in range(window + 1, n_bars - n_fwd):
+                    prev_h = hurst_vals[i - 1]
+                    curr_h = hurst_vals[i]
+                    if curr_h > hurst_thresh and prev_h <= hurst_thresh:
+                        # Hurst crossing above threshold
+                        fwd_slice = list(close_vals[i:i + n_fwd])
+                        if len(fwd_slice) == n_fwd:
+                            # Positive autocorrelation in next 10 bars
+                            fwd_ac = _hurst_rs(fwd_slice) - 0.5  # normalised
+                            fwd_ac_vals.append(float(fwd_ac))
+                            indicator_vals.append(float(curr_h))
+
+                n = len(fwd_ac_vals)
+                if n < 5:
+                    results.append({
+                        'hypothesis_id': hyp_id,
+                        'description': f'Hurst cross>{hurst_thresh}: next 10 bars pos autocorr',
+                        'category': 'hurst',
+                        'instrument': 'MNQ',
+                        'lookback_days': 180,
+                        'signals_generated': n,
+                        'win_rate': 0.0, 'sharpe': None, 'avg_r': 0.0,
+                        'information_coefficient': 0.0, 'p_value': 1.0,
+                        'status': 'REJECTED',
+                        'run_date': date.today().isoformat(),
+                    })
+                    continue
+
+                wins = sum(1 for v in fwd_ac_vals if v > 0)
+                wr = wins / n
+                avg_r = sum(fwd_ac_vals) / n
+                ic = _ic_from_lists(indicator_vals, fwd_ac_vals)
+                p = _p_value_approx(ic, n)
+                sharpe = _hypothesis_sharpe(fwd_ac_vals, [True] * n)
+                status = _score_hypothesis(n, ic, sharpe, p, wr)
+
+                result = {
+                    'hypothesis_id': hyp_id,
+                    'description': f'Hurst crosses >{hurst_thresh}: next 10 bars positive autocorrelation (variant {variant_num})',
+                    'category': 'hurst',
+                    'instrument': 'MNQ',
+                    'lookback_days': 180,
+                    'signals_generated': n,
+                    'win_rate': round(float(wr), 4),
+                    'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                    'avg_r': round(float(avg_r), 4),
+                    'information_coefficient': round(float(ic), 4),
+                    'p_value': round(float(p), 4),
+                    'status': status,
+                    'run_date': date.today().isoformat(),
+                }
+                results.append(result)
+                if status == 'SIGNIFICANT':
+                    _promote_significant_to_shadow(hyp_id, result['description'],
+                                                   sharpe, wr)
+            except Exception as e:
+                logger.warning(f'hurst hypothesis {hyp_id}: {e}')
+    except Exception as e:
+        logger.warning(f'_test_hurst_hypotheses: {e}')
+    return results
+
+
+def _test_session_timing_hypotheses(conn) -> list:
+    """Category 3: Session timing hypotheses (4 variants)."""
+    results = []
+    try:
+        import pandas as pd
+        df = _load_ohlcv_df(conn, 'MNQ', '5min', 180)
+        if len(df) < 200:
+            return results
+        atr = _atr14(df)
+
+        hypotheses = [
+            ('session_ny_open_15min', 'First 15min NY session (13:00-13:15 UTC) momentum win rate'),
+            ('session_monday_bullish', 'Monday sessions: bullish bias vs Tue-Fri average'),
+            ('session_post_large_range_reversion', 'After >2% session range: next session mean-reverts'),
+            ('session_ny_close_reversion', 'Last 15min NY session (18:45-19:00 UTC): mean-reversion bias'),
+        ]
+
+        # Hypothesis A: First 15min NY momentum
+        try:
+            hyp_id, desc = hypotheses[0]
+            signal_rets = []
+            for i in range(20, len(df) - 3):
+                h = df['hour'].iloc[i]
+                m = df['dt'].iloc[i].minute if 'dt' in df.columns else 0
+                wday = df['weekday'].iloc[i]
+                if wday >= 5 or h != 13 or m > 15:
+                    continue
+                atr_val = float(atr.iloc[i]) if not math.isnan(float(atr.iloc[i] or 0)) else 0
+                if atr_val <= 0:
+                    continue
+                bar_close = float(df['close'].iloc[i])
+                bar_open = float(df['open'].iloc[i])
+                direction = 1.0 if bar_close > bar_open else -1.0
+                fwd_ret = float(df['close'].iloc[i + 3] - bar_close) * direction / atr_val
+                signal_rets.append(fwd_ret)
+            n = len(signal_rets)
+            wins = sum(1 for v in signal_rets if v > 0)
+            wr = wins / n if n > 0 else 0.0
+            avg_r = sum(signal_rets) / n if n > 0 else 0.0
+            ic = _ic_from_lists(signal_rets, [1.0] * n) if n > 0 else 0.0
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+            status = _score_hypothesis(n, ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': desc,
+                'category': 'session_timing',
+                'instrument': 'MNQ',
+                'lookback_days': 180,
+                'signals_generated': n,
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(avg_r), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'session timing hyp A: {e}')
+
+        # Hypothesis B: Monday bullish bias
+        try:
+            hyp_id, desc = hypotheses[1]
+            mon_rets = []
+            other_rets = []
+            for i in range(20, len(df) - 12):
+                h = df['hour'].iloc[i]
+                wday = df['weekday'].iloc[i]
+                if not (13 <= h < 19):
+                    continue
+                atr_val = float(atr.iloc[i] or 0)
+                if atr_val <= 0:
+                    continue
+                fwd = (float(df['close'].iloc[i + 12]) - float(df['close'].iloc[i])) / atr_val
+                if wday == 0:
+                    mon_rets.append(fwd)
+                elif 1 <= wday <= 4:
+                    other_rets.append(fwd)
+            # IC: 1 for Monday, 0 for other days — correlation with fwd return
+            all_x = [1.0] * len(mon_rets) + [0.0] * len(other_rets)
+            all_y = mon_rets + other_rets
+            n = len(all_y)
+            wins = sum(1 for v in mon_rets if v > 0)
+            wr = wins / len(mon_rets) if mon_rets else 0.0
+            avg_r = sum(mon_rets) / len(mon_rets) if mon_rets else 0.0
+            ic = _ic_from_lists(all_x, all_y)
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(mon_rets, [True] * len(mon_rets))
+            status = _score_hypothesis(len(mon_rets), ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': desc,
+                'category': 'session_timing',
+                'instrument': 'MNQ',
+                'lookback_days': 180,
+                'signals_generated': len(mon_rets),
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(avg_r), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'session timing hyp B: {e}')
+
+        # Hypothesis C: Post large-range reversion
+        try:
+            hyp_id, desc = hypotheses[2]
+            signal_rets = []
+            dates = df['date'].unique() if 'date' in df.columns else []
+            for i, d in enumerate(dates[1:], 1):
+                prev_day_mask = df['date'] == dates[i - 1]
+                curr_day_mask = df['date'] == d
+                prev_day = df[prev_day_mask & (df['hour'] >= 13) & (df['hour'] < 19)]
+                curr_day = df[curr_day_mask & (df['hour'] >= 13) & (df['hour'] < 19)]
+                if len(prev_day) < 5 or len(curr_day) < 5:
+                    continue
+                prev_open = float(prev_day['close'].iloc[0])
+                prev_close = float(prev_day['close'].iloc[-1])
+                if prev_open <= 0:
+                    continue
+                prev_range_pct = abs(prev_close - prev_open) / prev_open
+                if prev_range_pct <= 0.02:
+                    continue
+                # Reversion: expect next day to move opposite direction
+                direction = -1.0 if prev_close > prev_open else 1.0
+                curr_open = float(curr_day['close'].iloc[0])
+                curr_close = float(curr_day['close'].iloc[-1])
+                atr_val = float(atr.iloc[curr_day.index[-1]] or 1)
+                fwd_ret = (curr_close - curr_open) * direction / atr_val
+                signal_rets.append(fwd_ret)
+            n = len(signal_rets)
+            wins = sum(1 for v in signal_rets if v > 0)
+            wr = wins / n if n > 0 else 0.0
+            avg_r = sum(signal_rets) / n if n > 0 else 0.0
+            ic = _ic_from_lists(signal_rets, [1.0] * n) if n > 0 else 0.0
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+            status = _score_hypothesis(n, ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': desc,
+                'category': 'session_timing',
+                'instrument': 'MNQ',
+                'lookback_days': 180,
+                'signals_generated': n,
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(avg_r), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'session timing hyp C: {e}')
+
+        # Hypothesis D: Last 15min NY reversion
+        try:
+            hyp_id, desc = hypotheses[3]
+            signal_rets = []
+            for i in range(20, len(df) - 3):
+                h = df['hour'].iloc[i]
+                m = df['dt'].iloc[i].minute if 'dt' in df.columns else 0
+                wday = df['weekday'].iloc[i]
+                if wday >= 5 or h != 18 or m < 45:
+                    continue
+                atr_val = float(atr.iloc[i] or 0)
+                if atr_val <= 0:
+                    continue
+                bar_close = float(df['close'].iloc[i])
+                bar_open = float(df['open'].iloc[i])
+                # Mean-reversion: trade opposite to bar direction
+                direction = -1.0 if bar_close > bar_open else 1.0
+                fwd_ret = float(df['close'].iloc[i + 3] - bar_close) * direction / atr_val
+                signal_rets.append(fwd_ret)
+            n = len(signal_rets)
+            wins = sum(1 for v in signal_rets if v > 0)
+            wr = wins / n if n > 0 else 0.0
+            avg_r = sum(signal_rets) / n if n > 0 else 0.0
+            ic = _ic_from_lists(signal_rets, [1.0] * n) if n > 0 else 0.0
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+            status = _score_hypothesis(n, ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': desc,
+                'category': 'session_timing',
+                'instrument': 'MNQ',
+                'lookback_days': 180,
+                'signals_generated': n,
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(avg_r), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'session timing hyp D: {e}')
+
+    except Exception as e:
+        logger.warning(f'_test_session_timing_hypotheses: {e}')
+    return results
+
+
+def _test_volatility_regime_hypotheses(conn) -> list:
+    """Category 4: Volatility regime transition hypotheses (4 variants: N = 5,10,20,40)."""
+    results = []
+    try:
+        import pandas as pd
+        df = _load_ohlcv_df(conn, 'MNQ', '5min', 180)
+        if len(df) < 200:
+            return results
+        atr = _atr14(df)
+        atr20avg = atr.rolling(20).mean()
+
+        for n_fwd in [5, 10, 20, 40]:
+            hyp_id = f'vol_regime_expansion_n{n_fwd}'
+            try:
+                signal_rets = []
+                bars = len(df)
+                for i in range(30, bars - n_fwd - 1):
+                    atr_val = float(atr.iloc[i] or 0)
+                    atr20_val = float(atr20avg.iloc[i] or 0)
+                    if atr20_val <= 0 or atr_val <= 0:
+                        continue
+                    prev_atr = float(atr.iloc[i - 1] or atr_val)
+                    if prev_atr <= 0:
+                        continue
+                    # ATR compression on previous bar: ATR < 0.7 × 20d_avg
+                    was_compressed = prev_atr < 0.7 * atr20_val
+                    # Expansion trigger: current bar range > 1.5 × ATR
+                    bar_range = float(df['high'].iloc[i] - df['low'].iloc[i])
+                    is_expanding = bar_range > 1.5 * atr_val
+                    if not (was_compressed and is_expanding):
+                        continue
+                    # Direction from bar
+                    bar_close = float(df['close'].iloc[i])
+                    bar_open = float(df['open'].iloc[i])
+                    direction = 1.0 if bar_close > bar_open else -1.0
+                    # Forward return: N bars, direction-normalised
+                    fwd_close = float(df['close'].iloc[i + n_fwd])
+                    fwd_ret = (fwd_close - bar_close) * direction / (atr_val or 1)
+                    signal_rets.append(fwd_ret)
+
+                n = len(signal_rets)
+                wins = sum(1 for v in signal_rets if v > 0)
+                wr = wins / n if n > 0 else 0.0
+                avg_r = sum(signal_rets) / n if n > 0 else 0.0
+                ic = _ic_from_lists(signal_rets, [1.0] * n) if n > 0 else 0.0
+                p = _p_value_approx(ic, n)
+                sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+                status = _score_hypothesis(n, ic, sharpe, p, wr)
+
+                result = {
+                    'hypothesis_id': hyp_id,
+                    'description': (f'ATR compression<0.7avg then expansion>1.5ATR: '
+                                    f'sustained momentum for next {n_fwd} bars'),
+                    'category': 'volatility_regime',
+                    'instrument': 'MNQ',
+                    'lookback_days': 180,
+                    'signals_generated': n,
+                    'win_rate': round(float(wr), 4),
+                    'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                    'avg_r': round(float(avg_r), 4),
+                    'information_coefficient': round(float(ic), 4),
+                    'p_value': round(float(p), 4),
+                    'status': status,
+                    'run_date': date.today().isoformat(),
+                }
+                results.append(result)
+                if status == 'SIGNIFICANT':
+                    _promote_significant_to_shadow(hyp_id, result['description'],
+                                                   sharpe, wr)
+            except Exception as e:
+                logger.warning(f'vol regime hypothesis n={n_fwd}: {e}')
+    except Exception as e:
+        logger.warning(f'_test_volatility_regime_hypotheses: {e}')
+    return results
+
+
+def _test_cross_instrument_hypotheses(conn) -> list:
+    """Category 5: Cross-instrument hypotheses (3 variants, MNQ + ES)."""
+    results = []
+    try:
+        import pandas as pd
+        df_mnq = _load_ohlcv_df(conn, 'MNQ', '5min', 180)
+        df_es = _load_ohlcv_df(conn, 'ES', '5min', 180)
+        if len(df_mnq) < 100 or len(df_es) < 100:
+            return results
+
+        # Align on timestamps
+        mnq_ts = set(df_mnq['ts'].values)
+        es_ts = set(df_es['ts'].values)
+        common_ts = sorted(mnq_ts & es_ts)
+        if len(common_ts) < 100:
+            return results
+
+        df_m = df_mnq[df_mnq['ts'].isin(common_ts)].set_index('ts').sort_index()
+        df_e = df_es[df_es['ts'].isin(common_ts)].set_index('ts').sort_index()
+
+        # Resample to 1h for correlation analysis
+        try:
+            df_m_h = df_m[['close']].resample('1h', on=pd.to_datetime(pd.Series(df_m.index), unit='s', utc=True)).last()
+            df_e_h = df_e[['close']].resample('1h', on=pd.to_datetime(pd.Series(df_e.index), unit='s', utc=True)).last()
+        except Exception:
+            # Fallback: use raw 5min aligned data grouped by 12-bar blocks (1h approx)
+            df_m_h = df_m['close'].iloc[::12]
+            df_e_h = df_e['close'].iloc[::12]
+
+        # Hypothesis 1: MNQ/ES 1h correlation drop < 0.8 predicts vol expansion
+        try:
+            hyp_id = 'cross_mnq_es_corr_drop_vol'
+            corr_window = 12  # 12 1h bars = ~0.5 trading day
+            mnq_close = list(df_m['close'].values)
+            es_close = list(df_e['close'].values)
+            n_bars = min(len(mnq_close), len(es_close))
+            signal_rets = []
+            atr_mnq = _atr14(df_mnq)
+            atr_mnq_vals = list(atr_mnq.values)
+
+            for i in range(corr_window + 1, n_bars - 12):
+                m_slice = mnq_close[i - corr_window:i]
+                e_slice = es_close[i - corr_window:i]
+                corr_val = _ic_from_lists(m_slice, e_slice)
+                if corr_val >= 0.8:
+                    continue
+                # Signal: correlation dropped below 0.8 — expect vol expansion
+                atr_i = float(atr_mnq_vals[min(i, len(atr_mnq_vals) - 1)] or 1)
+                curr_atr = float(atr_mnq_vals[min(i + 6, len(atr_mnq_vals) - 1)] or atr_i)
+                # Vol expansion = ATR 6 bars later > current ATR
+                vol_expanded = 1.0 if curr_atr > 1.2 * atr_i else 0.0
+                signal_rets.append(vol_expanded)
+
+            n = len(signal_rets)
+            wins = sum(1 for v in signal_rets if v > 0)
+            wr = wins / n if n > 0 else 0.0
+            ic = _ic_from_lists([1.0] * n, signal_rets) if n > 0 else 0.0
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+            status = _score_hypothesis(n, ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': 'MNQ/ES 1h correlation drop <0.8 predicts volatility expansion',
+                'category': 'cross_instrument',
+                'instrument': 'MNQ/ES',
+                'lookback_days': 180,
+                'signals_generated': n,
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(wr - 0.5), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'cross instrument hyp 1: {e}')
+
+        # Hypothesis 2: MNQ/ES 4h bias diverge — bearish instrument reverts
+        try:
+            hyp_id = 'cross_mnq_es_bias_diverge_revert'
+            signal_rets = []
+            # Compute 4h bias for both (simplified: 12-bar EMA comparison)
+            for i in range(24, min(len(mnq_close), len(es_close)) - 10):
+                m_ema = sum(mnq_close[i - 12:i]) / 12
+                e_ema = sum(es_close[i - 12:i]) / 12
+                m_bias = 1 if mnq_close[i] > m_ema else -1
+                e_bias = 1 if es_close[i] > e_ema else -1
+                if m_bias == e_bias:
+                    continue
+                # Diverge: different biases — bearish one should revert
+                bearish_instrument = 'mnq' if m_bias < 0 else 'es'
+                if bearish_instrument == 'mnq':
+                    entry = mnq_close[i]
+                    fwd = mnq_close[min(i + 5, len(mnq_close) - 1)]
+                else:
+                    entry = es_close[i]
+                    fwd = es_close[min(i + 5, len(es_close) - 1)]
+                atr_i = float(atr_mnq_vals[min(i, len(atr_mnq_vals) - 1)] or 1)
+                fwd_ret = (fwd - entry) / (atr_i or 1)  # positive = reverted up
+                signal_rets.append(fwd_ret)
+
+            n = len(signal_rets)
+            wins = sum(1 for v in signal_rets if v > 0)
+            wr = wins / n if n > 0 else 0.0
+            avg_r = sum(signal_rets) / n if n > 0 else 0.0
+            ic = _ic_from_lists(signal_rets, [1.0] * n) if n > 0 else 0.0
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+            status = _score_hypothesis(n, ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': 'MNQ/ES 4h bias diverge: bearish instrument reverts within 5 bars',
+                'category': 'cross_instrument',
+                'instrument': 'MNQ/ES',
+                'lookback_days': 180,
+                'signals_generated': n,
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(avg_r), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'cross instrument hyp 2: {e}')
+
+        # Hypothesis 3: Days after MNQ >2% move have higher mean-reversion rate
+        try:
+            hyp_id = 'cross_mnq_large_move_reversion'
+            signal_rets = []
+            dates_mnq = df_mnq['date'].unique() if 'date' in df_mnq.columns else []
+            for i, d in enumerate(dates_mnq[1:], 1):
+                prev_mask = df_mnq['date'] == dates_mnq[i - 1]
+                curr_mask = df_mnq['date'] == d
+                prev_day = df_mnq[prev_mask & (df_mnq['hour'] >= 13) & (df_mnq['hour'] < 19)]
+                curr_day = df_mnq[curr_mask & (df_mnq['hour'] >= 13) & (df_mnq['hour'] < 19)]
+                if len(prev_day) < 5 or len(curr_day) < 5:
+                    continue
+                prev_open_p = float(prev_day['close'].iloc[0])
+                prev_close_p = float(prev_day['close'].iloc[-1])
+                if prev_open_p <= 0:
+                    continue
+                prev_move_pct = abs(prev_close_p - prev_open_p) / prev_open_p
+                if prev_move_pct <= 0.02:
+                    continue
+                # Mean-reversion day: expect opposite direction
+                direction = -1.0 if prev_close_p > prev_open_p else 1.0
+                curr_open_p = float(curr_day['close'].iloc[0])
+                curr_close_p = float(curr_day['close'].iloc[-1])
+                atr_i = float(atr.iloc[curr_day.index[0]] or 1)
+                fwd_ret = (curr_close_p - curr_open_p) * direction / (atr_i or 1)
+                signal_rets.append(fwd_ret)
+
+            n = len(signal_rets)
+            wins = sum(1 for v in signal_rets if v > 0)
+            wr = wins / n if n > 0 else 0.0
+            avg_r = sum(signal_rets) / n if n > 0 else 0.0
+            ic = _ic_from_lists(signal_rets, [1.0] * n) if n > 0 else 0.0
+            p = _p_value_approx(ic, n)
+            sharpe = _hypothesis_sharpe(signal_rets, [True] * n)
+            status = _score_hypothesis(n, ic, sharpe, p, wr)
+            results.append({
+                'hypothesis_id': hyp_id,
+                'description': 'Days after MNQ >2% move have higher mean-reversion win rate',
+                'category': 'cross_instrument',
+                'instrument': 'MNQ',
+                'lookback_days': 180,
+                'signals_generated': n,
+                'win_rate': round(float(wr), 4),
+                'sharpe': round(float(sharpe), 3) if sharpe is not None else None,
+                'avg_r': round(float(avg_r), 4),
+                'information_coefficient': round(float(ic), 4),
+                'p_value': round(float(p), 4),
+                'status': status,
+                'run_date': date.today().isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f'cross instrument hyp 3: {e}')
+
+    except Exception as e:
+        logger.warning(f'_test_cross_instrument_hypotheses: {e}')
+    return results
+
+
+# ─── Main hypothesis engine ──────────────────────────────────────────────────
+
+def run_hypothesis_engine() -> list:
+    """
+    Test 20+ market hypotheses against historical OHLCV data.
+    Returns list of hypothesis results. Writes to hypothesis_log table.
+    Only reads ohlcv table. Completely isolated from live trading.
+    Runs nightly at 02:00 UTC via background_scheduler.
+    Max 10 minutes (uses vectorized pandas, pure Python fallbacks).
+    """
+    logger.info('Hypothesis Engine: starting run')
+    all_results = []
+    conn = _conn()
+    try:
+        cat_funcs = [
+            ('autocorrelation', _test_autocorr_hypotheses),
+            ('hurst', _test_hurst_hypotheses),
+            ('session_timing', _test_session_timing_hypotheses),
+            ('volatility_regime', _test_volatility_regime_hypotheses),
+            ('cross_instrument', _test_cross_instrument_hypotheses),
+        ]
+        for cat_name, cat_func in cat_funcs:
+            try:
+                cat_results = cat_func(conn)
+                for r in cat_results:
+                    _write_hypothesis(r)
+                    all_results.append(r)
+                logger.info(f'Hypothesis Engine: {cat_name} — {len(cat_results)} hypotheses tested')
+            except Exception as e:
+                logger.error(f'Hypothesis Engine: {cat_name} failed — {e}', exc_info=True)
+    except Exception as e:
+        logger.error(f'run_hypothesis_engine: {e}', exc_info=True)
+    finally:
+        _close(conn)
+
+    sig = sum(1 for r in all_results if r.get('status') == 'SIGNIFICANT')
+    logger.info(f'Hypothesis Engine: complete — {len(all_results)} tested, {sig} significant')
+    return all_results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PHASE 3.2 — COMBINATION EXPLORER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_combination_explorer() -> list:
+    """
+    Test 3-feature combinations from available feature set.
+    Runs Saturday 03:00 UTC. Uses last 210 days (180 train + 30 OOS).
+    Tests all C(8,3)=56 combinations. Fits logistic regression on IS data,
+    evaluates on OOS. Records oos_ic and oos_auc.
+    """
+    logger.info('Combination Explorer: starting run')
+    results = []
+    conn = _conn()
+    try:
+        import pandas as pd
+        df = _load_ohlcv_df(conn, 'MNQ', '5min', 210)
+        if len(df) < 500:
+            logger.warning('Combination Explorer: insufficient data')
+            _close(conn)
+            return results
+
+        atr = _atr14(df)
+        atr5ago = atr.shift(5)
+        avg_atr20 = atr.rolling(20).mean()
+
+        # Compute all features
+        close = df['close']
+        opn = df['open']
+        high = df['high']
+        low = df['low']
+        vol = df['volume']
+        vol20avg = vol.rolling(20).mean()
+        vol20std = vol.rolling(20).std()
+
+        autocorr_1 = close.rolling(20).apply(
+            lambda x: x.autocorr(lag=1) if len(x) > 2 else 0.0, raw=False
+        ).fillna(0)
+
+        hurst_vals = []
+        close_arr = list(close.values)
+        for i in range(len(close_arr)):
+            if i < 100:
+                hurst_vals.append(0.5)
+            else:
+                hurst_vals.append(_hurst_rs(close_arr[i - 100:i]))
+        import pandas as pd
+        hurst_s = pd.Series(hurst_vals, index=close.index)
+
+        # Compute session_progress per bar (minutes since 13:00 UTC / 360)
+        def _session_prog(dt_val):
+            try:
+                mins = (dt_val.hour * 60 + dt_val.minute) - (13 * 60)
+                return max(0.0, min(1.0, mins / 360.0))
+            except Exception:
+                return 0.0
+
+        session_prog = df['dt'].apply(_session_prog) if 'dt' in df.columns else pd.Series(
+            [0.0] * len(df), index=df.index)
+
+        day_of_week = df['weekday'].astype(float) if 'weekday' in df.columns else pd.Series(
+            [0.0] * len(df), index=df.index)
+
+        atr_ratio = (atr / atr5ago.replace(0, float('nan'))).fillna(1.0)
+        body_ratio = ((close - opn).abs() / (high - low).replace(0, float('nan'))).fillna(0.5)
+        vol_zscore = ((vol - vol20avg) / vol20std.replace(0, float('nan'))).fillna(0.0)
+        vol_ratio = (atr / avg_atr20.replace(0, float('nan'))).fillna(1.0)
+
+        feature_frame = pd.DataFrame({
+            'autocorr_1': autocorr_1,
+            'hurst': hurst_s,
+            'vol_ratio': vol_ratio,
+            'session_progress': session_prog,
+            'day_of_week': day_of_week,
+            'atr_ratio': atr_ratio,
+            'body_ratio': body_ratio,
+            'vol_zscore': vol_zscore,
+        }).fillna(0)
+
+        # Forward return: 12-bar (1h approx) normalised by ATR
+        fwd_return = ((close.shift(-12) - close) / atr.replace(0, float('nan'))).fillna(0)
+        target = (fwd_return > 0).astype(int)  # binary: up or not
+
+        # Split: IS = first 180 days of data, OOS = last 30 days
+        n_total = len(df)
+        ts_arr = df['ts'].values if 'ts' in df.columns else list(range(n_total))
+        cutoff_210 = ts_arr[-1] - 210 * 86400
+        cutoff_oos = ts_arr[-1] - 30 * 86400
+        is_mask = (df['ts'] >= cutoff_210) & (df['ts'] < cutoff_oos) if 'ts' in df.columns else (
+            pd.Series([True] * int(n_total * 0.86) + [False] * (n_total - int(n_total * 0.86)),
+                      index=df.index))
+        oos_mask = (df['ts'] >= cutoff_oos) if 'ts' in df.columns else ~is_mask
+
+        feat_names = list(feature_frame.columns)
+        import itertools
+        combos = list(itertools.combinations(feat_names, 3))
+        today_iso = date.today().isoformat()
+
+        for combo in combos:
+            combo_key = ','.join(combo)
+            try:
+                X_is = feature_frame[list(combo)][is_mask].values
+                y_is = target[is_mask].values
+                X_oos = feature_frame[list(combo)][oos_mask].values
+                y_oos = target[oos_mask].values
+
+                if len(X_is) < 100 or len(X_oos) < 20:
+                    continue
+
+                # Logistic regression (pure numpy, no sklearn required)
+                # Standardise features
+                means = X_is.mean(axis=0)
+                stds = X_is.std(axis=0) + 1e-8
+                X_is_n = (X_is - means) / stds
+                X_oos_n = (X_oos - means) / stds
+
+                # Gradient descent logistic regression
+                import numpy as np
+                w = np.zeros(X_is_n.shape[1])
+                b = 0.0
+                lr = 0.05
+                for _ in range(200):
+                    z = X_is_n.dot(w) + b
+                    z = np.clip(z, -20, 20)
+                    prob = 1 / (1 + np.exp(-z))
+                    err = prob - y_is.astype(float)
+                    w -= lr * X_is_n.T.dot(err) / len(y_is)
+                    b -= lr * err.mean()
+
+                # OOS predictions
+                z_oos = X_oos_n.dot(w) + b
+                z_oos = np.clip(z_oos, -20, 20)
+                prob_oos = 1 / (1 + np.exp(-z_oos))
+
+                # OOS IC
+                oos_ic = _ic_from_lists(list(prob_oos), list(y_oos.astype(float)))
+
+                # OOS AUC (trapezoidal)
+                sorted_pairs = sorted(zip(prob_oos, y_oos), reverse=True)
+                tp = fp = 0
+                n_pos = y_oos.sum()
+                n_neg = len(y_oos) - n_pos
+                auc = 0.0
+                if n_pos > 0 and n_neg > 0:
+                    prev_fp = prev_tp = 0
+                    for _, label in sorted_pairs:
+                        if label == 1:
+                            tp += 1
+                        else:
+                            fp += 1
+                        auc += (fp - prev_fp) * (tp + prev_tp) / 2
+                        prev_fp, prev_tp = fp, tp
+                    auc = auc / (n_pos * n_neg) if n_pos * n_neg > 0 else 0.5
+
+                results.append({
+                    'features': combo_key,
+                    'oos_ic': round(float(oos_ic), 4),
+                    'oos_auc': round(float(auc), 4),
+                    'run_date': today_iso,
+                })
+
+                # Write to DB
+                w_conn = _conn()
+                try:
+                    w_conn.execute(
+                        "INSERT INTO feature_combinations (features, oos_ic, oos_auc, run_date) "
+                        "VALUES (?,?,?,?)",
+                        (combo_key, round(float(oos_ic), 4), round(float(auc), 4), today_iso)
+                    )
+                    w_conn.commit()
+                except Exception as e:
+                    _rollback(w_conn)
+                    logger.debug(f'Combination Explorer write {combo_key}: {e}')
+                finally:
+                    _close(w_conn)
+
+            except Exception as e:
+                logger.debug(f'Combination Explorer combo {combo_key}: {e}')
+                continue
+
+    except Exception as e:
+        logger.error(f'run_combination_explorer: {e}', exc_info=True)
+    finally:
+        _close(conn)
+
+    results.sort(key=lambda r: abs(r.get('oos_ic', 0)), reverse=True)
+    logger.info(f'Combination Explorer: {len(results)} combos evaluated')
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PHASE 3.3 — SHADOW LAB LIVE SCANNING
+# ═══════════════════════════════════════════════════════════════════════════
+
+def scan_shadow_post_low_vol(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
+    """
+    Post-Low-Vol Expansion: enter on ATR expansion after compression.
+    ATR compression: current ATR_14 < 0.7 × 20-bar avg ATR
+    Expansion trigger: current bar range > 1.5 × ATR_14
+    Direction: bullish bar = long, bearish = short
+    HTF bias must align (df_4h based)
+    """
+    try:
+        import pandas as pd
+        if len(df_5m) < 30 or len(df_4h) < 21:
+            return None
+
+        atr = _atr14(df_5m)
+        atr20avg = atr.rolling(20).mean()
+
+        # Get last completed bar
+        i = len(df_5m) - 1
+        atr_val = float(atr.iloc[i] or 0)
+        atr20_val = float(atr20avg.iloc[i] or 0)
+        if atr_val <= 0 or atr20_val <= 0:
+            return None
+
+        prev_atr = float(atr.iloc[i - 1] or atr_val)
+
+        # Compression on previous bar
+        was_compressed = prev_atr < 0.7 * atr20_val
+        if not was_compressed:
+            return None
+
+        # Expansion on current bar
+        bar_high = float(df_5m['high'].iloc[i])
+        bar_low = float(df_5m['low'].iloc[i])
+        bar_close = float(df_5m['close'].iloc[i])
+        bar_open = float(df_5m['open'].iloc[i])
+        bar_range = bar_high - bar_low
+        if bar_range <= 1.5 * atr_val:
+            return None
+
+        # Direction
+        is_bullish = bar_close > bar_open
+        direction = 'long' if is_bullish else 'short'
+
+        # HTF bias from 4h (EMA20 alignment)
+        ema20_4h = _ema(df_4h['close'], 20)
+        htf_close = float(df_4h['close'].iloc[-1])
+        htf_ema = float(ema20_4h.iloc[-1])
+        if direction == 'long' and htf_close < htf_ema * 0.999:
+            return None
+        if direction == 'short' and htf_close > htf_ema * 1.001:
+            return None
+
+        entry = bar_close
+        if direction == 'long':
+            stop = bar_low - 0.5 * atr_val
+            target = entry + 2.5 * (entry - stop)
+        else:
+            stop = bar_high + 0.5 * atr_val
+            target = entry - 2.5 * (stop - entry)
+
+        return {
+            'symbol': symbol,
+            'direction': direction,
+            'setup': 'shadow_post_low_vol',
+            'entry': round(float(entry), 2),
+            'stop': round(float(stop), 2),
+            'target': round(float(target), 2),
+            'rr': 2.5,
+            'atr': round(float(atr_val), 2),
+            'quality': 'shadow_lab',
+        }
+    except Exception as e:
+        logger.warning(f'scan_shadow_post_low_vol {symbol}: {e}')
+        return None
+
+
+def scan_shadow_monday_ny_open(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
+    """
+    Monday NY Open Long: first 30min of Monday NY session.
+    Day must be Monday, time 13:00-13:30 UTC.
+    Direction: long only.
+    HTF 4h EMA20 must be bullish.
+    Entry: bar close. Stop: bar_low - 0.5*ATR. Target: 2.5R.
+    """
+    try:
+        import pandas as pd
+        if len(df_5m) < 30 or len(df_4h) < 21:
+            return None
+
+        last = df_5m.iloc[-1]
+        if 'dt' not in df_5m.columns:
+            return None
+
+        dt = last['dt']
+        if hasattr(dt, 'to_pydatetime'):
+            dt = dt.to_pydatetime()
+
+        # Must be Monday 13:00-13:30 UTC
+        if dt.weekday() != 0:
+            return None
+        if not (13 <= dt.hour < 13 or (dt.hour == 13 and dt.minute <= 30)):
+            return None
+        if not (dt.hour == 13 and 0 <= dt.minute <= 30):
+            return None
+
+        # Long only
+        bar_close = float(last['close'])
+        bar_low = float(last['low'])
+
+        atr = _atr14(df_5m)
+        atr_val = float(atr.iloc[-1] or 0)
+        if atr_val <= 0:
+            return None
+
+        # HTF 4h EMA20 bullish
+        ema20_4h = _ema(df_4h['close'], 20)
+        htf_close = float(df_4h['close'].iloc[-1])
+        htf_ema = float(ema20_4h.iloc[-1])
+        if htf_close < htf_ema * 1.001:
+            return None
+
+        entry = bar_close
+        stop = bar_low - 0.5 * atr_val
+        target = entry + 2.5 * (entry - stop)
+
+        return {
+            'symbol': symbol,
+            'direction': 'long',
+            'setup': 'shadow_monday_ny_open',
+            'entry': round(float(entry), 2),
+            'stop': round(float(stop), 2),
+            'target': round(float(target), 2),
+            'rr': 2.5,
+            'atr': round(float(atr_val), 2),
+            'quality': 'shadow_lab',
+        }
+    except Exception as e:
+        logger.warning(f'scan_shadow_monday_ny_open {symbol}: {e}')
+        return None
+
+
+def scan_shadow_value_area(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
+    """
+    Value Area Continuation: trade from previous session VAH/VAL retest.
+    Previous session = yesterday 13:00-19:00 UTC (NY session).
+    VAH = 70th percentile volume-weighted price level.
+    VAL = 30th percentile.
+    Entry: price retests VAH from above (long) or VAL from below (short)
+    with confirming close back inside value area.
+    Stop: beyond VAH/VAL by 0.5 ATR, Target: 2.5R.
+    """
+    try:
+        import pandas as pd
+        if len(df_5m) < 50:
+            return None
+
+        now_dt = df_5m['dt'].iloc[-1] if 'dt' in df_5m.columns else None
+        if now_dt is None:
+            return None
+        if hasattr(now_dt, 'to_pydatetime'):
+            now_dt = now_dt.to_pydatetime()
+
+        # Must be in current NY session (13:00-19:00 UTC)
+        if not (13 <= now_dt.hour < 19):
+            return None
+
+        # Get previous session bars (yesterday 13:00-19:00 UTC)
+        prev_session_bars = df_5m[
+            (df_5m['weekday'] < 5) &
+            (df_5m['hour'] >= 13) & (df_5m['hour'] < 19) &
+            (df_5m['date'] < now_dt.date())
+        ].tail(78)  # ~78 bars in NY session (6h × 12 bars/h + buffer)
+
+        if len(prev_session_bars) < 10:
+            return None
+
+        # Volume profile: volume-weighted prices
+        ps_vol = prev_session_bars['volume'].values
+        ps_close = prev_session_bars['close'].values
+        total_vol = ps_vol.sum()
+        if total_vol <= 0:
+            return None
+
+        # Sort by price to compute percentile-based value area
+        price_vol_pairs = sorted(zip(ps_close, ps_vol), key=lambda x: x[0])
+        cum_vol = 0
+        p30_price = None
+        p70_price = None
+        for price, vol in price_vol_pairs:
+            cum_vol += vol
+            pct = cum_vol / total_vol
+            if p30_price is None and pct >= 0.30:
+                p30_price = price
+            if p70_price is None and pct >= 0.70:
+                p70_price = price
+
+        if p30_price is None or p70_price is None:
+            return None
+
+        val = float(p30_price)  # Value Area Low
+        vah = float(p70_price)  # Value Area High
+
+        atr = _atr14(df_5m)
+        atr_val = float(atr.iloc[-1] or 0)
+        if atr_val <= 0:
+            return None
+
+        # Current bar
+        bar_close = float(df_5m['close'].iloc[-1])
+        bar_open = float(df_5m['open'].iloc[-1])
+        bar_low = float(df_5m['low'].iloc[-1])
+        bar_high = float(df_5m['high'].iloc[-1])
+
+        direction = None
+        entry = stop = target = None
+
+        # Long: price tested VAH from above (bar_low <= VAH) with close back above VAH
+        # (bullish close confirms rejection of test)
+        if (bar_low <= vah * 1.001 and bar_close > vah and
+                bar_close > bar_open):
+            direction = 'long'
+            entry = bar_close
+            stop = vah - 0.5 * atr_val
+            target = entry + 2.5 * (entry - stop)
+
+        # Short: price tested VAL from below (bar_high >= VAL) with close back below VAL
+        elif (bar_high >= val * 0.999 and bar_close < val and
+              bar_close < bar_open):
+            direction = 'short'
+            entry = bar_close
+            stop = val + 0.5 * atr_val
+            target = entry - 2.5 * (stop - entry)
+
+        if direction is None:
+            return None
+
+        return {
+            'symbol': symbol,
+            'direction': direction,
+            'setup': 'shadow_value_area',
+            'entry': round(float(entry), 2),
+            'stop': round(float(stop), 2),
+            'target': round(float(target), 2),
+            'rr': 2.5,
+            'atr': round(float(atr_val), 2),
+            'vah': round(float(vah), 2),
+            'val': round(float(val), 2),
+            'quality': 'shadow_lab',
+        }
+    except Exception as e:
+        logger.warning(f'scan_shadow_value_area {symbol}: {e}')
+        return None
+
+
+# Shadow strategy name → scan function mapping
+_SHADOW_SCAN_MAP = {
+    'Post-Low-Vol Expansion': scan_shadow_post_low_vol,
+    'Monday NY Open Long': scan_shadow_monday_ny_open,
+    'Value Area Continuation': scan_shadow_value_area,
+}
+
+
+def run_shadow_lab_scans() -> list:
+    """
+    Run live scan functions for all active shadow lab candidates.
+    Loads recent 5min, 1h, 4h bars for each relevant symbol.
+    Logs signals to apex_trades with setup='shadow_{strategy_slug}'.
+    Returns list of signals generated.
+    """
+    signals_generated = []
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT id, strategy_name, status FROM shadow_lab WHERE status = 'ACTIVE'"
+        ).fetchall()
+    except Exception as e:
+        logger.error(f'run_shadow_lab_scans: shadow_lab query failed — {e}')
+        _close(c)
+        return signals_generated
+    finally:
+        _close(c)
+
+    for shadow_id, strategy_name, status in rows:
+        scan_func = _SHADOW_SCAN_MAP.get(strategy_name)
+        if scan_func is None:
+            continue
+
+        for symbol in ('MNQ',):
+            try:
+                conn = _conn()
+                try:
+                    df_5m = _load_ohlcv_df(conn, symbol, '5min', 5)
+                    df_1h_raw = _load_ohlcv_df(conn, symbol, '1h', 30)
+                    df_4h_raw = _load_ohlcv_df(conn, symbol, '4h', 60)
+
+                    # Fall back to resampled 4h from 5min if 4h bars unavailable
+                    if len(df_4h_raw) < 5 and len(df_5m) >= 50:
+                        import pandas as pd
+                        df5_idx = df_5m.set_index('dt')
+                        df_4h_raw = df5_idx[['open', 'high', 'low', 'close', 'volume']].resample('4h').agg(
+                            {'open': 'first', 'high': 'max', 'low': 'min',
+                             'close': 'last', 'volume': 'sum'}
+                        ).dropna().reset_index()
+
+                    if len(df_5m) < 20:
+                        continue
+                finally:
+                    _close(conn)
+
+                signal = scan_func(symbol, df_5m, df_1h_raw, df_4h_raw)
+                if signal is None:
+                    continue
+
+                # Log signal to apex_trades
+                try:
+                    from trade_tracker import log_trade
+                    trade_id = log_trade(signal)
+                    signals_generated.append({
+                        'strategy_name': strategy_name,
+                        'symbol': symbol,
+                        'trade_id': trade_id,
+                        'signal': signal,
+                    })
+                    logger.info(
+                        f'Shadow Lab Scan: {strategy_name} signal on {symbol} '
+                        f'{signal["direction"]} entry={signal["entry"]}'
+                    )
+                except Exception as e:
+                    logger.warning(f'Shadow lab scan log_trade failed {strategy_name}: {e}')
+
+            except Exception as e:
+                logger.warning(f'run_shadow_lab_scans {strategy_name} {symbol}: {e}')
+
+    return signals_generated
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PHASE 3.4 — PATTERN LIBRARY
+# ═══════════════════════════════════════════════════════════════════════════
+
+def update_pattern_library() -> dict:
+    """
+    Sync SIGNIFICANT hypotheses into the pattern_library.
+    Re-validate ACTIVE patterns against most recent 30 days.
+    Apply progressive decay if IC < 0.03 on revalidation run.
+    Mark as DEAD if decay_score < 0.1.
+    Returns summary dict.
+    """
+    today_iso = date.today().isoformat()
+    summary = {'added': 0, 'updated': 0, 'fading': 0, 'dead': 0, 'active': 0}
+
+    # Step 1: Promote SIGNIFICANT hypotheses into pattern_library
+    c = _conn()
+    try:
+        sig_rows = c.execute(
+            "SELECT hypothesis_id, description, category, instrument, "
+            "       signals_generated, win_rate, sharpe, information_coefficient "
+            "FROM hypothesis_log WHERE status = 'SIGNIFICANT'"
+        ).fetchall()
+    except Exception as e:
+        logger.warning(f'update_pattern_library: hypothesis fetch failed — {e}')
+        sig_rows = []
+    finally:
+        _close(c)
+
+    for row in sig_rows:
+        hyp_id, desc, cat, instrument, signals, wr, sharpe, ic = row
+        pattern_id = f'hyp_{hyp_id}'
+        c = _conn()
+        try:
+            existing = c.execute(
+                "SELECT id, decay_score FROM pattern_library WHERE pattern_id = ?",
+                (pattern_id,)
+            ).fetchone()
+            if not existing:
+                c.execute(
+                    """INSERT INTO pattern_library
+                       (pattern_id, name, description, discovery_source, instrument,
+                        signals_observed, win_rate, sharpe, information_coefficient,
+                        first_observed, last_validated, decay_score, status)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (pattern_id, hyp_id, desc or '', cat or 'hypothesis',
+                     instrument or 'MNQ', int(signals or 0),
+                     float(wr or 0), float(sharpe or 0), float(ic or 0),
+                     today_iso, today_iso, 1.0, 'ACTIVE')
+                )
+                c.commit()
+                summary['added'] += 1
+        except Exception as e:
+            _rollback(c)
+            logger.warning(f'update_pattern_library add {pattern_id}: {e}')
+        finally:
+            _close(c)
+
+    # Step 2: Re-validate ACTIVE patterns against last 30 days
+    c = _conn()
+    try:
+        active_rows = c.execute(
+            "SELECT id, pattern_id, name, instrument, decay_score "
+            "FROM pattern_library WHERE status = 'ACTIVE'"
+        ).fetchall()
+    except Exception as e:
+        logger.warning(f'update_pattern_library: active fetch failed — {e}')
+        active_rows = []
+    finally:
+        _close(c)
+
+    for pat_id, pattern_id, name, instrument, decay_score in active_rows:
+        try:
+            # Re-validate: run a quick IC check on last 30 days
+            conn = _conn()
+            try:
+                df = _load_ohlcv_df(conn, instrument or 'MNQ', '5min', 30)
+            finally:
+                _close(conn)
+
+            if len(df) < 50:
+                summary['active'] += 1
+                continue
+
+            # Quick re-validation: autocorr IC proxy
+            close = df['close']
+            atr = _atr14(df)
+            autocorr = close.rolling(20).apply(
+                lambda x: x.autocorr(lag=1) if len(x) > 2 else 0.0, raw=False
+            ).fillna(0)
+            fwd = (close.shift(-6) - close) / atr.replace(0, float('nan'))
+            fwd = fwd.fillna(0)
+            valid_mask = autocorr.notna() & fwd.notna()
+            x_vals = list(autocorr[valid_mask].values)
+            y_vals = list(fwd[valid_mask].values)
+            recent_ic = _ic_from_lists(x_vals, y_vals) if len(x_vals) > 5 else 0.0
+
+            new_decay = float(decay_score or 1.0)
+            if abs(recent_ic) < 0.03:
+                new_decay *= 0.7
+            new_status = 'ACTIVE'
+            if new_decay < 0.1:
+                new_status = 'DEAD'
+                summary['dead'] += 1
+            elif new_decay < 0.3:
+                summary['fading'] += 1
+            else:
+                summary['active'] += 1
+
+            # Update
+            uc = _conn()
+            try:
+                uc.execute(
+                    "UPDATE pattern_library SET decay_score=?, status=?, last_validated=? WHERE id=?",
+                    (round(float(new_decay), 4), new_status, today_iso, pat_id)
+                )
+                uc.commit()
+                summary['updated'] += 1
+            except Exception as e:
+                _rollback(uc)
+                logger.warning(f'update_pattern_library update {pattern_id}: {e}')
+            finally:
+                _close(uc)
+
+        except Exception as e:
+            logger.warning(f'update_pattern_library validate {pattern_id}: {e}')
+
+    logger.info(
+        f'Pattern Library: active={summary["active"]} fading={summary["fading"]} '
+        f'dead={summary["dead"]} added={summary["added"]}'
+    )
+    return summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PHASE 3.5 — ENHANCED PROMOTION WORKFLOW
+# ═══════════════════════════════════════════════════════════════════════════
+
 def score_shadow_lab() -> list:
-    """Advance week numbers for active shadow lab candidates. Opens its own connection."""
+    """
+    Advance week numbers for active shadow lab candidates.
+    When completed (week >= total_weeks), check promotion criteria:
+      - live Sharpe > 50% of backtest benchmark
+      - WR > 48%
+      - min 20 signals
+    Creates PROMOTION_REVIEW or REJECTION decision accordingly.
+    Opens its own connection.
+    """
     c = _conn()
     updated = []
     try:
         rows = c.execute(
             "SELECT id, strategy_name, week_number, total_weeks, "
-            "       paper_sharpe, backtest_sharpe "
+            "       paper_sharpe, backtest_sharpe, paper_win_rate, paper_signal_count "
             "FROM shadow_lab WHERE status = 'ACTIVE'"
         ).fetchall()
 
         for row in rows:
-            sid, name, week_num, total_weeks, paper_sharpe, bt_sharpe = row
+            sid, name, week_num, total_weeks, paper_sharpe, bt_sharpe, paper_wr, signal_count = row
             new_week = (week_num or 0) + 1
             try:
                 c.execute("UPDATE shadow_lab SET week_number = ? WHERE id = ?", (new_week, sid))
                 if new_week >= total_weeks:
+                    # Check promotion criteria
+                    ps = float(paper_sharpe or 0)
+                    bs = float(bt_sharpe or 1)
+                    wr = float(paper_wr or 0)
+                    sigs = int(signal_count or 0)
+
+                    sharpe_ok = ps > 0.5 * bs
+                    wr_ok = wr > 0.48
+                    sigs_ok = sigs >= 20
+
+                    if sharpe_ok and wr_ok and sigs_ok:
+                        decision_type = 'PROMOTION_REVIEW'
+                        rec = (f'{name} completed {total_weeks} weeks. Criteria met: '
+                               f'Sharpe={ps:.2f} ({ps/bs*100:.0f}% of BT), '
+                               f'WR={wr:.1%}, Signals={sigs}. Recommend promotion.')
+                    else:
+                        decision_type = 'REJECTION'
+                        reasons = []
+                        if not sharpe_ok:
+                            reasons.append(f'Sharpe {ps:.2f} < 50% of BT {bs:.2f}')
+                        if not wr_ok:
+                            reasons.append(f'WR {wr:.1%} < 48% minimum')
+                        if not sigs_ok:
+                            reasons.append(f'Only {sigs} signals (need 20+)')
+                        rec = f'{name}: auto-rejected — {"; ".join(reasons)}'
+                        # Auto-set shadow lab status to REJECTED
+                        c.execute(
+                            "UPDATE shadow_lab SET status = 'REJECTED' WHERE id = ?",
+                            (sid,)
+                        )
+
                     c.execute(
                         "INSERT INTO research_decisions "
                         "(decision_type, subject, recommendation, supporting_data, status) "
                         "VALUES (?,?,?,?,?)",
                         (
-                            'PROMOTION_REVIEW', name,
-                            f'{name} completed {total_weeks} weeks. Review for promotion.',
+                            decision_type, name, rec,
                             json.dumps({'week_number': new_week,
                                         'backtest_sharpe': bt_sharpe,
-                                        'paper_sharpe': paper_sharpe}),
-                            'PENDING',
+                                        'paper_sharpe': paper_sharpe,
+                                        'paper_win_rate': paper_wr,
+                                        'paper_signal_count': signal_count,
+                                        'criteria_met': decision_type == 'PROMOTION_REVIEW'}),
+                            'PENDING' if decision_type == 'PROMOTION_REVIEW' else 'REJECTED',
                         )
                     )
-                    logger.info(f'Research Shadow Lab: {name} — promotion review created')
+                    logger.info(
+                        f'Research Shadow Lab: {name} — {decision_type} created'
+                        f' (sharpe_ok={sharpe_ok}, wr_ok={wr_ok}, sigs_ok={sigs_ok})'
+                    )
                 c.commit()
                 updated.append({'id': sid, 'name': name, 'week_number': new_week})
             except Exception as e:

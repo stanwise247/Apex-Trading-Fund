@@ -680,6 +680,56 @@ tr:hover td { background: var(--bg3); }
 .coming-soon-card .cs-sub   { font-size: 12px; color: var(--text3); font-family: var(--mono); }
 
 /* ═══════════════════════════════════════════════════════
+   RESEARCH — DISCOVERY ENGINE
+═══════════════════════════════════════════════════════ */
+.discovery-stats-bar {
+  display: flex; align-items: center; gap: 24px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 12px 16px; margin-bottom: 16px;
+}
+.ds-stat { display: flex; flex-direction: column; gap: 2px; }
+.ds-label { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.ds-val { font-family: var(--mono); font-size: 20px; font-weight: 600; color: var(--text); }
+.ds-val.green { color: var(--green); }
+.ds-val.amber { color: var(--amber); }
+
+.discovery-two-col {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 14px; margin-bottom: 16px;
+}
+@media (max-width: 900px) { .discovery-two-col { grid-template-columns: 1fr; } }
+
+.discovery-panel {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 14px 16px;
+}
+
+.hyp-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 8px;
+  cursor: pointer; transition: border-color 0.15s;
+}
+.hyp-card:hover { border-color: var(--border2); }
+.hyp-card.hyp-significant { border-color: rgba(48,209,88,0.4); }
+.hyp-card.hyp-testing     { border-color: rgba(10,132,255,0.35); }
+.hyp-card.hyp-rejected    { opacity: 0.6; }
+
+.hyp-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.hyp-id { font-family: var(--mono); font-size: 11px; color: var(--text3); }
+.hyp-desc { font-size: 12px; color: var(--text); line-height: 1.4; margin-bottom: 6px; }
+.hyp-stats { display: flex; gap: 14px; flex-wrap: wrap; }
+.hyp-stat { font-family: var(--mono); font-size: 11px; color: var(--text2); }
+.hyp-stat span { color: var(--text); font-weight: 600; }
+
+.pill-sig     { background: rgba(48,209,88,0.15); color: var(--green); border: 1px solid rgba(48,209,88,0.3); padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; font-family: var(--mono); }
+.pill-testing { background: rgba(10,132,255,0.12); color: #3a8ef6; border: 1px solid rgba(10,132,255,0.3); padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; font-family: var(--mono); }
+.pill-rej     { background: rgba(142,142,147,0.12); color: var(--text3); border: 1px solid var(--border); padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; font-family: var(--mono); }
+
+.pattern-decay-green { color: var(--green); font-weight: 600; }
+.pattern-decay-amber { color: var(--amber); font-weight: 600; }
+.pattern-decay-red   { color: var(--red);   font-weight: 600; }
+
+/* ═══════════════════════════════════════════════════════
    COMMAND MODE
 ═══════════════════════════════════════════════════════ */
 .cmd-stat-grid {
@@ -1053,17 +1103,43 @@ tr:hover td { background: var(--bg3); }
 
 <!-- ═══════════════════ RESEARCH — DISCOVERY ═══════════════════ -->
 <div class="page" id="page-rsch-discovery">
-  <div class="coming-soon-card">
-    <div class="cs-title">Discovery Engine</div>
-    <div class="cs-sub">Coming in Phase 3 — June 2026</div>
+  <!-- Header stats bar -->
+  <div class="discovery-stats-bar" id="discoveryStatsBar">
+    <div class="ds-stat"><span class="ds-label">Hypotheses Tested</span><span class="ds-val" id="dsTotal">—</span></div>
+    <div class="ds-stat"><span class="ds-label">Significant</span><span class="ds-val green" id="dsSig">—</span></div>
+    <div class="ds-stat"><span class="ds-label">In Shadow Lab</span><span class="ds-val amber" id="dsShadow">—</span></div>
+    <div class="ds-stat"><span class="ds-label">Patterns Active</span><span class="ds-val" id="dsPat">—</span></div>
+    <button class="refresh-btn" style="margin-left:auto" onclick="loadDiscovery()">Refresh</button>
+  </div>
+
+  <!-- Two-column layout: feed + combinations -->
+  <div class="discovery-two-col">
+    <!-- LEFT: Hypothesis Feed -->
+    <div class="discovery-panel">
+      <div class="section-title" style="margin-bottom:10px">Hypothesis Feed</div>
+      <div id="hypothesisFeed" style="overflow-y:auto;max-height:520px">
+        <div class="tbl-empty">Loading…</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Top Combinations -->
+    <div class="discovery-panel">
+      <div class="section-title" style="margin-bottom:10px">Top Feature Combinations</div>
+      <div id="combinationsTable">
+        <div class="tbl-empty">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>
 
 <!-- ═══════════════════ RESEARCH — PATTERNS ═══════════════════ -->
 <div class="page" id="page-rsch-patterns">
-  <div class="coming-soon-card">
-    <div class="cs-title">Pattern Research</div>
-    <div class="cs-sub">Coming in Phase 3 — June 2026</div>
+  <div class="section-title" style="margin-bottom:12px">
+    Pattern Library
+    <button class="refresh-btn" onclick="loadPatterns()">Refresh</button>
+  </div>
+  <div id="patternLibraryTable">
+    <div class="tbl-empty">Loading…</div>
   </div>
 </div>
 
@@ -2304,6 +2380,8 @@ function switchResearchTab(tab) {
     'rsch-backtest':  loadResearchBacktest,
     'rsch-shadow':    loadResearchShadow,
     'rsch-decisions': loadResearchDecisions,
+    'rsch-discovery': loadDiscovery,
+    'rsch-patterns':  loadPatterns,
   };
   if (loaders[tab]) loaders[tab]();
 }
@@ -2657,6 +2735,143 @@ async function loadResearchDecisions() {
     </table>`;
   } catch (e) {
     console.error('loadResearchDecisions:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RESEARCH — DISCOVERY ENGINE
+// ═══════════════════════════════════════════════════════
+
+async function loadDiscovery() {
+  try {
+    const [hypRes, comboRes] = await Promise.all([
+      fetch('/api/research/hypotheses'),
+      fetch('/api/research/combinations'),
+    ]);
+    const hypData   = hypRes.ok   ? await hypRes.json()   : { hypotheses: [], summary: {} };
+    const comboData = comboRes.ok ? await comboRes.json() : { combinations: [] };
+
+    // Update stats bar
+    const s = hypData.summary || {};
+    document.getElementById('dsTotal').textContent  = s.tested_this_week ?? '—';
+    document.getElementById('dsSig').textContent    = s.significant ?? '—';
+    document.getElementById('dsShadow').textContent = s.in_shadow_lab ?? '—';
+    document.getElementById('dsPat').textContent    = s.patterns_active ?? '—';
+
+    // Render hypothesis feed
+    const feed = document.getElementById('hypothesisFeed');
+    const hyps = hypData.hypotheses || [];
+    if (!hyps.length) {
+      feed.innerHTML = '<div class="tbl-empty">No hypotheses yet — engine runs nightly at 02:00 UTC</div>';
+    } else {
+      feed.innerHTML = hyps.map(h => {
+        const statusClass = h.status === 'SIGNIFICANT' ? 'hyp-significant'
+                          : h.status === 'TESTING'     ? 'hyp-testing' : 'hyp-rejected';
+        const pill = h.status === 'SIGNIFICANT'
+          ? `<span class="pill-sig">SIGNIFICANT</span>`
+          : h.status === 'TESTING'
+          ? `<span class="pill-testing">TESTING</span>`
+          : `<span class="pill-rej">REJECTED</span>`;
+        const ic  = h.information_coefficient != null ? h.information_coefficient.toFixed(3) : '—';
+        const sh  = h.sharpe != null ? h.sharpe.toFixed(2) : '—';
+        const wr  = h.win_rate != null ? (h.win_rate * 100).toFixed(1) + '%' : '—';
+        const n   = h.signals_generated ?? '—';
+        const cat = h.category || '';
+        return `<div class="hyp-card ${statusClass}" onclick="this.querySelector('.hyp-stats-detail').style.display = this.querySelector('.hyp-stats-detail').style.display === 'none' ? 'flex' : 'none'">
+          <div class="hyp-header">
+            ${pill}
+            <span class="hyp-id">${h.hypothesis_id || ''}</span>
+            <span style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:auto">${cat}</span>
+          </div>
+          <div class="hyp-desc">${h.description || ''}</div>
+          <div class="hyp-stats">
+            <div class="hyp-stat">IC <span>${ic}</span></div>
+            <div class="hyp-stat">Sharpe <span>${sh}</span></div>
+            <div class="hyp-stat">WR <span>${wr}</span></div>
+            <div class="hyp-stat">Signals <span>${n}</span></div>
+          </div>
+          <div class="hyp-stats-detail" style="display:none;margin-top:8px;gap:14px;flex-wrap:wrap">
+            <div class="hyp-stat">p-value <span>${h.p_value != null ? h.p_value.toFixed(4) : '—'}</span></div>
+            <div class="hyp-stat">avg_r <span>${h.avg_r != null ? h.avg_r.toFixed(4) : '—'}</span></div>
+            <div class="hyp-stat">Instrument <span>${h.instrument || '—'}</span></div>
+            <div class="hyp-stat">Lookback <span>${h.lookback_days ?? '—'}d</span></div>
+            <div class="hyp-stat">Run <span>${h.run_date ? h.run_date.slice(0,10) : '—'}</span></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Render combinations table
+    const combos = comboData.combinations || [];
+    const comboWrap = document.getElementById('combinationsTable');
+    if (!combos.length) {
+      comboWrap.innerHTML = '<div class="tbl-empty">No combinations yet — explorer runs Saturday 03:00 UTC</div>';
+    } else {
+      comboWrap.innerHTML = `<table>
+        <thead><tr>
+          <th>Features</th><th>OOS IC</th><th>OOS AUC</th><th>Last Run</th>
+        </tr></thead>
+        <tbody>${combos.map(c => {
+          const ic = c.oos_ic != null ? c.oos_ic.toFixed(4) : '—';
+          const auc = c.oos_auc != null ? c.oos_auc.toFixed(3) : '—';
+          const icColor = c.oos_ic > 0.05 ? 'var(--green)' : c.oos_ic < 0 ? 'var(--red)' : 'var(--text)';
+          return `<tr>
+            <td style="font-family:var(--mono);font-size:11px">${c.features || ''}</td>
+            <td style="font-family:var(--mono);color:${icColor};font-weight:600">${ic}</td>
+            <td style="font-family:var(--mono)">${auc}</td>
+            <td style="color:var(--text3)">${c.run_date ? c.run_date.slice(0,10) : '—'}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    }
+  } catch (e) {
+    console.error('loadDiscovery:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RESEARCH — PATTERNS
+// ═══════════════════════════════════════════════════════
+
+async function loadPatterns() {
+  try {
+    const r = await fetch('/api/research/patterns');
+    if (!r.ok) return;
+    const data = await r.json();
+    const wrap = document.getElementById('patternLibraryTable');
+    const patterns = data.patterns || [];
+    if (!patterns.length) {
+      wrap.innerHTML = '<div class="tbl-empty">No patterns in library yet</div>';
+      return;
+    }
+    wrap.innerHTML = `<table>
+      <thead><tr>
+        <th>Name</th><th>Instrument</th><th>IC</th><th>Sharpe</th><th>WR</th><th>Decay</th><th>Status</th><th>Last Validated</th>
+      </tr></thead>
+      <tbody>${patterns.map(p => {
+        const decay = p.decay_score != null ? p.decay_score : 1.0;
+        const decayClass = decay > 0.7 ? 'pattern-decay-green'
+                         : decay > 0.3 ? 'pattern-decay-amber' : 'pattern-decay-red';
+        const ic  = p.information_coefficient != null ? p.information_coefficient.toFixed(3) : '—';
+        const sh  = p.sharpe != null ? p.sharpe.toFixed(2) : '—';
+        const wr  = p.win_rate != null ? (p.win_rate * 100).toFixed(1) + '%' : '—';
+        const statusPill = p.status === 'ACTIVE'
+          ? `<span class="pill-sig" style="font-size:10px">${p.status}</span>`
+          : `<span class="pill-rej" style="font-size:10px">${p.status || '—'}</span>`;
+        return `<tr>
+          <td style="font-weight:600">${p.name || p.pattern_id || ''}</td>
+          <td style="font-family:var(--mono)">${p.instrument || '—'}</td>
+          <td style="font-family:var(--mono)">${ic}</td>
+          <td style="font-family:var(--mono)">${sh}</td>
+          <td style="font-family:var(--mono)">${wr}</td>
+          <td><span class="${decayClass}" style="font-family:var(--mono)">${decay.toFixed(2)}</span></td>
+          <td>${statusPill}</td>
+          <td style="color:var(--text3)">${p.last_validated ? p.last_validated.slice(0,10) : '—'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  } catch (e) {
+    console.error('loadPatterns:', e);
   }
 }
 

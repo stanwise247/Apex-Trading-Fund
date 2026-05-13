@@ -543,12 +543,56 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS research_state (
         key TEXT PRIMARY KEY,
         value TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS hypothesis_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hypothesis_id TEXT UNIQUE NOT NULL,
+        description TEXT,
+        category TEXT,
+        instrument TEXT,
+        lookback_days INTEGER,
+        signals_generated INTEGER,
+        win_rate REAL,
+        sharpe REAL,
+        avg_r REAL,
+        information_coefficient REAL,
+        p_value REAL,
+        status TEXT DEFAULT 'TESTING',
+        run_date TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS feature_combinations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        features TEXT NOT NULL,
+        oos_ic REAL,
+        oos_auc REAL,
+        run_date TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pattern_library (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern_id TEXT UNIQUE NOT NULL,
+        name TEXT,
+        description TEXT,
+        discovery_source TEXT,
+        instrument TEXT,
+        signals_observed INTEGER DEFAULT 0,
+        win_rate REAL,
+        sharpe REAL,
+        information_coefficient REAL,
+        first_observed TEXT,
+        last_validated TEXT,
+        decay_score REAL DEFAULT 1.0,
+        status TEXT DEFAULT 'ACTIVE',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
     # Migrate: add dual-score columns to strategy_health_log if missing
     for col in ('backtest_score INTEGER', 'live_score INTEGER'):
         try:
             c.execute(f'ALTER TABLE strategy_health_log ADD COLUMN {col}')
         except Exception:
             pass  # already exists
+    # Migrate: add reason column to research_decisions if missing
+    try:
+        c.execute('ALTER TABLE research_decisions ADD COLUMN reason TEXT')
+    except Exception:
+        pass  # already exists
     conn.commit()
     # strategy_config — isolated commit so any prior aborted tx cannot block it
     try:
@@ -1730,6 +1774,33 @@ def background_scheduler():
                     logger.info('Research Division: daily backtest complete')
                 except Exception as _bte:
                     logger.error(f'Research Division daily backtest failed: {_bte}')
+
+        # ── Research Division — hypothesis engine (02:00 UTC daily) ──
+        _now_hyp = datetime.now(timezone.utc)
+        if _now_hyp.hour == 2:
+            if not hasattr(background_scheduler, '_last_hypothesis_day') or \
+                    background_scheduler._last_hypothesis_day != _today_utc:
+                background_scheduler._last_hypothesis_day = _today_utc
+                try:
+                    import research_division as _rd_mod
+                    _rd_mod.run_hypothesis_engine()
+                    _rd_mod.update_pattern_library()
+                    logger.info('Research Division: hypothesis engine complete')
+                except Exception as _hye:
+                    logger.error(f'Research Division hypothesis engine failed: {_hye}')
+
+        # ── Research Division — combination explorer (Saturday 03:00 UTC) ──
+        _now_combo = datetime.now(timezone.utc)
+        if _now_combo.weekday() == 5 and _now_combo.hour == 3:
+            if not hasattr(background_scheduler, '_last_combo_day') or \
+                    background_scheduler._last_combo_day != _today_utc:
+                background_scheduler._last_combo_day = _today_utc
+                try:
+                    import research_division as _rd_mod
+                    _rd_mod.run_combination_explorer()
+                    logger.info('Research Division: combination explorer complete')
+                except Exception as _cbe:
+                    logger.error(f'Research Division combination explorer failed: {_cbe}')
 
         # ── Research Division — weekly health check (Monday 06:00 UTC) ──
         # DB-backed guard: persists across restarts so the check runs exactly once
@@ -4866,6 +4937,217 @@ def research_decisions():
     except Exception as e:
         logger.error(f'research_decisions error: {e}')
         return jsonify({'ok': False, 'error': str(e), 'decisions': []})
+
+
+# ─── Phase 3 decision workflow endpoints ────────────────────────────────────
+
+@app.route('/api/research/decisions/<int:decision_id>/approve', methods=['POST'])
+def research_decision_approve(decision_id):
+    """Approve a pending research decision (PROMOTION_REVIEW → APPROVED)."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id, decision_type, subject, status FROM research_decisions WHERE id = ?",
+            (decision_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'ok': False, 'error': 'Decision not found'}), 404
+        if row[3] not in ('PENDING',):
+            conn.close()
+            return jsonify({'ok': False, 'error': f'Cannot approve decision in status {row[3]}'}), 400
+        data = request.get_json(force=True) or {}
+        note = data.get('note', '')
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE research_decisions SET status='APPROVED', decided_at=?, outcome=? WHERE id=?",
+            (now_iso, f'APPROVED{": " + note if note else ""}', decision_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Research Decision {decision_id} ({row[2]}): APPROVED')
+        return jsonify({'ok': True, 'decision_id': decision_id, 'status': 'APPROVED'})
+    except Exception as e:
+        logger.error(f'research_decision_approve: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/research/decisions/<int:decision_id>/reject', methods=['POST'])
+def research_decision_reject(decision_id):
+    """Reject a pending research decision with an optional reason."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id, decision_type, subject, status FROM research_decisions WHERE id = ?",
+            (decision_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'ok': False, 'error': 'Decision not found'}), 404
+        if row[3] not in ('PENDING',):
+            conn.close()
+            return jsonify({'ok': False, 'error': f'Cannot reject decision in status {row[3]}'}), 400
+        data = request.get_json(force=True) or {}
+        reason = data.get('reason', 'Manual rejection')
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE research_decisions SET status='REJECTED', decided_at=?, outcome=? WHERE id=?",
+            (now_iso, f'REJECTED: {reason}', decision_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Research Decision {decision_id} ({row[2]}): REJECTED — {reason}')
+        return jsonify({'ok': True, 'decision_id': decision_id, 'status': 'REJECTED',
+                        'reason': reason})
+    except Exception as e:
+        logger.error(f'research_decision_reject: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/research/decisions/<int:decision_id>/extend', methods=['POST'])
+def research_decision_extend(decision_id):
+    """Extend shadow lab by 4 weeks: reset week_number to current-4 and continue paper trading."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            "SELECT id, decision_type, subject, status FROM research_decisions WHERE id = ?",
+            (decision_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'ok': False, 'error': 'Decision not found'}), 404
+        subject = row[2]
+        # Find matching shadow lab entry
+        shadow_row = conn.execute(
+            "SELECT id, week_number, total_weeks FROM shadow_lab WHERE strategy_name = ?",
+            (subject,)
+        ).fetchone()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if shadow_row:
+            shadow_id, week_num, total_weeks = shadow_row
+            new_week = max(0, int(week_num or 0) - 4)
+            conn.execute(
+                "UPDATE shadow_lab SET week_number=?, status='ACTIVE' WHERE id=?",
+                (new_week, shadow_id)
+            )
+        conn.execute(
+            "UPDATE research_decisions SET status='EXTENDED', decided_at=?, "
+            "outcome='Extended by 4 weeks for continued paper trading' WHERE id=?",
+            (now_iso, decision_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Research Decision {decision_id} ({subject}): EXTENDED 4 weeks')
+        return jsonify({'ok': True, 'decision_id': decision_id, 'status': 'EXTENDED'})
+    except Exception as e:
+        logger.error(f'research_decision_extend: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ─── Phase 3 Discovery Engine endpoints ──────────────────────────────────────
+
+@app.route('/api/research/hypotheses', methods=['GET'])
+def research_hypotheses():
+    """Return hypothesis_log results. Optional ?status=SIGNIFICANT filter."""
+    try:
+        conn = _db.connect()
+        status_filter = request.args.get('status', None)
+        if status_filter:
+            rows = conn.execute(
+                "SELECT id, hypothesis_id, description, category, instrument, "
+                "       lookback_days, signals_generated, win_rate, sharpe, avg_r, "
+                "       information_coefficient, p_value, status, run_date, created_at "
+                "FROM hypothesis_log WHERE status = ? "
+                "ORDER BY COALESCE(ABS(information_coefficient), 0) DESC LIMIT 200",
+                (status_filter.upper(),)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, hypothesis_id, description, category, instrument, "
+                "       lookback_days, signals_generated, win_rate, sharpe, avg_r, "
+                "       information_coefficient, p_value, status, run_date, created_at "
+                "FROM hypothesis_log "
+                "ORDER BY run_date DESC, COALESCE(ABS(information_coefficient), 0) DESC LIMIT 200"
+            ).fetchall()
+        conn.close()
+        cols = ['id', 'hypothesis_id', 'description', 'category', 'instrument',
+                'lookback_days', 'signals_generated', 'win_rate', 'sharpe', 'avg_r',
+                'information_coefficient', 'p_value', 'status', 'run_date', 'created_at']
+        hypotheses = [dict(zip(cols, r)) for r in rows]
+
+        # Summary counts
+        all_rows = _db.connect()
+        try:
+            counts = all_rows.execute(
+                "SELECT status, COUNT(*) FROM hypothesis_log GROUP BY status"
+            ).fetchall()
+            summary = {r[0]: r[1] for r in counts}
+            in_shadow = all_rows.execute(
+                "SELECT COUNT(*) FROM shadow_lab WHERE status='ACTIVE'"
+            ).fetchone()
+            patterns_active = all_rows.execute(
+                "SELECT COUNT(*) FROM pattern_library WHERE status='ACTIVE'"
+            ).fetchone()
+        finally:
+            all_rows.close()
+
+        return jsonify({
+            'ok': True,
+            'hypotheses': hypotheses,
+            'summary': {
+                'tested_this_week': sum(summary.values()),
+                'significant': summary.get('SIGNIFICANT', 0),
+                'testing': summary.get('TESTING', 0),
+                'rejected': summary.get('REJECTED', 0),
+                'in_shadow_lab': in_shadow[0] if in_shadow else 0,
+                'patterns_active': patterns_active[0] if patterns_active else 0,
+            }
+        })
+    except Exception as e:
+        logger.error(f'research_hypotheses error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'hypotheses': []})
+
+
+@app.route('/api/research/combinations', methods=['GET'])
+def research_combinations():
+    """Return top 10 feature combinations by OOS IC."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT id, features, oos_ic, oos_auc, run_date, created_at "
+            "FROM feature_combinations "
+            "ORDER BY ABS(COALESCE(oos_ic, 0)) DESC LIMIT 10"
+        ).fetchall()
+        conn.close()
+        cols = ['id', 'features', 'oos_ic', 'oos_auc', 'run_date', 'created_at']
+        combinations = [dict(zip(cols, r)) for r in rows]
+        return jsonify({'ok': True, 'combinations': combinations})
+    except Exception as e:
+        logger.error(f'research_combinations error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'combinations': []})
+
+
+@app.route('/api/research/patterns', methods=['GET'])
+def research_patterns():
+    """Return pattern_library ACTIVE patterns."""
+    try:
+        conn = _db.connect()
+        rows = conn.execute(
+            "SELECT id, pattern_id, name, description, discovery_source, instrument, "
+            "       signals_observed, win_rate, sharpe, information_coefficient, "
+            "       first_observed, last_validated, decay_score, status, created_at "
+            "FROM pattern_library WHERE status != 'DEAD' "
+            "ORDER BY decay_score DESC, COALESCE(information_coefficient, 0) DESC"
+        ).fetchall()
+        conn.close()
+        cols = ['id', 'pattern_id', 'name', 'description', 'discovery_source', 'instrument',
+                'signals_observed', 'win_rate', 'sharpe', 'information_coefficient',
+                'first_observed', 'last_validated', 'decay_score', 'status', 'created_at']
+        patterns = [dict(zip(cols, r)) for r in rows]
+        return jsonify({'ok': True, 'patterns': patterns})
+    except Exception as e:
+        logger.error(f'research_patterns error: {e}')
+        return jsonify({'ok': False, 'error': str(e), 'patterns': []})
 
 
 @app.route('/api/apex/regime', methods=['GET'])
