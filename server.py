@@ -2177,12 +2177,19 @@ def background_scheduler():
                             logger.error(f'CRITICAL: log_trade() returned None — {_sym} {_dirn} {_setup} NOT in DB')
                     except Exception as _apex_lte:
                         logger.error(f'CRITICAL: log_trade() EXCEPTION — {_sym} {_dirn} {_setup}: {_apex_lte}', exc_info=True)
-                    try:
-                        msg = (format_alert_e(result) if _setup == 'E_ema50_pullback'
-                               else format_alert(result))
-                        send_telegram(msg + _risk_footer)
-                    except Exception as _apex_te:
-                        logger.error(f'{_setup} send_telegram failed {_sym}: {_apex_te}')
+                    # Gate Telegram on successful log_trade — never alert for unlogged trade
+                    if not _apex_tid:
+                        logger.critical(
+                            f'[A/B/C/E] CRITICAL: Skipping Telegram for {_sym} {_setup} — '
+                            f'log_trade did not return a trade_id. Signal not in DB.'
+                        )
+                    else:
+                        try:
+                            msg = (format_alert_e(result) if _setup == 'E_ema50_pullback'
+                                   else format_alert(result))
+                            send_telegram(msg + _risk_footer)
+                        except Exception as _apex_te:
+                            logger.error(f'{_setup} send_telegram failed {_sym}: {_apex_te}')
                     if _apex_tid:
                         if _ctrl_sid in PAPER_ONLY_SETUPS:
                             logger.info(
@@ -2378,24 +2385,33 @@ def background_scheduler():
                                     exc_info=True
                                 )
 
-                            # ── [I-5/6] send_telegram — risk footer computed here, not before loop ─
-                            try:
-                                logger.info(f'[I-5/6] Calling send_telegram for {_sym}')
-                                try:
-                                    _i_risk_footer = (
-                                        f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
-                                        f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
-                                        f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
-                                    )
-                                except Exception:
-                                    _i_risk_footer = ''
-                                msg = format_i_alert(sig) + _i_risk_footer
-                                send_telegram(msg)
-                            except Exception as _i_te:
+                            # ── [I-5/6] send_telegram — ONLY if log_trade succeeded ─────
+                            # NEVER send Telegram for a trade that isn't in the DB.
+                            # If _i_tid is None (log_trade failed), skip Telegram entirely.
+                            if not _i_tid:
                                 logger.critical(
-                                    f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}',
-                                    exc_info=True
+                                    f'[I-5/6] CRITICAL: Skipping Telegram for {_sym} — '
+                                    f'log_trade did not return a trade_id. '
+                                    f'Signal lost. Check [I-4/6] CRITICAL above for reason.'
                                 )
+                            else:
+                                try:
+                                    logger.info(f'[I-5/6] Calling send_telegram for {_sym} (trade_id={_i_tid})')
+                                    try:
+                                        _i_risk_footer = (
+                                            f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
+                                            f'Risk: {_rg_i.dd.get_risk_multiplier():.2f}× | '
+                                            f'DD: {_rg_i.dd.get_drawdown_pct():.1f}%</i>'
+                                        )
+                                    except Exception:
+                                        _i_risk_footer = ''
+                                    msg = format_i_alert(sig) + _i_risk_footer
+                                    send_telegram(msg)
+                                except Exception as _i_te:
+                                    logger.critical(
+                                        f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}',
+                                        exc_info=True
+                                    )
 
                             # ── [I-6/6] Tradovate — MNQ paper only, ES live ───────────
                             if _sym == 'MNQ':
