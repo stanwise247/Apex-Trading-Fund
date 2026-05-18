@@ -45,19 +45,37 @@ HIGH_IMPACT_KEYWORDS = [
     'pce price index', 'personal consumption expenditure',
 ]
 
-# Hardcoded fallback events — updated for next 60 days from 2026-04-22
+# Hardcoded fallback events — updated 2026-05-18, covers through July 2026
+# Past events are auto-filtered in _load_hardcoded(); keeping for reference.
 # Format: (ISO UTC datetime string, event name)
 FALLBACK_EVENTS = [
+    # ── May 2026 (all before today 2026-05-18 are auto-filtered) ──
     ('2026-05-01T12:30:00Z', 'Non-Farm Payrolls'),
     ('2026-05-07T18:00:00Z', 'FOMC Rate Decision'),
     ('2026-05-07T18:30:00Z', 'FOMC Press Conference'),
     ('2026-05-13T12:30:00Z', 'CPI'),
     ('2026-05-15T12:30:00Z', 'PPI'),
-    ('2026-05-28T12:30:00Z', 'GDP Advance'),
+    ('2026-05-22T12:30:00Z', 'Retail Sales'),
+    ('2026-05-28T12:30:00Z', 'GDP Advance Q1 2026'),
+    ('2026-05-29T12:30:00Z', 'PCE Inflation'),
+    # ── June 2026 ──
     ('2026-06-04T12:30:00Z', 'Non-Farm Payrolls'),
     ('2026-06-11T18:00:00Z', 'FOMC Rate Decision'),
     ('2026-06-11T18:30:00Z', 'FOMC Press Conference'),
     ('2026-06-12T12:30:00Z', 'CPI'),
+    ('2026-06-13T12:30:00Z', 'PPI'),
+    ('2026-06-18T12:30:00Z', 'Retail Sales'),
+    ('2026-06-25T12:30:00Z', 'GDP Final Q1 2026'),
+    ('2026-06-26T12:30:00Z', 'PCE Inflation'),
+    # ── July 2026 ──
+    ('2026-07-02T12:30:00Z', 'Non-Farm Payrolls'),
+    ('2026-07-10T12:30:00Z', 'CPI'),
+    ('2026-07-11T12:30:00Z', 'PPI'),
+    ('2026-07-16T12:30:00Z', 'Retail Sales'),
+    ('2026-07-29T18:00:00Z', 'FOMC Rate Decision'),
+    ('2026-07-29T18:30:00Z', 'FOMC Press Conference'),
+    ('2026-07-30T12:30:00Z', 'GDP Advance Q2 2026'),
+    ('2026-07-31T12:30:00Z', 'PCE Inflation'),
 ]
 
 

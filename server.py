@@ -1775,6 +1775,21 @@ def background_scheduler():
                 except Exception as _bte:
                     logger.error(f'Research Division daily backtest failed: {_bte}')
 
+        # ── Research Division — shadow lab live scanning (every 5 min during session) ──
+        if not hasattr(background_scheduler, '_last_shadow_scan'):
+            background_scheduler._last_shadow_scan = 0
+        _now_ss = datetime.now(timezone.utc)
+        _in_session_ss = 7 <= _now_ss.hour < 21
+        if _in_session_ss and now - background_scheduler._last_shadow_scan >= 300:
+            background_scheduler._last_shadow_scan = now
+            try:
+                import research_division as _rd_ss
+                shadow_signals = _rd_ss.run_shadow_lab_scans()
+                if shadow_signals:
+                    logger.info(f'Shadow lab: {len(shadow_signals)} signal(s) generated this tick')
+            except Exception as _ss_e:
+                logger.warning(f'Shadow lab scan error: {_ss_e}')
+
         # ── Research Division — hypothesis engine (02:00 UTC daily) ──
         _now_hyp = datetime.now(timezone.utc)
         if _now_hyp.hour == 2:

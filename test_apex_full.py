@@ -350,19 +350,22 @@ def test_5_data_freshness():
         mnq_gates = next((r.get('gates', []) for r in results if r.get('symbol') == 'MNQ'), [])
         htf_gate  = next((g for g in mnq_gates if g.get('gate') == 1), None)
 
-        if htf_gate and 'close=' in str(htf_gate.get('detail', '')):
-            detail = htf_gate['detail']
+        detail = str(htf_gate.get('detail', '')) if htf_gate else ''
+        # Any HTF bias computation (bullish or bearish) is evidence of live data.
+        # Bearish bias says "4hour bias=BEARISH — no long" without "close="; still valid.
+        has_live_data = htf_gate and ('close=' in detail or 'bias=' in detail)
+        if has_live_data:
             _pass('TEST 5  Data freshness — Railway API', f'MNQ data live: {detail}')
         elif htf_gate:
-            # Gate exists but may have failed — still means data pipeline attempted
+            # Gate exists but detail has no bias info — check market hours
             now_utc = datetime.now(timezone.utc)
             is_market_hours = (now_utc.weekday() < 5 and 13 <= now_utc.hour < 21)
             if not is_market_hours:
                 _pass('TEST 5  Data freshness — Railway API',
-                      f'Outside market hours — gate: {htf_gate.get("detail")}')
+                      f'Outside market hours — gate: {detail}')
             else:
                 _fail('TEST 5  Data freshness — Railway API',
-                      f'MNQ HTF gate: {htf_gate.get("detail")} (may indicate stale data)')
+                      f'MNQ HTF gate missing bias info (may indicate stale data): {detail}')
         else:
             _fail('TEST 5  Data freshness — Railway API', 'No MNQ HTF gate in scan response')
 
