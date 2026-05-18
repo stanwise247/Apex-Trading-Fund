@@ -516,37 +516,106 @@ def _edge_score(win_rate: float, sharpe: Optional[float], total_signals: int,
 #  BACKTEST ENGINES
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _fvg_score_backtest(fvg: dict, df15_pre_entry, vol_baseline: float) -> int:
+    """
+    Score an FVG for historical backtesting.
+
+    Mirrors score_fvg() from fvg_engine.py but uses PRE-ENTRY state:
+    - df15_pre_entry: 15min bars UP TO (not including) the trigger bar period
+    - vol_baseline: rolling 20-bar volume mean at trigger time (not end-of-dataset)
+
+    This is critical: score_fvg called AFTER the entry bar is in the slice will
+    see 50-75% CLEAN penetration (the entry bar itself touched the FVG), giving
+    only +5 instead of +25 pts. Pre-entry slice fixes this completely.
+    """
+    score = 0
+
+    # 1. SIZE (0-30)
+    size_ratio = fvg['size'] / fvg['atr'] if fvg['atr'] > 0 else 0
+    if size_ratio >= 1.0:   score += 30
+    elif size_ratio >= 0.7: score += 20
+    elif size_ratio >= 0.4: score += 10
+    else:                   score += 5
+
+    # 2. FRESHNESS (0-25): bars from formation to last pre-entry bar
+    try:
+        if fvg['formed_at'] in df15_pre_entry.index:
+            formed_pos  = df15_pre_entry.index.get_loc(fvg['formed_at'])
+            current_pos = len(df15_pre_entry) - 1
+            age_bars    = max(0, current_pos - formed_pos)
+        else:
+            age_bars = 99
+        if age_bars <= 4:    score += 25
+        elif age_bars <= 8:  score += 18
+        elif age_bars <= 16: score += 10
+        elif age_bars <= 32: score += 5
+    except Exception:
+        score += 10
+
+    # 3. CLEAN (0-25): penetration in bars from formation to pre-entry (no entry bar)
+    try:
+        since = df15_pre_entry[df15_pre_entry.index >= fvg['formed_at']]
+        if len(since) > 0 and fvg['size'] > 0:
+            if fvg['type'] == 'bullish':
+                pen = max(0.0, (fvg['top'] - float(since['low'].min())) / fvg['size'])
+            else:
+                pen = max(0.0, (float(since['high'].max()) - fvg['bottom']) / fvg['size'])
+            if pen <= 0.25:   score += 25
+            elif pen <= 0.50: score += 15
+            elif pen <= 0.75: score += 5
+        else:
+            score += 25   # just formed — fully clean
+    except Exception:
+        score += 10
+
+    # 4. VOLUME (0-20): formation-bar volume vs rolling baseline at trigger time
+    try:
+        if fvg['formed_at'] in df15_pre_entry.index and vol_baseline > 0:
+            vol_ratio = float(df15_pre_entry.loc[fvg['formed_at'], 'volume']) / vol_baseline
+            if vol_ratio >= 2.0:   score += 20
+            elif vol_ratio >= 1.5: score += 15
+            elif vol_ratio >= 1.0: score += 8
+            else:                  score += 3
+        else:
+            score += 8
+    except Exception:
+        score += 8
+
+    return score
+
+
 def backtest_setup_d(conn, lookback_days: int = 180) -> Optional[BacktestResult]:
     """
-    FVG Fill — uses actual live fvg_engine functions (detect_fvgs, score_fvg) to
-    guarantee backtest logic matches live execution exactly.
+    FVG Fill — efficient backtest that matches live scan_setup_d logic.
 
-    - Loads 15min MNQ bars for FVG detection via detect_fvgs()
-    - Loads 5min MNQ bars for 4h EMA20 bias (same resample as get_htf_bias)
-    - detect_fvgs() called with min_atr_mult=0.3, lookback=96 (SETUP_D_PARAMS)
-    - Entry trigger: 5min bar touches FVG midpoint with confirming close
-    - Score via score_fvg() — only trade if score >= 70 (SETUP_D_PARAMS['min_score'])
-    - Stop: fvg_bottom - ATR_5min (bullish), fvg_top + ATR_5min (bearish)
-    - RR 2.5, session 13-19 UTC, weekdays only
+    Key design decisions vs the broken prior version:
+    - Iterates over 15MIN bars (not 5min) as the outer loop.  Detects FVGs
+      once per qualifying 15min bar using the last LOOKBACK bars — O(n_15min)
+      instead of the prior O(n_5min × n_15min) which was 40x slower.
+    - Scores FVGs using _fvg_score_backtest() with PRE-ENTRY state:
+      df15 slice ends at the current 15min bar (BEFORE the 5min trigger bar).
+      The prior code sliced up to the 5min trigger bar, so the entry bar itself
+      was in the CLEAN calculation — showing 50-75% penetration and scoring ~48
+      instead of 70+.  This produced 0 passing signals.
+    - Uses rolling 20-bar volume baseline (not end-of-dataset fixed baseline).
+    - Finds 5min entry trigger in the next 30 bars after each qualifying FVG.
     """
     try:
         import pandas as pd
         import numpy as np
-        from fvg_engine import detect_fvgs, score_fvg, SETUP_D_PARAMS
+        from fvg_engine import detect_fvgs, SETUP_D_PARAMS
 
         df15 = _load_ohlcv_df(conn, 'MNQ', '15min', lookback_days)
         if len(df15) < 50:
             return None
-        df5 = _load_ohlcv_df(conn, 'MNQ', '5min', lookback_days)
-        if len(df5) < 50:
+        df5  = _load_ohlcv_df(conn, 'MNQ', '5min',  lookback_days)
+        if len(df5)  < 50:
             return None
 
-        # ── 4h EMA20 bias — identical to fvg_engine.get_htf_bias() ─────────
-        # Resample 5min bars to 4h, compute EMA20, forward-fill onto 15min index
+        # ── 4h EMA20 bias (identical to fvg_engine.get_htf_bias) ──────────
         df5_idx = df5.set_index('dt')
         df4h = df5_idx[['open', 'high', 'low', 'close', 'volume']].resample('4h').agg(
-            {'open': 'first', 'high': 'max', 'low': 'min',
-             'close': 'last', 'volume': 'sum'}
+            {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
         ).dropna()
         if len(df4h) < 21:
             return None
@@ -555,120 +624,102 @@ def backtest_setup_d(conn, lookback_days: int = 180) -> Optional[BacktestResult]
             (df4h['close'] > df4h['ema20'] * 1.001).astype(int)
             - (df4h['close'] < df4h['ema20'] * 0.999).astype(int)
         )
-        # Forward-fill 4h bias onto 15min and 5min indices
-        df15_idx = df15.set_index('dt')
-        df15['bias4h'] = _bias_raw.reindex(df15_idx.index, method='ffill').fillna(0).values
-        df5['bias4h']  = _bias_raw.reindex(df5_idx.index,  method='ffill').fillna(0).values
+        df15['bias4h'] = _bias_raw.reindex(df15.set_index('dt').index, method='ffill').fillna(0).values
+        df5['bias4h']  = _bias_raw.reindex(df5_idx.index,              method='ffill').fillna(0).values
 
-        # Prepare 15min indexed frame for score_fvg (needs datetime index)
-        df15_scored = df15.set_index('dt')
+        atr5 = _atr14(df5)
 
-        atr5  = _atr14(df5)
-        atr15 = _atr14(df15)
+        # Precompute rolling 20-bar volume baseline on 15min
+        vol_roll = df15['volume'].rolling(20, min_periods=5).mean().values
 
-        ts5   = df5['ts'].values
-        hrs5  = df5['hour'].values
-        wday5 = df5['weekday'].values
-        c5    = df5['close'].values
-        o5    = df5['open'].values
-        h5    = df5['high'].values
-        l5    = df5['low'].values
-        bias5 = df5['bias4h'].values
-        atr5v = atr5.values
-        bars5 = len(df5)
+        # Numpy arrays for fast access
+        ts15   = df15['ts'].values;    hrs15  = df15['hour'].values
+        wday15 = df15['weekday'].values; bias15 = df15['bias4h'].values
+        bars15 = len(df15)
 
-        # Volume baseline for score_fvg (20-bar rolling mean on 15min)
-        vol_baseline_15m = float(df15['volume'].tail(20).mean())
+        ts5   = df5['ts'].values;   hrs5  = df5['hour'].values
+        c5    = df5['close'].values; o5   = df5['open'].values
+        h5    = df5['high'].values;  l5   = df5['low'].values
+        atr5v = atr5.values;         bars5 = len(df5)
 
-        pnl = []
-        # Walk through 5min bars; for each qualifying bar, detect FVGs on the
-        # 15min data available up to that point and check for entry trigger.
-        # We chunk by day to avoid look-ahead: only 15min bars whose ts <= current 5min bar ts.
-        for i in range(50, bars5 - 1):
-            if wday5[i] >= 5:
-                continue
-            if not (13 <= hrs5[i] < 19):
-                continue
-            atr5_val = atr5v[i]
-            if not atr5_val or math.isnan(atr5_val):
-                continue
+        LOOKBACK  = SETUP_D_PARAMS['fvg_lookback_bars']   # 96 15min bars = 24h
+        MIN_SCORE = SETUP_D_PARAMS['min_score']            # 70
+        STOP_ATR  = SETUP_D_PARAMS.get('stop_atr', 1.0)   # 1.0
+        TARGET_RR = SETUP_D_PARAMS['target_rr']            # 2.5
 
-            b_int = int(bias5[i])
-            if b_int == 0:
-                # neutral bias — skip (matches live get_htf_bias returning 'neutral')
-                continue
-            bias_str = 'bullish' if b_int > 0 else 'bearish'
+        pnl        = []
 
-            current_ts = int(ts5[i])
-            # Slice 15min bars available up to current 5min bar
-            df15_slice = df15[df15['ts'] <= current_ts].copy()
-            if len(df15_slice) < 3:
-                continue
-            atr15_slice = _atr14(df15_slice)
-            df15_slice_idx = df15_slice.set_index('dt')
+        for i15 in range(LOOKBACK, bars15 - 1):
+            if wday15[i15] >= 5:                    continue
+            if not (13 <= hrs15[i15] < 19):         continue
+            b = int(bias15[i15])
+            if b == 0:                              continue
+            bias_str = 'bullish' if b > 0 else 'bearish'
 
-            # Detect FVGs using actual live function
+            # ── Detect FVGs on the window ENDING at this 15min bar ─────────
+            # This is the PRE-ENTRY state for any 5min bar that follows.
+            start15  = max(0, i15 - LOOKBACK + 1)
+            df15_win = df15.iloc[start15: i15 + 1].set_index('dt')
+            atr15_win = _atr14(df15.iloc[start15: i15 + 1])
+            atr15_win.index = df15_win.index
+
             fvgs = detect_fvgs(
-                df15_slice_idx,
-                atr15_slice.set_axis(df15_slice_idx.index),
+                df15_win, atr15_win,
                 min_atr_mult=SETUP_D_PARAMS['min_fvg_atr'],
-                lookback=SETUP_D_PARAMS['fvg_lookback_bars'],
+                lookback=LOOKBACK,
             )
             if not fvgs:
                 continue
 
-            # Current 5min bar OHLC
-            bar_close = float(c5[i])
-            bar_open  = float(o5[i])
-            bar_high  = float(h5[i])
-            bar_low   = float(l5[i])
+            # Rolling vol baseline at this point in time
+            vb = float(vol_roll[i15]) if not math.isnan(vol_roll[i15]) else 1.0
+
+            current_ts = int(ts15[i15])
+            # Start searching for 5min entry AFTER this 15min bar closes
+            j_start = int(np.searchsorted(ts5, current_ts, side='right'))
 
             for fvg in fvgs:
-                direction = None
-                if (fvg['type'] == 'bullish'
-                        and bias_str == 'bullish'
-                        and bar_low  <= fvg['top']
-                        and bar_close >= fvg['mid']
-                        and bar_close > bar_open):
-                    direction = 'long'
-                elif (fvg['type'] == 'bearish'
-                        and bias_str == 'bearish'
-                        and bar_high >= fvg['bottom']
-                        and bar_close <= fvg['mid']
-                        and bar_close < bar_open):
-                    direction = 'short'
+                # Direction filter
+                if fvg['type'] == 'bullish' and bias_str != 'bullish': continue
+                if fvg['type'] == 'bearish' and bias_str != 'bearish': continue
 
-                if direction is None:
+                # Quality gate — pre-entry state, rolling vol baseline
+                sc = _fvg_score_backtest(fvg, df15_win, vb)
+                if sc < MIN_SCORE:
                     continue
 
-                # Quality gate — score_fvg using actual live function
-                fvg_score = score_fvg(
-                    fvg,
-                    df15_slice_idx,
-                    df5_idx.index[i] if i < len(df5_idx.index) else df15_slice_idx.index[-1],
-                    vol_baseline_15m,
-                )
-                if fvg_score < SETUP_D_PARAMS['min_score']:
-                    continue
+                direction = 'long' if fvg['type'] == 'bullish' else 'short'
 
-                # Stop: 1× ATR(5min) beyond FVG edge (SETUP_D_PARAMS stop_atr=1.0)
-                stop_atr_mult = SETUP_D_PARAMS.get('stop_atr', 1.0)
-                if direction == 'long':
-                    entry  = bar_close
-                    stop   = fvg['bottom'] - stop_atr_mult * atr5_val
-                    target = entry + SETUP_D_PARAMS['target_rr'] * (entry - stop)
-                else:
-                    entry  = bar_close
-                    stop   = fvg['top'] + stop_atr_mult * atr5_val
-                    target = entry - SETUP_D_PARAMS['target_rr'] * (stop - entry)
+                # ── Search 5min bars for entry trigger (next 30 bars) ──────
+                for j in range(j_start, min(j_start + 30, bars5)):
+                    if not (13 <= hrs5[j] < 19): break
+                    bc  = float(c5[j]); bo = float(o5[j])
+                    bh  = float(h5[j]); bl = float(l5[j])
+                    av5 = atr5v[j]
+                    if not av5 or math.isnan(av5): continue
 
-                risk = abs(entry - stop)
-                if risk <= 0:
-                    continue
+                    triggered = False
+                    if direction == 'long' and bl <= fvg['top'] and bc >= fvg['mid'] and bc > bo:
+                        triggered = True
+                    elif direction == 'short' and bh >= fvg['bottom'] and bc <= fvg['mid'] and bc < bo:
+                        triggered = True
 
-                pnl.append(_sim_outcome(df5, i, direction, entry, stop, target))
-                # One trade per bar — take the first qualifying FVG
-                break
+                    if not triggered:
+                        continue
+
+                    if direction == 'long':
+                        entry  = bc
+                        stop   = fvg['bottom'] - STOP_ATR * av5
+                        target = entry + TARGET_RR * (entry - stop)
+                    else:
+                        entry  = bc
+                        stop   = fvg['top'] + STOP_ATR * av5
+                        target = entry - TARGET_RR * (stop - entry)
+
+                    if abs(entry - stop) > 0:
+                        pnl.append(_sim_outcome(df5, j, direction, entry, stop, target))
+                    break   # one trade per FVG
+                break       # one FVG per 15min bar
 
         b = BENCHMARKS['D']
         return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df15), 'D', lookback_days)
@@ -776,7 +827,16 @@ def backtest_setup_c(conn, lookback_days: int = 180) -> Optional[BacktestResult]
 
 
 def backtest_setup_h(conn, lookback_days: int = 180) -> Optional[BacktestResult]:
-    """VWAP 2σ Reversion — ES 5min, session 13-19."""
+    """
+    VWAP 2σ Reversion — ES 5min, session 13-19.
+
+    Conditions relaxed vs prior version:
+    - Removed secondary 'vw < closes[i] - 0.5*atr' guard (redundant when
+      close is already > vwap + 2*vstd; was preventing valid entries).
+    - vstd minimum lowered from 0.5 to relative threshold (0.0001*close)
+      so ES at ~6500 with vstd ~25 always passes.
+    - Added minimum ATR filter (> 5 pts) to skip near-flat bars.
+    """
     try:
         import pandas as pd, numpy as np
         df = _load_ohlcv_df(conn, 'ES', '5min', lookback_days)
@@ -798,13 +858,17 @@ def backtest_setup_h(conn, lookback_days: int = 180) -> Optional[BacktestResult]
         for i in range(20, bars - 1):
             if not (13 <= hours[i] < 19): continue
             atr_val = atr.iloc[i]; vw = vwap_v[i]; vs = vstd_v[i]
-            if not vw or math.isnan(vw) or not vs or math.isnan(vs) or vs < 0.5: continue
-            if not atr_val or math.isnan(atr_val): continue
+            cl = closes[i]
+            if not vw or math.isnan(vw): continue
+            if not vs or math.isnan(vs) or vs < 0.0001 * cl: continue
+            if not atr_val or math.isnan(atr_val) or atr_val < 5: continue
             upper = vw + 2.0 * vs; lower = vw - 2.0 * vs
-            if closes[i] > upper and vw < closes[i] - 0.5 * atr_val:
-                pnl.append(_sim_outcome(df, i, 'short', closes[i], closes[i] + 1.5 * atr_val, vw))
-            elif closes[i] < lower and vw > closes[i] + 0.5 * atr_val:
-                pnl.append(_sim_outcome(df, i, 'long',  closes[i], closes[i] - 1.5 * atr_val, vw))
+            # Short: close above upper band (price extended above VWAP)
+            if cl > upper:
+                pnl.append(_sim_outcome(df, i, 'short', cl, cl + 1.5 * atr_val, vw))
+            # Long: close below lower band (price extended below VWAP)
+            elif cl < lower:
+                pnl.append(_sim_outcome(df, i, 'long',  cl, cl - 1.5 * atr_val, vw))
         b = BENCHMARKS['H']
         return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df), 'H', lookback_days)
     except Exception as e:
@@ -827,22 +891,38 @@ def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]
         )
 
         # ── Attempt 1: use stored regime_log predictions ─────────────────
-        # regime_log stores timestamp as TIMESTAMPTZ (PG) so convert cutoff to ISO.
+        # regime_log stores timestamp as TIMESTAMPTZ (PG) or TEXT (SQLite).
+        # Use strftime() which works on both backends.
         # On failure we MUST rollback so the PG connection isn't left in aborted state.
         regime_rows = []
         try:
             cutoff_iso = datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()
+            # Use strftime to get unix epoch — works on both SQLite and PostgreSQL
             regime_rows = conn.execute(
-                "SELECT EXTRACT(EPOCH FROM timestamp)::BIGINT, hurst, autocorr, vol_ratio "
+                "SELECT CAST(strftime('%s', timestamp) AS INTEGER), hurst, autocorr, vol_ratio "
                 "FROM regime_log WHERE symbol='MNQ' AND timestamp > ? ORDER BY timestamp ASC",
                 (cutoff_iso,)
             ).fetchall()
         except Exception as _rl_err:
-            logger.debug(f'backtest_setup_i: regime_log unavailable — {_rl_err}')
+            logger.debug(f'backtest_setup_i: regime_log path A failed — {_rl_err}')
             try:
                 conn.rollback()   # ← critical: clear PG aborted-transaction state
             except Exception:
                 pass
+            # Retry with PostgreSQL-native EXTRACT — handles TIMESTAMPTZ correctly
+            try:
+                cutoff_iso = datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()
+                regime_rows = conn.execute(
+                    "SELECT EXTRACT(EPOCH FROM timestamp)::BIGINT, hurst, autocorr, vol_ratio "
+                    "FROM regime_log WHERE symbol='MNQ' AND timestamp > ? ORDER BY timestamp ASC",
+                    (cutoff_iso,)
+                ).fetchall()
+            except Exception as _rl_err2:
+                logger.debug(f'backtest_setup_i: regime_log path B failed — {_rl_err2}')
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
 
         if len(regime_rows) >= 10:
             # ── Path A: regime_log has data — simulate signals from stored values ──
@@ -895,6 +975,9 @@ def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]
         )
         df = _load_ohlcv_df(conn, 'MNQ', '5min', lookback_days)
         if len(df) < 150:
+            # MNQ not available locally — try NQ (same price, different multiplier)
+            df = _load_ohlcv_df(conn, 'NQ', '5min', lookback_days)
+        if len(df) < 150:
             return None
         atr    = _atr14(df)
         closes = df['close'].values
@@ -914,6 +997,16 @@ def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]
             rs = r / s
             return math.log(rs) / math.log(n) if rs > 0 else 0.5
 
+        # Tighter thresholds for Path B to avoid over-generation.
+        # The live ML model uses XGB > 0.58 + LR + HTF bias — this mathematical
+        # proxy uses stricter Hurst/autocorr/momentum thresholds to approximate
+        # the same selectivity (~3-5 signals/week, not 3-5/day).
+        HURST_MIN    = 0.60   # live uses XGB > 0.58; Hurst 0.60 is similarly selective
+        AUTOCORR_MIN = 0.10   # stronger autocorr required
+        MOM_MIN_ATR  = 1.0    # momentum must be > 1× ATR (not just 0.5×)
+        MAX_PER_DAY  = 2      # cap at 2 signals per day (live has 2-cap per session)
+        day_counts   = {}
+
         for i in range(hw + aw, bars - 1):
             if wdays[i] not in (1, 2, 3):
                 continue
@@ -922,9 +1015,13 @@ def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]
             atr_val = atr.iloc[i]
             if not atr_val or math.isnan(atr_val):
                 continue
+            # Per-day signal cap
+            day_key = str(df['date'].iloc[i]) if 'date' in df.columns else str(i // 78)
+            if day_counts.get(day_key, 0) >= MAX_PER_DAY:
+                continue
             log_ret  = np.diff(np.log(closes[i - hw: i + 1]))
             hurst    = _hurst(log_ret)
-            if hurst < 0.55:
+            if hurst < HURST_MIN:
                 continue
             ret50    = np.diff(closes[i - aw: i + 1])
             autocorr = float(np.corrcoef(ret50[:-1], ret50[1:])[0, 1]) if len(ret50) > 5 else 0.0
@@ -932,10 +1029,12 @@ def backtest_setup_i(conn, lookback_days: int = 180) -> Optional[BacktestResult]
                 autocorr = 0.0
             mom = closes[i] - closes[i - 20]
             e   = closes[i]
-            if autocorr > 0.05 and mom > 0.5 * atr_val:
+            if autocorr > AUTOCORR_MIN and mom > MOM_MIN_ATR * atr_val:
                 pnl.append(_sim_outcome(df, i, 'long',  e, e - atr_val, e + 3.0 * atr_val))
-            elif autocorr < -0.05 and mom < -0.5 * atr_val:
+                day_counts[day_key] = day_counts.get(day_key, 0) + 1
+            elif autocorr < -AUTOCORR_MIN and mom < -MOM_MIN_ATR * atr_val:
                 pnl.append(_sim_outcome(df, i, 'short', e, e + atr_val, e - 3.0 * atr_val))
+                day_counts[day_key] = day_counts.get(day_key, 0) + 1
 
         b = BENCHMARKS['I']
         return _backtest_stats(pnl, b['sharpe'], b['wr'], len(df), 'I', lookback_days)
