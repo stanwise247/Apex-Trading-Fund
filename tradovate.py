@@ -50,7 +50,9 @@ TRADOVATE_ACCOUNT  = os.environ.get('TRADOVATE_ACCOUNT',  '')  # e.g. DUP560700
 TRADING_ENABLED    = os.environ.get('TRADING_ENABLED',    'true').lower() == 'true'
 
 # Instruments allowed to send live Tradovate orders — all others paper-trade only
-LIVE_INSTRUMENTS = ['MNQ']
+# ES maps to MESM6 (Micro E-mini S&P, $5/pt) via _tradovate_symbol().
+# Added ES for Setup J Value Area Continuation (Sharpe 8.34, WR 54.7%).
+LIVE_INSTRUMENTS = ['MNQ', 'ES']
 
 BASE_URL = (
     'https://demo.tradovateapi.com/v1'

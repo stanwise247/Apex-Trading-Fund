@@ -85,8 +85,10 @@ _STRATEGY_CACHE_TTL = 60             # seconds
 
 _STRATEGY_DEFAULTS = {
     'A': True, 'B': True, 'C': True, 'D': True,
-    'E': True, 'F': False,  # F suspended
+    'E': False,            # E disabled — confirmed losing record
+    'F': False,            # F suspended — no live validation
     'H': True, 'I': True,
+    'J': True,             # J Value Area Continuation — promoted from shadow lab
 }
 
 
@@ -174,24 +176,25 @@ def is_setup_enabled(setup_id: str, symbol: str = None) -> bool:
 
 
 SETUP_REGIME_CONFIG = {
-    'A': ({'TRENDING'},                True),
-    'B': ({'TRENDING'},                True),
-    'C': ({'TRENDING'},                True),
-    'D': ({'TRENDING', 'CHOPPY'},      True),
-    'E': ({'TRENDING'},                True),
-    'H': ({'CHOPPY', 'MEAN_REVERTING'}, True),
-    'I': ({'TRENDING'},                True),
-    'F': ({'TRENDING', 'CHOPPY'},      False),  # suspended anyway
+    'A': ({'TRENDING'},                          True),
+    'B': ({'TRENDING'},                          True),
+    'C': ({'TRENDING'},                          True),
+    'D': ({'TRENDING', 'CHOPPY'},                True),
+    'E': ({'TRENDING'},                          True),   # disabled anyway
+    'H': ({'CHOPPY', 'MEAN_REVERTING'},          True),
+    'I': ({'TRENDING'},                          True),
+    'F': ({'TRENDING', 'CHOPPY'},                False),  # suspended
+    'J': ({'TRENDING', 'CHOPPY', 'MEAN_REVERTING'}, True),  # works in all regimes
 }
 
-# ── Instrument-level paper/live defaults (2.6) ────────────────────────────
+# ── Instrument-level paper/live defaults ─────────────────────────────────
 # Format: {setup_id: set_of_paper_instruments}
-# MNQ = paper for Setup I (stops too large). E = paper for all instruments.
 # Empty set = all instruments execute live (subject to PAPER_ONLY_SETUPS env).
 SETUP_PAPER_INSTRUMENTS: dict = {
-    'I': {'MNQ'},          # Setup I: MNQ paper, ES live
-    'E': {'MNQ', 'ES'},    # Setup E fully paper (already in PAPER_ONLY_SETUPS)
-    'F': {'MNQ', 'ES', 'GC'},  # Setup F suspended — all paper
+    'I': {'MNQ'},               # Setup I: MNQ paper, ES live
+    'E': {'MNQ', 'ES'},         # Setup E disabled — all paper
+    'F': {'MNQ', 'ES', 'GC'},   # Setup F suspended — all paper
+    'J': {'MNQ'},               # Setup J: MNQ paper (initial obs), ES live on MESM6
 }
 
 
@@ -2470,6 +2473,140 @@ def background_scheduler():
                         exc_info=True
                     )
 
+        # ── Setup J — Value Area Continuation (every 5 min, Tue-Fri session) ──
+        # ES=LIVE on MESM6 | MNQ=PAPER ONLY
+        # Backtest: ES Sharpe 8.34 | WR 54.7% | 11/11 months positive | MaxDD 4R
+        if not hasattr(background_scheduler, '_last_setup_j'):
+            background_scheduler._last_setup_j = 0
+        if now - background_scheduler._last_setup_j >= 300:
+            background_scheduler._last_setup_j = now
+            if not is_setup_enabled('J'):
+                logger.info('Setup J: disabled via Control Centre — skipping')
+            else:
+                logger.info('Setup J: block entered — scanning ES and MNQ')
+                try:
+                    from setup_j_value_area import scan_setup_j, format_j_alert
+                    from live_scanner import send_telegram
+                    from trade_tracker import log_trade
+                    _now_utc_j = datetime.now(timezone.utc)
+                    if not hasattr(background_scheduler, '_risk_gate'):
+                        from risk_manager import RiskGate
+                        background_scheduler._risk_gate = RiskGate()
+                    _rg_j = background_scheduler._risk_gate
+                    for _sym_j in ['ES', 'MNQ']:
+                        try:
+                            if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                _j_has, _j_id = _has_open_trade_on_instrument(_sym_j)
+                                if _j_has:
+                                    logger.info(f'Setup J: skipped — {_sym_j} already has open trade #{_j_id}')
+                                    continue
+                            if _rg_j.daily.is_daily_limit_hit():
+                                logger.info(f'Setup J {_sym_j}: daily limit hit — suppressed')
+                                continue
+                            logger.info(f'Scanning Setup J for {_sym_j}')
+                            sig_j = scan_setup_j(_sym_j, _now_utc_j)
+                            logger.info(
+                                f'scan_setup_j {_sym_j} returned: '
+                                f'{"SIGNAL dir=" + sig_j["direction"] + " entry=" + str(sig_j.get("entry")) if sig_j else "None (no signal this tick)"}'
+                            )
+                            if not sig_j:
+                                continue
+
+                            # Post-signal filters
+                            if _cal_block(_sym_j, sig_j['setup']):
+                                logger.info(f'[J-2b/6] Setup J {_sym_j}: calendar blackout — signal dropped')
+                                continue
+                            if _check_and_mark_fired(_sym_j, sig_j['setup'], sig_j['direction']):
+                                logger.info(f'[J-2b/6] Setup J {_sym_j}: dedup fired — signal dropped')
+                                continue
+                            if _is_signal_already_active(_sym_j, sig_j['direction'], sig_j['setup']):
+                                logger.info(f'[J-2b/6] Setup J {_sym_j}: already active — signal dropped')
+                                continue
+
+                            # ── [J-3/6] log_trade ────────────────────────────
+                            _j_tid = None
+                            try:
+                                logger.info(
+                                    f'[J-3/6] Calling log_trade: {_sym_j} {sig_j["direction"]} '
+                                    f'entry={sig_j.get("entry")} stop={sig_j.get("stop")} '
+                                    f'target={sig_j.get("target")} setup={sig_j.get("setup")}'
+                                )
+                                _j_tid = log_trade(sig_j)
+                                logger.info(f'[J-4/6] log_trade returned trade_id={_j_tid}')
+                                if not _j_tid:
+                                    logger.critical(
+                                        f'[J-4/6] CRITICAL: Setup J log_trade() returned None — '
+                                        f'{_sym_j} {sig_j["direction"]} NOT in DB'
+                                    )
+                            except Exception as _j_lte:
+                                logger.critical(
+                                    f'[J-4/6] CRITICAL: Setup J log_trade() EXCEPTION — '
+                                    f'{_sym_j}: {_j_lte}', exc_info=True
+                                )
+
+                            # ── [J-5/6] send_telegram — only if trade logged ──
+                            if not _j_tid:
+                                logger.critical(
+                                    f'[J-5/6] CRITICAL: Skipping Telegram for {_sym_j} — '
+                                    f'log_trade did not return a trade_id. Signal not in DB.'
+                                )
+                            else:
+                                try:
+                                    logger.info(f'[J-5/6] Calling send_telegram for {_sym_j} (trade_id={_j_tid})')
+                                    try:
+                                        _j_risk_footer = (
+                                            f'\n⚙️ <i>Regime: {_rg_j.regime.get_regime().label} | '
+                                            f'Risk: {_rg_j.dd.get_risk_multiplier():.2f}× | '
+                                            f'DD: {_rg_j.dd.get_drawdown_pct():.1f}%</i>'
+                                        )
+                                    except Exception:
+                                        _j_risk_footer = ''
+                                    send_telegram(format_j_alert(sig_j) + _j_risk_footer)
+                                except Exception as _j_te:
+                                    logger.critical(
+                                        f'[J-5/6] CRITICAL: Setup J send_telegram failed {_sym_j}: {_j_te}',
+                                        exc_info=True
+                                    )
+
+                            # ── [J-6/6] Tradovate — MNQ paper, ES live ────────
+                            if _sym_j == 'MNQ':
+                                logger.info(
+                                    f'[J-6/6] MNQ Setup J: paper only — initial observation period '
+                                    f'(trade logged id={_j_tid}, no Tradovate order)'
+                                )
+                            elif _j_tid:
+                                logger.info(
+                                    f'[J-6/6] ES Setup J: executing on Tradovate live MESM6 '
+                                    f'(trade_id={_j_tid})'
+                                )
+                                try:
+                                    _execute_via_tradovate(sig_j, _j_tid)
+                                except Exception as _j_exe:
+                                    logger.critical(
+                                        f'[J-6/6] CRITICAL: _execute_via_tradovate raised for ES: {_j_exe}',
+                                        exc_info=True
+                                    )
+                            else:
+                                logger.critical(
+                                    f'[J-6/6] CRITICAL: ES Setup J — skipping Tradovate, no trade_id'
+                                )
+
+                            logger.info(
+                                f'Setup J signal complete: {_sym_j} {sig_j["direction"].upper()} '
+                                f'VAH={sig_j.get("vah")} VAL={sig_j.get("val")} '
+                                f'db_id={_j_tid}'
+                            )
+                        except Exception as _j_sym_e:
+                            logger.critical(
+                                f'[J-FAIL] CRITICAL: Setup J {_sym_j} unhandled exception: {_j_sym_e}',
+                                exc_info=True
+                            )
+                except Exception as _j_e:
+                    logger.critical(
+                        f'[J-FAIL] CRITICAL: Setup J scanner fatal error: {_j_e}',
+                        exc_info=True
+                    )
+
         # ── Setup D — FVG Fill (every 5 min, NQ+ES only) ─────────
         if not hasattr(background_scheduler, '_last_setup_d'):
             background_scheduler._last_setup_d = 0
@@ -3426,6 +3563,9 @@ def _startup():
     logger.info(f'  Paper-only setups (no Tradovate execution): '
                 f'{", ".join(sorted(PAPER_ONLY_SETUPS)) or "none"}')
     logger.info('  Setup I: MNQ=paper only | ES=live execution')
+    logger.info('  Setup J: Value Area Continuation | ES=live MESM6 | MNQ=paper')
+    logger.info('  Setup E: disabled (underperforming — confirmed losing record)')
+    logger.info('  Setup J: wired to scanner — scanning every 5min')
     logger.info('  Server running at: http://localhost:5000')
     logger.info('  Open apex_dashboard_v8.html in your browser')
     logger.info('=' * 55)
