@@ -3891,6 +3891,16 @@ def apex_scan():
     except Exception as e:
         logger.debug(f'Setup I state error: {e}')
 
+    # Setup J — Value Area Continuation gate states (dashboard display)
+    setup_j_data = []
+    try:
+        from setup_j_value_area import get_setup_j_state
+        for _sym_j_scan in ('ES', 'MNQ'):
+            _j_state = get_setup_j_state(_sym_j_scan)
+            setup_j_data.append(_j_state)
+    except Exception as _j_scan_e:
+        logger.debug(f'Setup J state error: {_j_scan_e}')
+
     return jsonify({
         'ok':                  True,
         'results':             results,
@@ -3898,6 +3908,7 @@ def apex_scan():
         'setup_f_predictions': setup_f_predictions,
         'setup_h_data':        setup_h_data,
         'setup_i_data':        setup_i_data,
+        'setup_j_data':        setup_j_data,
         'time':                now.astimezone(NY).strftime('%Y-%m-%d %H:%M ET')
     })
 

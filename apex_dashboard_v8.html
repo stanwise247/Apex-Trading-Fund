@@ -330,6 +330,7 @@ tr:hover td { background: var(--bg3); }
 .sc-badge-f { background: rgba(0,113,227,0.1);   color: var(--blue); }
 .sc-badge-h { background: rgba(255,159,10,0.12); color: var(--amber); }
 .sc-badge-i { background: rgba(175,82,222,0.1);  color: var(--purple); }
+.sc-badge-j { background: rgba(90,200,250,0.12); color: #5ac8fa; }  /* teal — Value Area Continuation */
 
 .sc-title-block { flex: 1; min-width: 0; }
 .sc-name { font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.3; }
@@ -1310,6 +1311,7 @@ const SETUP_META = {
   F: { name:'ML Probability', type:'ML · XGB + LR', badge:'sc-badge-f', syms:['MNQ','ES','GC'], wide:true },
   H: { name:'VWAP Reversion', type:'Gate-Based · Intraday', badge:'sc-badge-h', syms:['ES','MNQ'] },
   I: { name:'Mathematical Alpha', type:'ML Ensemble · XGB + LR', badge:'sc-badge-i', syms:['MNQ','ES'], wide:true },
+  J: { name:'Value Area Continuation', type:'Structure · Intraday', badge:'sc-badge-j', syms:['ES','MNQ'], wide:true },
 };
 
 // ── Tab switching ─────────────────────────────────────
@@ -1944,6 +1946,7 @@ function renderSetupsGrid(scanData, trades) {
   const fPreds    = scanData.setup_f_predictions || [];
   const hData     = scanData.setup_h_data || [];
   const iData     = scanData.setup_i_data || [];
+  const jData     = scanData.setup_j_data || [];
 
   let cards = '';
 
@@ -2099,6 +2102,48 @@ function renderSetupsGrid(scanData, trades) {
       : (iData[0]?.signal_state_label||'').includes('SESSION') ? 'OFF SESSION'
       : 'DEVELOPING';
     cards += buildSetupCard('I', mlHtml, nextGate, nextGate, allGates, topState);
+  }
+
+  // ── J — Value Area Continuation, wide card ─────────────
+  {
+    let jHtml = '<div class="gate-section-grid">';
+    let bestScore = 0, nextGate = '—', allGates = [];
+    for (const sym of ['ES', 'MNQ']) {
+      const j = jData.find(d => d.symbol === sym);
+      const isPaper = sym === 'MNQ';
+      if (!j) {
+        jHtml += gateInstBlock(sym, 0, 0, 5, 'No data', isPaper, false);
+        continue;
+      }
+      const gates  = j.gates || [];
+      const passed = gates.filter(g => g.passed).length;
+      const total  = gates.length || 5;
+      const score  = j.readiness_score || 0;
+      const state  = (j.signal_state_label || '—') + (isPaper ? ' · PAPER' : ' · LIVE');
+      jHtml += gateInstBlock(sym, score, passed, total, state, isPaper, false);
+      if (score > bestScore) {
+        bestScore = score;
+        nextGate  = j.next_gate_description || '—';
+        allGates  = gates;
+      }
+    }
+    // Show VA levels when available
+    const esJ = jData.find(d => d.symbol === 'ES');
+    if (esJ && esJ.vah && esJ.val) {
+      jHtml += `<div style="font-size:10px;color:var(--text2);margin-top:6px;font-family:var(--mono)">
+        VAH <span style="color:var(--green)">${esJ.vah.toFixed(2)}</span>
+        &nbsp;|&nbsp;
+        VAL <span style="color:var(--red)">${esJ.val.toFixed(2)}</span>
+        &nbsp;·&nbsp;Bias: <span style="color:var(--text)">${(esJ.htf_bias||'—').toUpperCase()}</span>
+      </div>`;
+    }
+    jHtml += '</div>';
+    const jTopState = jData.some(d => d.signal_state_label === 'SIGNAL READY') ? 'SIGNAL READY'
+      : jData.some(d => (d.readiness_score||0) >= 80) ? 'SCANNING'
+      : jData.some(d => (d.readiness_score||0) >= 40) ? 'DEVELOPING'
+      : jData.some(d => d.signal_state_label === 'OFF SESSION') ? 'OFF SESSION'
+      : 'DEVELOPING';
+    cards += buildSetupCard('J', jHtml, nextGate, nextGate, allGates, jTopState);
   }
 
   document.getElementById('setupsGrid').innerHTML = cards;

@@ -287,6 +287,143 @@ def scan_setup_j(symbol: str, dt: datetime = None) -> Optional[dict]:
 
 
 # ─────────────────────────────────────────────────────────────
+#  DASHBOARD STATE — gate-by-gate breakdown for /api/apex/scan
+# ─────────────────────────────────────────────────────────────
+
+def get_setup_j_state(symbol: str) -> dict:
+    """
+    Return current gate states for Setup J on symbol.
+    Used by /api/apex/scan to populate the dashboard Setups tab card.
+    Always returns a dict — never raises.
+    """
+    result = {
+        'symbol':          symbol,
+        'ok':              False,
+        'vah':             None,
+        'val':             None,
+        'htf_bias':        'unknown',
+        'in_session':      False,
+        'signal_state_label': 'DEVELOPING',
+        'readiness_score': 0,
+        'gates':           [],
+        'next_gate_description': '—',
+    }
+    try:
+        now = datetime.now(timezone.utc)
+        # Gate 1: session (Tue-Fri, 13-19 UTC)
+        in_session = (now.weekday() not in (0, 5, 6)) and (SESSION_START <= now.hour < SESSION_END)
+        no_monday  = now.weekday() != 0
+        g_session = {
+            'gate': 1, 'name': 'Session (Tue–Fri 13–19 UTC)',
+            'passed': in_session,
+            'detail': (
+                f'{now.strftime("%A")} {now.hour:02d}:{now.minute:02d} UTC '
+                f'{"✓ in session" if in_session else "— off session"}'
+            ),
+        }
+        result['in_session'] = in_session
+
+        # Load 5min bars
+        df5 = _load_bars(symbol, '5min', limit=200)
+        if df5.empty or len(df5) < 50:
+            result['gates'] = [g_session]
+            result['next_gate_description'] = 'Session: ' + g_session['detail']
+            return result
+
+        atr_val = float(_atr14_j(df5).iloc[-1] or 0)
+
+        # Gate 2: previous session VAH/VAL computed
+        today_date = now.date()
+        prev_bars  = df5[
+            (df5['weekday'] < 5) &
+            (df5['hour'] >= 13) & (df5['hour'] < 19) &
+            (df5['date'] < today_date)
+        ].tail(78)
+        vah, val = _calc_value_area(prev_bars, VA_PCT) if len(prev_bars) >= 10 else (None, None)
+        va_ok = vah is not None and val is not None
+        g_va = {
+            'gate': 2, 'name': 'Previous Session VA Computed',
+            'passed': va_ok,
+            'detail': (
+                f'VAH={vah:.2f} VAL={val:.2f}' if va_ok
+                else f'Insufficient prev session bars ({len(prev_bars)})'
+            ),
+        }
+        if va_ok:
+            result['vah'] = round(vah, 2)
+            result['val'] = round(val, 2)
+
+        # Gate 3: HTF 4h bias
+        bias = _get_htf_bias(symbol)
+        bias_ok = bias in ('bullish', 'bearish')
+        g_bias = {
+            'gate': 3, 'name': '4h EMA20 Bias',
+            'passed': bias_ok,
+            'detail': f'HTF bias={bias.upper()} (need bullish or bearish, not neutral)',
+        }
+        result['htf_bias'] = bias
+
+        # Gate 4: price near VAH or VAL (within 1 ATR)
+        bar = df5.iloc[-1]
+        bc  = float(bar['close']); bh = float(bar['high']); bl = float(bar['low'])
+        near_vah = va_ok and abs(bc - vah) <= atr_val
+        near_val = va_ok and abs(bc - val) <= atr_val
+        near_va  = near_vah or near_val
+        g_near = {
+            'gate': 4, 'name': 'Price Near VAH/VAL (≤1 ATR)',
+            'passed': near_va,
+            'detail': (
+                f'close={bc:.2f} '
+                + (f'near VAH={vah:.2f} ✓' if near_vah else (f'near VAL={val:.2f} ✓' if near_val else 'not at VA level'))
+            ) if va_ok else 'VA not computed',
+        }
+
+        # Gate 5: confirming close (close above VAH for long, below VAL for short)
+        conf_long  = va_ok and bl <= vah * 1.001 and bc > vah and bc > float(bar['open'])
+        conf_short = va_ok and bh >= val * 0.999 and bc < val and bc < float(bar['open'])
+        g_conf = {
+            'gate': 5, 'name': 'Confirming Close at VA Level',
+            'passed': conf_long or conf_short,
+            'detail': (
+                'Long confirm: close above VAH ✓' if conf_long
+                else 'Short confirm: close below VAL ✓' if conf_short
+                else f'No confirming close (bar close={bc:.2f})'
+            ),
+        }
+
+        gates = [g_session, g_va, g_bias, g_near, g_conf]
+        passed = sum(1 for g in gates if g['passed'])
+        total  = len(gates)
+        score  = round(passed / total * 100)
+
+        if not in_session:
+            label = 'OFF SESSION'
+        elif not va_ok:
+            label = 'DEVELOPING'
+        elif conf_long or conf_short:
+            label = 'SIGNAL READY'
+        elif passed >= 3:
+            label = 'SCANNING'
+        else:
+            label = 'DEVELOPING'
+
+        first_failed = next((f"{g['name']}: {g['detail']}" for g in gates if not g['passed']), 'All gates passed')
+
+        result.update({
+            'ok':              va_ok,
+            'signal_state_label': label,
+            'readiness_score': score,
+            'gates':           gates,
+            'next_gate_description': first_failed if label != 'SIGNAL READY' else 'All gates passed — signal ready',
+        })
+
+    except Exception as e:
+        logger.debug(f'Setup J state error {symbol}: {e}')
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────
 #  ALERT FORMATTER
 # ─────────────────────────────────────────────────────────────
 
