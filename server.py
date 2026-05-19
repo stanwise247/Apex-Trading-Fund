@@ -69,7 +69,8 @@ setup_f_enabled: bool = False   # Disabled: dedup/log_trade gap under investigat
 SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
 # ── Execution limits — configurable via Railway env vars without redeployment ──
-DAILY_LOSS_LIMIT  = int(os.environ.get('DAILY_LOSS_LIMIT', '100'))
+DAILY_LOSS_LIMIT    = int(os.environ.get('DAILY_LOSS_LIMIT',    '100'))
+MAX_PORTFOLIO_HEAT  = int(os.environ.get('MAX_PORTFOLIO_HEAT',  '3'))   # max concurrent open trades
 # Setups that scan, log, and Telegram but never send a Tradovate order.
 PAPER_ONLY_SETUPS = set(
     s.strip().upper() for s in
@@ -1620,6 +1621,20 @@ def _has_open_trade_on_instrument(symbol: str) -> tuple:
         return (False, None)
 
 
+def _count_open_trades() -> int:
+    """Return total number of open trades across all setups and instruments.
+    Used to enforce MAX_PORTFOLIO_HEAT. Fails open (returns 0) on any error."""
+    try:
+        conn = _db.connect()
+        n = conn.execute(
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open'"
+        ).fetchone()[0]
+        conn.close()
+        return int(n)
+    except Exception:
+        return 0
+
+
 def _check_1h_bias(symbol: str, direction: str) -> tuple:
     """
     1h EMA20 bias check (in-memory resample from 5min bars — same pattern as gate1_htf_bias).
@@ -2091,7 +2106,10 @@ def background_scheduler():
                 background_scheduler._risk_gate = RiskGate()
             tracker = background_scheduler._apex_tracker
             _rg     = background_scheduler._risk_gate
-            if _rg.daily.is_daily_limit_hit():
+            _heat_abc = _count_open_trades()
+            if _heat_abc >= MAX_PORTFOLIO_HEAT:
+                logger.info(f'Portfolio heat: {_heat_abc} trades open — new signal blocked for Setup A/B/C/E')
+            elif _rg.daily.is_daily_limit_hit():
                 logger.info('APEX scanner: daily loss limit hit — signals suppressed')
             else:
                 _regime  = _rg.regime.get_regime()
@@ -2342,6 +2360,10 @@ def background_scheduler():
                     # silently aborted the entire Setup I block.
                     for _sym in ['MNQ', 'ES']:
                         try:
+                            _heat_i = _count_open_trades()
+                            if _heat_i >= MAX_PORTFOLIO_HEAT:
+                                logger.info(f'Portfolio heat: {_heat_i} trades open — new signal blocked for Setup I {_sym}')
+                                continue
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _i_has, _i_id = _has_open_trade_on_instrument(_sym)
                                 if _i_has:
@@ -2495,6 +2517,10 @@ def background_scheduler():
                     _rg_j = background_scheduler._risk_gate
                     for _sym_j in ['ES', 'MNQ']:
                         try:
+                            _heat_j = _count_open_trades()
+                            if _heat_j >= MAX_PORTFOLIO_HEAT:
+                                logger.info(f'Portfolio heat: {_heat_j} trades open — new signal blocked for Setup J {_sym_j}')
+                                continue
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _j_has, _j_id = _has_open_trade_on_instrument(_sym_j)
                                 if _j_has:
@@ -2622,6 +2648,10 @@ def background_scheduler():
                     _now_utc_d = datetime.now(timezone.utc)
                     for _sym_d in ['MNQ', 'ES']:  # GC disabled — feed unverified
                         try:
+                            _heat_d = _count_open_trades()
+                            if _heat_d >= MAX_PORTFOLIO_HEAT:
+                                logger.info(f'Portfolio heat: {_heat_d} trades open — new signal blocked for Setup D {_sym_d}')
+                                continue
                             logger.info(f'Scanning Setup D for {_sym_d}')
                             sig_d = scan_setup_d(_sym_d, _now_utc_d)
                             if not sig_d:
@@ -2710,7 +2740,10 @@ def background_scheduler():
                         f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
                     )
                     try:
-                        if not _rg.daily.is_daily_limit_hit():
+                        _heat_h = _count_open_trades()
+                        if _heat_h >= MAX_PORTFOLIO_HEAT:
+                            logger.info(f'Portfolio heat: {_heat_h} trades open — new signal blocked for Setup H')
+                        elif not _rg.daily.is_daily_limit_hit():
                             logger.info('Scanning Setup H for ES (live)')
                             sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
                             if sig_es:
@@ -3560,6 +3593,7 @@ def _startup():
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
     logger.info(f'  Daily loss limit:  ${DAILY_LOSS_LIMIT}')
+    logger.info(f'  Portfolio heat limit: max {MAX_PORTFOLIO_HEAT} concurrent trades')
     logger.info(f'  Paper-only setups (no Tradovate execution): '
                 f'{", ".join(sorted(PAPER_ONLY_SETUPS)) or "none"}')
     logger.info('  Setup I: MNQ=paper only | ES=live execution')
