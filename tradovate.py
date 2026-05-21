@@ -48,6 +48,9 @@ TRADOVATE_SECRET   = os.environ.get('TRADOVATE_SECRET',   '')
 TRADOVATE_DEVICE   = os.environ.get('TRADOVATE_DEVICE_ID','apex-trader-001')
 TRADOVATE_ACCOUNT  = os.environ.get('TRADOVATE_ACCOUNT',  '')  # e.g. DUP560700
 TRADING_ENABLED    = os.environ.get('TRADING_ENABLED',    'true').lower() == 'true'
+# Risk per trade as fraction of account — configurable via Railway env var.
+# Default 1.75%: at $5,000 budget=$87.50 → 2 MES contracts (8pt stop) or 1 MNQ (44pt stop).
+RISK_PCT           = float(os.environ.get('RISK_PCT', '0.0175'))
 
 # Instruments allowed to send live Tradovate orders — all others paper-trade only
 # ES maps to MESM6 (Micro E-mini S&P, $5/pt) via _tradovate_symbol().
@@ -693,7 +696,7 @@ def place_market_close(symbol: str, direction: str, contracts: int = 1) -> dict:
 #  EXECUTE APEX SIGNAL
 # ─────────────────────────────────────────────────────────────
 
-def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
+def execute_apex_signal(signal: dict, risk_pct: float = None) -> dict:
     """
     Full execution pipeline for an APEX signal.
 
@@ -711,6 +714,8 @@ def execute_apex_signal(signal: dict, risk_pct: float = 0.01) -> dict:
             os.environ.get('APEX_TESTING', 'false').lower() == 'true'):
         logger.info('Tradovate: execute_apex_signal blocked — test/demo mode')
         return {'ok': False, 'skipped_reason': 'blocked_test_mode'}
+    if risk_pct is None:
+        risk_pct = RISK_PCT   # use module-level default (env var RISK_PCT, default 1.75%)
     if not TRADOVATE_ENABLED:
         return {'ok': False, 'skipped_reason': 'disabled'}
 
