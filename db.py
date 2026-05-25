@@ -247,7 +247,8 @@ _PG_DDL = [
         status          TEXT DEFAULT 'open',
         bars_held       INTEGER DEFAULT 0,
         notes           TEXT,
-        broker_order_id TEXT
+        broker_order_id TEXT,
+        contracts       INTEGER DEFAULT 1
     )""",
     """CREATE TABLE IF NOT EXISTS macro_log (
         id     SERIAL PRIMARY KEY,
@@ -532,6 +533,8 @@ _PG_MIGRATIONS = [
     )""",
     # Add reason column to research_decisions if missing
     'ALTER TABLE research_decisions ADD COLUMN IF NOT EXISTS reason TEXT',
+    # Add contracts column to apex_trades if missing (added for Tradovate close sizing)
+    'ALTER TABLE apex_trades ADD COLUMN IF NOT EXISTS contracts INTEGER DEFAULT 1',
 ]
 
 

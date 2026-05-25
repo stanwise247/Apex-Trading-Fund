@@ -217,8 +217,76 @@ def _ensure_research_schema():
              "research_decisions reason column"),
         ]
     else:
-        # SQLite: no IF NOT EXISTS for ALTER TABLE — use try/except with rollback
+        # SQLite: CREATE core research tables first, then migrate columns
         ddl_ops = [
+            ("""CREATE TABLE IF NOT EXISTS strategy_health_log (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                setup_id            TEXT,
+                week_start          TEXT,
+                sharpe_30d          REAL,
+                sharpe_benchmark    REAL,
+                win_rate            REAL,
+                win_rate_benchmark  REAL,
+                signal_count_week   INTEGER,
+                expectancy          REAL,
+                health_score        INTEGER,
+                alert_level         TEXT,
+                backtest_score      INTEGER,
+                live_score          INTEGER,
+                notes               TEXT,
+                created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "strategy_health_log table"),
+            ("""CREATE TABLE IF NOT EXISTS shadow_lab (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name           TEXT,
+                description             TEXT,
+                entered_date            TEXT,
+                week_number             INTEGER,
+                total_weeks             INTEGER DEFAULT 8,
+                paper_sharpe            REAL,
+                paper_win_rate          REAL,
+                paper_total_r           REAL,
+                paper_signal_count      INTEGER,
+                backtest_sharpe         REAL,
+                backtest_win_rate       REAL,
+                status                  TEXT,
+                promotion_eligible_date TEXT,
+                notes                   TEXT,
+                created_at              TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "shadow_lab table"),
+            ("""CREATE TABLE IF NOT EXISTS research_decisions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                decision_type   TEXT,
+                subject         TEXT,
+                recommendation  TEXT,
+                supporting_data TEXT,
+                status          TEXT,
+                decided_at      TEXT,
+                outcome         TEXT,
+                reason          TEXT,
+                created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "research_decisions table"),
+            ("""CREATE TABLE IF NOT EXISTS backtest_results (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                setup_id            TEXT,
+                lookback_days       INTEGER,
+                run_date            TEXT,
+                total_signals       INTEGER,
+                win_rate            REAL,
+                sharpe              REAL,
+                avg_r               REAL,
+                expectancy          REAL,
+                max_drawdown        REAL,
+                profit_factor       REAL,
+                benchmark_sharpe    REAL,
+                benchmark_win_rate  REAL,
+                sharpe_vs_benchmark REAL,
+                wr_vs_benchmark     REAL,
+                edge_score          INTEGER,
+                bars_analysed       INTEGER,
+                created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+            )""", "backtest_results table"),
+            # SQLite: no IF NOT EXISTS for ALTER TABLE — use try/except with rollback
             ("ALTER TABLE strategy_health_log ADD COLUMN backtest_score INTEGER",
              "backtest_score column"),
             ("ALTER TABLE strategy_health_log ADD COLUMN live_score INTEGER",
@@ -1294,7 +1362,24 @@ def calculate_health_score(setup_id: str) -> dict:
         }
     except Exception as e:
         logger.error(f'calculate_health_score {sid}: {e}', exc_info=True)
-        return {'setup_id': sid, 'health_score': None, 'alert_level': 'INSUFFICIENT_DATA'}
+        return {
+            'setup_id':            sid,
+            'health_score':        None,
+            'alert_level':         'INSUFFICIENT_DATA',
+            'backtest_score':      None,
+            'live_score':          None,
+            'sharpe_benchmark':    None,
+            'win_rate_benchmark':  None,
+            'win_rate':            None,
+            'signal_count_week':   None,
+            'expectancy':          None,
+            'bars_analysed':       0,
+            'live_trade_count':    0,
+            'bt_sharpe':           None,
+            'bt_win_rate':         None,
+            'bt_total_signals':    0,
+            'score_basis':         'error',
+        }
     finally:
         _close(c)
 

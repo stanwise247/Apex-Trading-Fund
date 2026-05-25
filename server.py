@@ -1487,8 +1487,8 @@ def _execute_via_tradovate(signal: dict, trade_id: int):
             try:
                 conn = _db.connect()
                 conn.execute(
-                    'UPDATE apex_trades SET broker_order_id=? WHERE id=?',
-                    (result['order_id'], trade_id)
+                    'UPDATE apex_trades SET broker_order_id=?, contracts=? WHERE id=?',
+                    (result['order_id'], result.get('contracts', 1), trade_id)
                 )
                 conn.commit()
                 conn.close()
@@ -2673,6 +2673,8 @@ def background_scheduler():
                                         f'direction ({_f3d_detail})'
                                     )
                                     continue
+                            if _cal_block(_sym_d, sig_d['setup']):
+                                continue
                             if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
                                 continue
                             _d_stop_pts = round(abs(sig_d['entry'] - sig_d['stop']), 1)
@@ -2690,10 +2692,13 @@ def background_scheduler():
                                     logger.error(f'CRITICAL: Setup D log_trade() returned None — {_sym_d} {sig_d["direction"]} NOT in DB')
                             except Exception as _d_lte:
                                 logger.error(f'CRITICAL: Setup D log_trade() EXCEPTION — {_sym_d}: {_d_lte}', exc_info=True)
-                            try:
-                                _send_tg(format_d_alert(sig_d))
-                            except Exception as _d_te:
-                                logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
+                            if not _d_tid:
+                                logger.critical(f'CRITICAL: Skipping Telegram for Setup D {_sym_d} — log_trade returned None')
+                            else:
+                                try:
+                                    _send_tg(format_d_alert(sig_d))
+                                except Exception as _d_te:
+                                    logger.error(f'Setup D send_telegram failed {_sym_d}: {_d_te}')
                             if _d_tid:
                                 logger.info(f'Calling _execute_via_tradovate: {_sym_d} {sig_d["direction"]} {sig_d["setup"]} trade_id={_d_tid}')
                                 _execute_via_tradovate(sig_d, _d_tid)
@@ -2766,11 +2771,14 @@ def background_scheduler():
                                                         logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
                                                 except Exception as _lte:
                                                     logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
-                                                try:
-                                                    msg = format_h_alert(sig_es) + _risk_footer
-                                                    send_telegram(msg)
-                                                except Exception as _h_te:
-                                                    logger.error(f'Setup H send_telegram failed ES: {_h_te}')
+                                                if not _h_tid:
+                                                    logger.critical('CRITICAL: Skipping Telegram for Setup H ES — log_trade returned None')
+                                                else:
+                                                    try:
+                                                        msg = format_h_alert(sig_es) + _risk_footer
+                                                        send_telegram(msg)
+                                                    except Exception as _h_te:
+                                                        logger.error(f'Setup H send_telegram failed ES: {_h_te}')
                                                 if _h_tid:
                                                     logger.info(f'Calling _execute_via_tradovate: ES {sig_es["direction"]} {sig_es["setup"]} trade_id={_h_tid}')
                                                     _execute_via_tradovate(sig_es, _h_tid)
@@ -4010,7 +4018,9 @@ def apex_trade_close(trade_id):
         if not closed:
             return jsonify({'ok': False, 'error': 'DB close failed'}), 500
 
-        pnl_r = closed.get('pnl_r', 0.0)
+        pnl_r = closed.get('pnl_r')
+        if pnl_r is None:
+            pnl_r = 0.0  # capped by ±10R sanity check or sub-1pt stop
 
         if tradovate_order_id:
             try:

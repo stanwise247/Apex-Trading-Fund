@@ -280,7 +280,7 @@ def _store(state: RegimeState):
 #  PUBLIC API
 # ─────────────────────────────────────────────────────────────
 
-def calculate_and_store(symbol: str, df_5m: pd.DataFrame = None) -> RegimeState | None:
+def calculate_and_store(symbol: str, df_5m: pd.DataFrame = None) :
     """
     Calculate regime state for symbol and persist to regime_log.
     If df_5m is None, loads last 200 5min bars from DB.

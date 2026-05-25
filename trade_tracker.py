@@ -57,16 +57,21 @@ def init_trades_table():
             status      TEXT DEFAULT 'open',
             bars_held        INTEGER DEFAULT 0,
             notes            TEXT,
-            broker_order_id  TEXT
+            broker_order_id  TEXT,
+            contracts        INTEGER DEFAULT 1
         )
     ''')
-    # Add broker_order_id column if missing (migration for existing SQLite DBs)
+    # Add columns if missing (migrations for existing SQLite DBs)
     if not _db.IS_POSTGRES:
-        try:
-            conn.execute('ALTER TABLE apex_trades ADD COLUMN broker_order_id TEXT')
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
+        for _col, _ddl in [
+            ('broker_order_id', 'ALTER TABLE apex_trades ADD COLUMN broker_order_id TEXT'),
+            ('contracts',       'ALTER TABLE apex_trades ADD COLUMN contracts INTEGER DEFAULT 1'),
+        ]:
+            try:
+                conn.execute(_ddl)
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -166,7 +171,7 @@ def close_trade(trade_id: int, exit_price: float, reason: str):
 
     cols = ['id','symbol','direction','setup','mode','entry_price','stop',
             'target','rr_planned','session','quality','entry_time','exit_price',
-            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
+            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id','contracts']
     t = dict(zip(cols, trade))
 
     entry  = float(t['entry_price'])
@@ -222,7 +227,9 @@ def send_exit_alert(trade: dict):
         logger.error(f'send_exit_alert: cannot import send_telegram: {e}')
         return
 
-    pnl    = trade.get('pnl_r', 0)
+    pnl    = trade.get('pnl_r')
+    if pnl is None:
+        pnl = 0.0  # capped by ±10R sanity check or sub-1pt stop
     reason = trade.get('exit_reason', '')
     sym    = trade.get('symbol')
     dir_   = trade.get('direction', '').upper()
@@ -289,7 +296,7 @@ def monitor_trades():
 
     cols = ['id','symbol','direction','setup','mode','entry_price','stop',
             'target','rr_planned','session','quality','entry_time','exit_price',
-            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
+            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id','contracts']
 
     now = datetime.now(timezone.utc)
 
@@ -371,11 +378,35 @@ def monitor_trades():
             closed = close_trade(t['id'], exit_price, exit_reason)
             if closed:
                 send_exit_alert(closed)
+                _mt_pnl = closed.get('pnl_r')
+                _mt_pnl_str = f'{_mt_pnl:+.2f}R' if _mt_pnl is not None else 'None'
                 logger.info(
                     f'monitor_trades: EXIT #{t["id"]} {sym} {direction} [{t["setup"]}] '
                     f'reason={exit_reason} entry={entry:.2f} exit={exit_price:.2f} '
-                    f'pnl={closed["pnl_r"]:+.2f}R'
+                    f'pnl={_mt_pnl_str}'
                 )
+                # Close Tradovate position — only if this trade was sent to the broker
+                if t.get('broker_order_id'):
+                    try:
+                        from tradovate import place_market_close, TRADOVATE_ENABLED
+                        if TRADOVATE_ENABLED:
+                            num_contracts = int(t.get('contracts') or 1)
+                            tv_result = place_market_close(sym, direction, contracts=num_contracts)
+                            if tv_result.get('ok'):
+                                logger.info(
+                                    f'monitor_trades: Tradovate close sent — '
+                                    f'#{t["id"]} {sym} {direction} {num_contracts}ct [{exit_reason}]'
+                                )
+                            else:
+                                logger.warning(
+                                    f'monitor_trades: Tradovate close FAILED — '
+                                    f'#{t["id"]} {sym}: {tv_result.get("error")}'
+                                )
+                    except Exception as _tv_e:
+                        logger.warning(
+                            f'monitor_trades: Tradovate close exception — '
+                            f'#{t["id"]} {sym}: {_tv_e}'
+                        )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -430,7 +461,7 @@ def get_open_trades() -> list:
 
     cols = ['id','symbol','direction','setup','mode','entry_price','stop',
             'target','rr_planned','session','quality','entry_time','exit_price',
-            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id']
+            'exit_time','exit_reason','pnl_r','status','bars_held','notes','broker_order_id','contracts']
 
     result = []
     for row in trades:
