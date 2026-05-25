@@ -303,6 +303,10 @@ def _resolve_account_id(token: str) :
         accounts = resp.json()
         if not isinstance(accounts, list):
             return None
+        logger.info(
+            'Tradovate accounts available: '
+            + ', '.join(f'{a.get("name")} (id={a.get("id")})' for a in accounts)
+        )
         if TRADOVATE_ACCOUNT:
             for a in accounts:
                 if (str(a.get('name', '')) == TRADOVATE_ACCOUNT
