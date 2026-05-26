@@ -233,6 +233,13 @@ def run_scan(dt: datetime = None) -> list:
                             f'{result.setup} entry={result.entry} '
                             f'stop={result.stop} target={result.target}'
                         )
+                    else:
+                        failed = [g for g in result.gates if not g.passed]
+                        if failed:
+                            logger.info(
+                                f'Setup A/B/C {symbol} {direction}: '
+                                f'gate {failed[0].gate} [{failed[0].name}] blocked — {failed[0].detail}'
+                            )
                 except Exception as e:
                     logger.error(f'Gate check failed {symbol} {direction}: {e}')
 

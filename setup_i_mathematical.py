@@ -828,14 +828,24 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
     elif long_prob is not None and long_prob > XGB_LONG_THRESHOLD and lr_prob > LR_LONG_THRESHOLD:
         direction = 'long'
     else:
+        logger.info(
+            f'Setup I {symbol}: XGB/LR gate not met — '
+            f'short_xgb={short_prob} (need >{XGB_LONG_THRESHOLD} AND lr<{LR_SHORT_THRESHOLD}) | '
+            f'long_xgb={long_prob} (need >{XGB_LONG_THRESHOLD}) lr={lr_prob:.3f} (need >{LR_LONG_THRESHOLD})'
+        )
         return None
 
-    # ── Gate: HTF 4h bias ─────────────────────────────────────
+    # ── Gate: HTF 4h bias — block only on opposite trend, allow NEUTRAL ──
+    # NEUTRAL means inconclusive; XGB already incorporates htf_momentum feature.
+    # Hard-blocking NEUTRAL double-counts and suppresses valid trending signals.
     bias = _htf_4h_bias(df_5m)
-    bias_ok = (direction == 'long'  and bias == 'BULLISH') or \
-              (direction == 'short' and bias == 'BEARISH')
+    logger.info(f'Setup I {symbol}: HTF 4h bias={bias} direction={direction}')
+    bias_ok = not (
+        (direction == 'long'  and bias == 'BEARISH') or
+        (direction == 'short' and bias == 'BULLISH')
+    )
     if not bias_ok:
-        logger.info(f'Setup I {symbol}: {direction} blocked by 4h bias ({bias})')
+        logger.info(f'Setup I {symbol}: {direction} blocked by 4h bias ({bias}) — opposite trend')
         return None
 
     # ── Gate: Max 1 open Setup I trade per instrument ─────────

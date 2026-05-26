@@ -192,10 +192,9 @@ SETUP_REGIME_CONFIG = {
 # Format: {setup_id: set_of_paper_instruments}
 # Empty set = all instruments execute live (subject to PAPER_ONLY_SETUPS env).
 SETUP_PAPER_INSTRUMENTS: dict = {
-    'I': {'MNQ'},               # Setup I: MNQ paper, ES live
     'E': {'MNQ', 'ES'},         # Setup E disabled — all paper
     'F': {'MNQ', 'ES', 'GC'},   # Setup F suspended — all paper
-    'J': {'MNQ'},               # Setup J: MNQ paper (initial obs), ES live on MESM6
+    # H, I, J: MNQ now live — all instruments execute via Tradovate when TRADOVATE_ENABLED=true
 }
 
 
@@ -2453,16 +2452,10 @@ def background_scheduler():
                                         exc_info=True
                                     )
 
-                            # ── [I-6/6] Tradovate — MNQ paper only, ES live ───────────
-                            if _sym == 'MNQ':
+                            # ── [I-6/6] Tradovate — MNQ and ES both live ──────────────
+                            if _i_tid:
                                 logger.info(
-                                    f'[I-6/6] MNQ Setup I: paper only — '
-                                    f'stops too large for current account size '
-                                    f'(trade logged id={_i_tid}, no Tradovate order)'
-                                )
-                            elif _i_tid:
-                                logger.info(
-                                    f'[I-6/6] ES Setup I: executing on Tradovate live '
+                                    f'[I-6/6] {_sym} Setup I: executing on Tradovate live '
                                     f'(trade_id={_i_tid})'
                                 )
                                 try:
@@ -2470,12 +2463,12 @@ def background_scheduler():
                                 except Exception as _i_exe:
                                     logger.critical(
                                         f'[I-6/6] CRITICAL: _execute_via_tradovate raised '
-                                        f'for ES: {_i_exe}',
+                                        f'for {_sym}: {_i_exe}',
                                         exc_info=True
                                     )
                             else:
                                 logger.critical(
-                                    f'[I-6/6] CRITICAL: ES Setup I — skipping Tradovate, '
+                                    f'[I-6/6] CRITICAL: {_sym} Setup I — skipping Tradovate, '
                                     f'no trade_id (log_trade failed)'
                                 )
 
@@ -2594,27 +2587,22 @@ def background_scheduler():
                                         exc_info=True
                                     )
 
-                            # ── [J-6/6] Tradovate — MNQ paper, ES live ────────
-                            if _sym_j == 'MNQ':
+                            # ── [J-6/6] Tradovate — MNQ and ES both live ─────────
+                            if _j_tid:
                                 logger.info(
-                                    f'[J-6/6] MNQ Setup J: paper only — initial observation period '
-                                    f'(trade logged id={_j_tid}, no Tradovate order)'
-                                )
-                            elif _j_tid:
-                                logger.info(
-                                    f'[J-6/6] ES Setup J: executing on Tradovate live MESM6 '
+                                    f'[J-6/6] {_sym_j} Setup J: executing on Tradovate live '
                                     f'(trade_id={_j_tid})'
                                 )
                                 try:
                                     _execute_via_tradovate(sig_j, _j_tid)
                                 except Exception as _j_exe:
                                     logger.critical(
-                                        f'[J-6/6] CRITICAL: _execute_via_tradovate raised for ES: {_j_exe}',
+                                        f'[J-6/6] CRITICAL: _execute_via_tradovate raised for {_sym_j}: {_j_exe}',
                                         exc_info=True
                                     )
                             else:
                                 logger.critical(
-                                    f'[J-6/6] CRITICAL: ES Setup J — skipping Tradovate, no trade_id'
+                                    f'[J-6/6] CRITICAL: {_sym_j} Setup J — skipping Tradovate, no trade_id'
                                 )
 
                             logger.info(
@@ -2792,13 +2780,46 @@ def background_scheduler():
                     except Exception as _he:
                         logger.warning(f'Setup H ES error: {_he}')
                     try:
-                        logger.info('Scanning Setup H for MNQ (paper)')
-                        sig_mnq = scan_setup_h('MNQ', _now_utc, paper_only=True)
-                        if sig_mnq:
-                            log_h_paper(sig_mnq)
-                            logger.info(f'Setup H MNQ paper: {sig_mnq["direction"].upper()} @ {sig_mnq["entry"]:.2f}')
+                        _heat_h_mnq = _count_open_trades()
+                        if _heat_h_mnq >= MAX_PORTFOLIO_HEAT:
+                            logger.info(f'Portfolio heat: {_heat_h_mnq} trades open — new signal blocked for Setup H MNQ')
+                        elif not _rg.daily.is_daily_limit_hit():
+                            logger.info('Scanning Setup H for MNQ (live)')
+                            sig_mnq_h = scan_setup_h('MNQ', _now_utc, paper_only=False)
+                            if sig_mnq_h:
+                                if SIGNAL_FILTERS['max_concurrent_per_instrument']:
+                                    _f1hm_has, _f1hm_id = _has_open_trade_on_instrument('MNQ')
+                                    if _f1hm_has:
+                                        logger.info(f'Setup H: skipped — MNQ already has open trade #{_f1hm_id}')
+                                        sig_mnq_h = None
+                            if sig_mnq_h:
+                                if not _has_opposite_swing_trade('MNQ', sig_mnq_h['direction']):
+                                    if not _cal_block('MNQ', sig_mnq_h['setup']):
+                                        if not _check_and_mark_fired('MNQ', sig_mnq_h['setup'], sig_mnq_h['direction']):
+                                            if not _is_signal_already_active('MNQ', sig_mnq_h['direction'], sig_mnq_h['setup']):
+                                                _hm_tid = None
+                                                try:
+                                                    _hm_tid = log_trade(sig_mnq_h)
+                                                    if _hm_tid:
+                                                        logger.info(f'Trade logged: id={_hm_tid} MNQ {sig_mnq_h["direction"]} {sig_mnq_h["setup"]}')
+                                                    else:
+                                                        logger.error('CRITICAL: Setup H log_trade() returned None — MNQ NOT in DB')
+                                                except Exception as _lte_hm:
+                                                    logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — MNQ: {_lte_hm}', exc_info=True)
+                                                if not _hm_tid:
+                                                    logger.critical('CRITICAL: Skipping Telegram for Setup H MNQ — log_trade returned None')
+                                                else:
+                                                    try:
+                                                        msg = format_h_alert(sig_mnq_h) + _risk_footer
+                                                        send_telegram(msg)
+                                                    except Exception as _h_te_m:
+                                                        logger.error(f'Setup H send_telegram failed MNQ: {_h_te_m}')
+                                                    _execute_via_tradovate(sig_mnq_h, _hm_tid)
+                                                logger.info(f'Setup H MNQ {sig_mnq_h["direction"].upper()} signal fired db_id={_hm_tid}')
+                                else:
+                                    logger.info('Setup H MNQ suppressed — opposite swing trade open')
                     except Exception as _hmnq:
-                        logger.warning(f'Setup H MNQ paper error: {_hmnq}')
+                        logger.warning(f'Setup H MNQ error: {_hmnq}')
                 except Exception as e:
                     logger.warning(f'Setup H scanner error: {e}')
 
@@ -3604,8 +3625,9 @@ def _startup():
     logger.info(f'  Portfolio heat limit: max {MAX_PORTFOLIO_HEAT} concurrent trades')
     logger.info(f'  Paper-only setups (no Tradovate execution): '
                 f'{", ".join(sorted(PAPER_ONLY_SETUPS)) or "none"}')
-    logger.info('  Setup I: MNQ=paper only | ES=live execution')
-    logger.info('  Setup J: Value Area Continuation | ES=live MESM6 | MNQ=paper')
+    logger.info('  Setup H: MNQ=live | ES=live')
+    logger.info('  Setup I: MNQ=live | ES=live')
+    logger.info('  Setup J: MNQ=live | ES=live MESM6')
     logger.info('  Setup E: disabled (underperforming — confirmed losing record)')
     logger.info('  Setup J: wired to scanner — scanning every 5min')
     logger.info('  Server running at: http://localhost:5000')

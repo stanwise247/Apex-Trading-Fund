@@ -477,23 +477,30 @@ def scan_setup_d(symbol: str, dt: datetime = None) :
 
     hour = dt.hour
     if not (params['session_start'] <= hour < params['session_end']):
+        logger.info(f'Setup D {symbol}: outside session ({hour}h, need {params["session_start"]}-{params["session_end"]})')
         return None
 
     bias = get_htf_bias(symbol)
+    logger.info(f'Setup D {symbol}: HTF bias={bias}')
     if bias == 'neutral':
+        logger.info(f'Setup D {symbol}: blocked — 4h bias NEUTRAL (no directional edge)')
         return None
 
     df_15m  = load_bars(symbol, '15min', limit=200)
     if df_15m.empty or len(df_15m) < 20:
+        logger.warning(f'Setup D {symbol}: insufficient 15min bars ({len(df_15m)})')
         return None
 
     atr_15m = calc_atr(df_15m, 14)
     fvgs    = detect_fvgs(df_15m, atr_15m, params['min_fvg_atr'], params['fvg_lookback_bars'])
+    logger.info(f'Setup D {symbol}: {len(fvgs)} FVGs detected (bias={bias}, min_atr={params["min_fvg_atr"]})')
     if not fvgs:
+        logger.info(f'Setup D {symbol}: no qualifying FVGs found — no signal')
         return None
 
     df_1m  = load_bars(symbol, '1min', limit=50)
     if df_1m.empty:
+        logger.warning(f'Setup D {symbol}: no 1min bars')
         return None
 
     atr_1m = calc_atr(df_1m, 14)
@@ -504,6 +511,7 @@ def scan_setup_d(symbol: str, dt: datetime = None) :
     last_low   = float(last_bar['low'])
 
     vol_baseline_15m = float(df_15m['volume'].tail(20).mean())
+    _scored_fvgs = []
 
     for fvg in fvgs:
         if fvg['formed_at'] >= df_1m.index[-1]:
@@ -530,7 +538,12 @@ def scan_setup_d(symbol: str, dt: datetime = None) :
             continue
 
         fvg_score = score_fvg(fvg, df_15m, df_1m.index[-1], vol_baseline_15m)
+        _scored_fvgs.append((fvg_score, fvg, direction))
         if fvg_score < params['min_score']:
+            logger.info(
+                f'Setup D {symbol}: FVG score={fvg_score} < min={params["min_score"]} '
+                f'({fvg["type"]} formed {fvg["formed_at"]}) — skipped'
+            )
             continue
 
         _mark_fvg_alerted(symbol, fvg['formed_at'])
@@ -570,6 +583,16 @@ def scan_setup_d(symbol: str, dt: datetime = None) :
             'timestamp':  df_1m.index[-1],
         }
 
+    if _scored_fvgs:
+        logger.info(
+            f'Setup D {symbol}: {len(_scored_fvgs)} FVG(s) evaluated — '
+            f'entry trigger not met (price not touching FVG mid with confirming candle) | '
+            f'price={last_close:.2f}'
+        )
+    else:
+        logger.info(
+            f'Setup D {symbol}: no FVGs aligned with bias={bias} or all already alerted'
+        )
     return None
 
 
