@@ -197,6 +197,28 @@ SETUP_PAPER_INSTRUMENTS: dict = {
     # H, I, J: MNQ now live — all instruments execute via Tradovate when TRADOVATE_ENABLED=true
 }
 
+# Hard maximum stop distances per instrument (points). Signals exceeding these are rejected.
+_MAX_STOP_PTS: dict = {'MNQ': 50, 'ES': 12, 'GC': 8}
+
+
+def _stop_cap_ok(sig: dict) -> tuple:
+    """Return (True, '') or (False, warning_msg) when stop distance exceeds per-instrument cap."""
+    sym = sig.get('symbol', '')
+    max_pts = _MAX_STOP_PTS.get(sym)
+    if max_pts is None:
+        return True, ''
+    try:
+        dist = abs(float(sig['entry']) - float(sig['stop']))
+    except (KeyError, TypeError, ValueError):
+        return True, ''
+    if dist > max_pts:
+        setup = sig.get('setup', '?')
+        return False, (
+            f'Setup {setup} {sym}: stop={dist:.1f}pts exceeds max {max_pts}pts '
+            f'— signal REJECTED (high volatility)'
+        )
+    return True, ''
+
 
 def _seed_strategy_config():
     """Upsert all setups into strategy_config, enforcing correct defaults on every startup."""
@@ -2071,6 +2093,10 @@ def background_scheduler():
                             f'Signal: MNQ {sig["direction"]} {sig.get("setup","FVG")} | '
                             f'stop={_fvg_stop_pts} pts | risk=${_fvg_risk_usd:.0f} | contracts=1'
                         )
+                        _fvg_cap_ok, _fvg_cap_msg = _stop_cap_ok(sig)
+                        if not _fvg_cap_ok:
+                            logger.warning(_fvg_cap_msg)
+                            continue
                         _fvg_tid = None
                         try:
                             _fvg_tid = log_trade(sig)
@@ -2190,6 +2216,12 @@ def background_scheduler():
                             f'Signal: {_sym} {_dirn} {_setup} | '
                             f'stop={_apex_stop_pts} pts | risk=${_apex_risk_usd:.0f} | contracts=1'
                         )
+                        _apex_cap_ok, _apex_cap_msg = _stop_cap_ok(
+                            {'symbol': _sym, 'entry': result.entry, 'stop': result.stop, 'setup': _setup}
+                        )
+                        if not _apex_cap_ok:
+                            logger.warning(_apex_cap_msg)
+                            continue
                     tracker.mark_sent(result)
                     _sig_dict = {
                         'symbol':    _sym,
@@ -2300,6 +2332,10 @@ def background_scheduler():
                                     continue
                                 if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
                                     continue
+                                _f_cap_ok, _f_cap_msg = _stop_cap_ok(sig)
+                                if not _f_cap_ok:
+                                    logger.warning(_f_cap_msg)
+                                    continue
                                 _f_tid = None
                                 try:
                                     logger.info(
@@ -2400,6 +2436,12 @@ def background_scheduler():
                                     f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
                                     f'signal already active in DB — dropped'
                                 )
+                                continue
+
+                            # ── [I-2c/6] Stop cap check ───────────────────────────────
+                            _i_cap_ok, _i_cap_msg = _stop_cap_ok(sig)
+                            if not _i_cap_ok:
+                                logger.warning(_i_cap_msg)
                                 continue
 
                             # ── [I-3/6] log_trade — CRITICAL on any failure ────────────
@@ -2542,6 +2584,12 @@ def background_scheduler():
                                 logger.info(f'[J-2b/6] Setup J {_sym_j}: already active — signal dropped')
                                 continue
 
+                            # ── [J-2c/6] Stop cap check ──────────────────────
+                            _j_cap_ok, _j_cap_msg = _stop_cap_ok(sig_j)
+                            if not _j_cap_ok:
+                                logger.warning(_j_cap_msg)
+                                continue
+
                             # ── [J-3/6] log_trade ────────────────────────────
                             _j_tid = None
                             try:
@@ -2671,6 +2719,10 @@ def background_scheduler():
                                 f'Signal: {_sym_d} {sig_d["direction"]} {sig_d["setup"]} | '
                                 f'stop={_d_stop_pts} pts | risk=${_d_risk_usd:.0f} | contracts=1'
                             )
+                            _d_cap_ok, _d_cap_msg = _stop_cap_ok(sig_d)
+                            if not _d_cap_ok:
+                                logger.warning(_d_cap_msg)
+                                continue
                             _d_tid = None
                             try:
                                 _d_tid = _log_trade(sig_d)
@@ -2750,29 +2802,33 @@ def background_scheduler():
                                     if not _cal_block('ES', sig_es['setup']):
                                         if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
                                             if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
-                                                _h_tid = None
-                                                try:
-                                                    _h_tid = log_trade(sig_es)
-                                                    if _h_tid:
-                                                        logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
-                                                    else:
-                                                        logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
-                                                except Exception as _lte:
-                                                    logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
-                                                if not _h_tid:
-                                                    logger.critical('CRITICAL: Skipping Telegram for Setup H ES — log_trade returned None')
+                                                _h_es_cap_ok, _h_es_cap_msg = _stop_cap_ok(sig_es)
+                                                if not _h_es_cap_ok:
+                                                    logger.warning(_h_es_cap_msg)
                                                 else:
+                                                    _h_tid = None
                                                     try:
-                                                        msg = format_h_alert(sig_es) + _risk_footer
-                                                        send_telegram(msg)
-                                                    except Exception as _h_te:
-                                                        logger.error(f'Setup H send_telegram failed ES: {_h_te}')
-                                                if _h_tid:
-                                                    logger.info(f'Calling _execute_via_tradovate: ES {sig_es["direction"]} {sig_es["setup"]} trade_id={_h_tid}')
-                                                    _execute_via_tradovate(sig_es, _h_tid)
-                                                else:
-                                                    logger.warning('Skipping _execute_via_tradovate — log_trade returned None for Setup H ES')
-                                                logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
+                                                        _h_tid = log_trade(sig_es)
+                                                        if _h_tid:
+                                                            logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
+                                                        else:
+                                                            logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
+                                                    except Exception as _lte:
+                                                        logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
+                                                    if not _h_tid:
+                                                        logger.critical('CRITICAL: Skipping Telegram for Setup H ES — log_trade returned None')
+                                                    else:
+                                                        try:
+                                                            msg = format_h_alert(sig_es) + _risk_footer
+                                                            send_telegram(msg)
+                                                        except Exception as _h_te:
+                                                            logger.error(f'Setup H send_telegram failed ES: {_h_te}')
+                                                    if _h_tid:
+                                                        logger.info(f'Calling _execute_via_tradovate: ES {sig_es["direction"]} {sig_es["setup"]} trade_id={_h_tid}')
+                                                        _execute_via_tradovate(sig_es, _h_tid)
+                                                    else:
+                                                        logger.warning('Skipping _execute_via_tradovate — log_trade returned None for Setup H ES')
+                                                    logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
                                 else:
                                     logger.info('Setup H ES suppressed — opposite swing trade open')
                         else:
@@ -2797,25 +2853,29 @@ def background_scheduler():
                                     if not _cal_block('MNQ', sig_mnq_h['setup']):
                                         if not _check_and_mark_fired('MNQ', sig_mnq_h['setup'], sig_mnq_h['direction']):
                                             if not _is_signal_already_active('MNQ', sig_mnq_h['direction'], sig_mnq_h['setup']):
-                                                _hm_tid = None
-                                                try:
-                                                    _hm_tid = log_trade(sig_mnq_h)
-                                                    if _hm_tid:
-                                                        logger.info(f'Trade logged: id={_hm_tid} MNQ {sig_mnq_h["direction"]} {sig_mnq_h["setup"]}')
-                                                    else:
-                                                        logger.error('CRITICAL: Setup H log_trade() returned None — MNQ NOT in DB')
-                                                except Exception as _lte_hm:
-                                                    logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — MNQ: {_lte_hm}', exc_info=True)
-                                                if not _hm_tid:
-                                                    logger.critical('CRITICAL: Skipping Telegram for Setup H MNQ — log_trade returned None')
+                                                _hm_cap_ok, _hm_cap_msg = _stop_cap_ok(sig_mnq_h)
+                                                if not _hm_cap_ok:
+                                                    logger.warning(_hm_cap_msg)
                                                 else:
+                                                    _hm_tid = None
                                                     try:
-                                                        msg = format_h_alert(sig_mnq_h) + _risk_footer
-                                                        send_telegram(msg)
-                                                    except Exception as _h_te_m:
-                                                        logger.error(f'Setup H send_telegram failed MNQ: {_h_te_m}')
-                                                    _execute_via_tradovate(sig_mnq_h, _hm_tid)
-                                                logger.info(f'Setup H MNQ {sig_mnq_h["direction"].upper()} signal fired db_id={_hm_tid}')
+                                                        _hm_tid = log_trade(sig_mnq_h)
+                                                        if _hm_tid:
+                                                            logger.info(f'Trade logged: id={_hm_tid} MNQ {sig_mnq_h["direction"]} {sig_mnq_h["setup"]}')
+                                                        else:
+                                                            logger.error('CRITICAL: Setup H log_trade() returned None — MNQ NOT in DB')
+                                                    except Exception as _lte_hm:
+                                                        logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — MNQ: {_lte_hm}', exc_info=True)
+                                                    if not _hm_tid:
+                                                        logger.critical('CRITICAL: Skipping Telegram for Setup H MNQ — log_trade returned None')
+                                                    else:
+                                                        try:
+                                                            msg = format_h_alert(sig_mnq_h) + _risk_footer
+                                                            send_telegram(msg)
+                                                        except Exception as _h_te_m:
+                                                            logger.error(f'Setup H send_telegram failed MNQ: {_h_te_m}')
+                                                        _execute_via_tradovate(sig_mnq_h, _hm_tid)
+                                                    logger.info(f'Setup H MNQ {sig_mnq_h["direction"].upper()} signal fired db_id={_hm_tid}')
                                 else:
                                     logger.info('Setup H MNQ suppressed — opposite swing trade open')
                     except Exception as _hmnq:
@@ -3628,6 +3688,7 @@ def _startup():
     logger.info('  Setup H: MNQ=live | ES=live')
     logger.info('  Setup I: MNQ=live | ES=live')
     logger.info('  Setup J: MNQ=live | ES=live MESM6')
+    logger.info('  Max stop limits: MNQ=50pts ES=12pts GC=8pts')
     logger.info('  Setup E: disabled (underperforming — confirmed losing record)')
     logger.info('  Setup J: wired to scanner — scanning every 5min')
     logger.info('  Server running at: http://localhost:5000')
