@@ -229,10 +229,12 @@ def scan_setup_h(symbol: str = 'ES', dt: datetime = None,
         direction = 'long'
 
     if direction is None:
-        logger.debug(
+        logger.info(
             f'Setup H {symbol}: no signal | close={curr_close:.2f} '
             f'upper={curr_upper:.2f} lower={curr_lower:.2f} '
-            f'vwap={curr_vwap:.2f} htf={htf_bias}'
+            f'vwap={curr_vwap:.2f} htf={htf_bias} | '
+            f'prev_close={prev_close:.2f} prev_upper={prev_upper:.2f} prev_lower={prev_lower:.2f} '
+            f'(need: prev outside band + curr back inside + htf aligned)'
         )
         return None
 

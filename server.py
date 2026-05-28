@@ -2407,6 +2407,17 @@ def background_scheduler():
                             if _rg_i.daily.is_daily_limit_hit():
                                 logger.info(f'Setup I {_sym}: daily limit hit — suppressed')
                                 continue
+                            if _now_utc_i.weekday() not in {1, 2, 3}:
+                                logger.info(
+                                    f'Setup I {_sym}: day filter blocked — '
+                                    f'weekday={_now_utc_i.weekday()} '
+                                    f'({["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][_now_utc_i.weekday()]}) '
+                                    f'need Tue/Wed/Thu'
+                                )
+                                continue
+                            if not is_setup_enabled('I', _sym):
+                                logger.info(f'Setup I {_sym}: regime gate blocked — skipping')
+                                continue
                             logger.info(f'Scanning Setup I for {_sym}')
                             sig = scan_setup_i(_sym, _now_utc_i)
                             # ← CRITICAL visibility: log every scan result so we know
@@ -2790,7 +2801,15 @@ def background_scheduler():
                             logger.info(f'Portfolio heat: {_heat_h} trades open — new signal blocked for Setup H')
                         elif not _rg.daily.is_daily_limit_hit():
                             logger.info('Scanning Setup H for ES (live)')
-                            sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
+                            if not is_setup_enabled('H', 'ES'):
+                                logger.info('Setup H ES: regime gate blocked — skipping')
+                                sig_es = None
+                            else:
+                                sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
+                            logger.info(
+                                f'scan_setup_h ES returned: '
+                                f'{"SIGNAL dir=" + sig_es["direction"] if sig_es else "None (no signal this tick)"}'
+                            )
                             if sig_es:
                                 if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                     _f1h_has, _f1h_id = _has_open_trade_on_instrument('ES')
@@ -2841,7 +2860,15 @@ def background_scheduler():
                             logger.info(f'Portfolio heat: {_heat_h_mnq} trades open — new signal blocked for Setup H MNQ')
                         elif not _rg.daily.is_daily_limit_hit():
                             logger.info('Scanning Setup H for MNQ (live)')
-                            sig_mnq_h = scan_setup_h('MNQ', _now_utc, paper_only=False)
+                            if not is_setup_enabled('H', 'MNQ'):
+                                logger.info('Setup H MNQ: regime gate blocked — skipping')
+                                sig_mnq_h = None
+                            else:
+                                sig_mnq_h = scan_setup_h('MNQ', _now_utc, paper_only=False)
+                            logger.info(
+                                f'scan_setup_h MNQ returned: '
+                                f'{"SIGNAL dir=" + sig_mnq_h["direction"] if sig_mnq_h else "None (no signal this tick)"}'
+                            )
                             if sig_mnq_h:
                                 if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                     _f1hm_has, _f1hm_id = _has_open_trade_on_instrument('MNQ')
@@ -3885,9 +3912,15 @@ def apex_scan():
                     ),
                 },
                 {
-                    'gate': 4, 'name': 'HTF Bias',
-                    'passed': _h.get('htf_bias') in ('bullish', 'bearish'),
-                    'detail': f'4h bias={_h.get("htf_bias")}',
+                    'gate': 4, 'name': 'HTF Bias Aligned',
+                    'passed': (
+                        (_h.get('signal_state') == 'ABOVE_UPPER' and _h.get('htf_bias') == 'bearish') or
+                        (_h.get('signal_state') == 'BELOW_LOWER' and _h.get('htf_bias') == 'bullish')
+                    ),
+                    'detail': (
+                        f'bias={_h.get("htf_bias")} '
+                        f'need={"bearish" if _h.get("signal_state") == "ABOVE_UPPER" else "bullish" if _h.get("signal_state") == "BELOW_LOWER" else "n/a"}'
+                    ),
                 },
             ]
             _h_passed = sum(1 for g in _h_gates if g['passed'])
@@ -3933,6 +3966,7 @@ def apex_scan():
             _long_lr_ok   = _lr is not None and _lr > 0.58
             _short_xgb_ok = _s_xgb is not None and _s_xgb > 0.58
             _short_lr_ok  = _lr is not None and _lr < 0.42
+            _i_today_ok = _i_now.weekday() in {1, 2, 3}  # Tue=1, Wed=2, Thu=3
             _i_gates = [
                 {
                     'gate': 1, 'name': 'Models Trained',
@@ -3940,17 +3974,26 @@ def apex_scan():
                     'detail': f'short_model={_i.get("short_enabled")} long_model={_i.get("long_enabled")}',
                 },
                 {
-                    'gate': 2, 'name': 'Session',
+                    'gate': 2, 'name': 'Trading Day',
+                    'passed': _i_today_ok,
+                    'detail': (
+                        f'weekday={_i_now.weekday()} '
+                        f'({["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][_i_now.weekday()]}) '
+                        f'— need Tue/Wed/Thu'
+                    ),
+                },
+                {
+                    'gate': 3, 'name': 'Session',
                     'passed': _i_in_sess,
                     'detail': f'{_i_now.hour:02d}:00 UTC session 13-{_i_sess_end} UTC',
                 },
                 {
-                    'gate': 3, 'name': 'XGB Probability > 0.58',
+                    'gate': 4, 'name': 'XGB Probability > 0.58',
                     'passed': _long_xgb_ok or _short_xgb_ok,
                     'detail': f'long_xgb={_l_xgb} short_xgb={_s_xgb} (need >0.58)',
                 },
                 {
-                    'gate': 4, 'name': 'LogReg Confirmation',
+                    'gate': 5, 'name': 'LogReg Confirmation',
                     'passed': _long_lr_ok or _short_lr_ok,
                     'detail': (
                         f'lr={_lr:.3f} (long needs >0.58, short needs <0.42)'
