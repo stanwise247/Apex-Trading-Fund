@@ -1583,7 +1583,7 @@ def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
     try:
         conn = _db.connect()
         row  = conn.execute(
-            "SELECT id FROM apex_trades WHERE symbol=? AND direction=? AND setup=? AND status='open' LIMIT 1",
+            "SELECT id FROM apex_trades WHERE symbol=? AND direction=? AND setup=? AND status='open' AND quality != 'test' LIMIT 1",
             (symbol, direction, setup)
         ).fetchone()
         conn.close()
@@ -1619,7 +1619,7 @@ def _has_opposite_swing_trade(symbol: str, direction: str) -> bool:
         conn = _db.connect()
         row = conn.execute(
             "SELECT id FROM apex_trades "
-            "WHERE symbol=? AND direction=? AND setup NOT LIKE 'FVG%' AND status='open' LIMIT 1",
+            "WHERE symbol=? AND direction=? AND setup NOT LIKE 'FVG%' AND status='open' AND quality != 'test' LIMIT 1",
             (symbol, opp)
         ).fetchone()
         conn.close()
@@ -1633,7 +1633,7 @@ def _has_open_trade_on_instrument(symbol: str) -> tuple:
     try:
         conn = _db.connect()
         row = conn.execute(
-            "SELECT id FROM apex_trades WHERE symbol=? AND status='open' LIMIT 1",
+            "SELECT id FROM apex_trades WHERE symbol=? AND status='open' AND quality != 'test' LIMIT 1",
             (symbol,)
         ).fetchone()
         conn.close()
@@ -1648,7 +1648,7 @@ def _count_open_trades() -> int:
     try:
         conn = _db.connect()
         n = conn.execute(
-            "SELECT COUNT(*) FROM apex_trades WHERE status='open'"
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
         ).fetchone()[0]
         conn.close()
         return int(n)
