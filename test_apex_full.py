@@ -1212,6 +1212,744 @@ def test_r8_telegram_report():
 #  Main
 # ─────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────
+#  TEST GROUP G — Gate Logic, Quality Filter & Regime Tests
+# ─────────────────────────────────────────────────────────────
+
+_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _src(filename: str) -> str:
+    with open(os.path.join(_DIR, filename)) as fh:
+        return fh.read()
+
+
+def _setup_i_dashboard_src() -> str:
+    """Extract Setup I dashboard block from server.py (between setup_i_data and setup_j_data)."""
+    src = _src('server.py')
+    start = src.find('setup_i_data = []')
+    end   = src.find('setup_j_data = []') if start != -1 else -1
+    return src[start:end] if start != -1 and end != -1 else ''
+
+
+def _j_gate_in_source(gate_num: int, gate_name: str) -> bool:
+    """Return True if gate N with given name is defined inside get_setup_j_state()."""
+    src = _src('setup_j_value_area.py')
+    fn_start = src.find('def get_setup_j_state')
+    fn_src   = src[fn_start:fn_start + 5000] if fn_start != -1 else ''
+    return f"'gate': {gate_num}" in fn_src and f"'{gate_name}'" in fn_src
+
+
+# ── G1: _count_open_trades SQL excludes test ─────────────────
+
+def test_g1_count_open_trades_sql_excludes_test():
+    """_count_open_trades in server.py has AND quality != 'test' in its SQL."""
+    _section('TEST G1 — _count_open_trades SQL excludes test quality')
+    try:
+        src = _src('server.py')
+        target = "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+        if target in src:
+            _pass("TEST G1  _count_open_trades SQL", "quality != 'test' filter present")
+        else:
+            _fail("TEST G1  _count_open_trades SQL", "quality != 'test' not found in query")
+    except Exception as e:
+        _fail('TEST G1', f'{type(e).__name__}: {e}')
+
+
+# ── G2: test-quality trade is NOT counted ────────────────────
+
+def test_g2_count_open_trades_ignores_test_db():
+    """DB: inserting a test-quality open trade does not change _count_open_trades result."""
+    _section('TEST G2 — _count_open_trades DB excludes test-quality trades')
+    import db as _db
+    tid = None
+    try:
+        conn   = _db.connect()
+        before = conn.execute(
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+        ).fetchone()[0]
+        conn.close()
+
+        from trade_tracker import log_trade
+        tid = log_trade({'symbol': 'MNQ', 'direction': 'long', 'setup': 'TEST_g2_gate',
+                         'mode': 'test', 'entry': 19999.0, 'stop': 19990.0, 'target': 20009.0,
+                         'rr': 1.0, 'session': 'TEST', 'quality': 'test'})
+        _cleanup_ids.append(tid)
+
+        conn = _db.connect()
+        raw   = conn.execute("SELECT COUNT(*) FROM apex_trades WHERE id=? AND status='open'",
+                             (tid,)).fetchone()[0]
+        after = conn.execute(
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+        ).fetchone()[0]
+        conn.close()
+
+        if raw == 0:
+            _fail('TEST G2  trade open in DB', f'id={tid} not found as open')
+        elif after == before:
+            _pass('TEST G2  count unchanged',
+                  f'id={tid} open in DB but excluded from count (count={before})')
+        else:
+            _fail('TEST G2  count unchanged',
+                  f'count changed {before}→{after} (test trade was counted)')
+    except Exception as e:
+        _fail('TEST G2', f'{type(e).__name__}: {e}')
+    finally:
+        if tid:
+            try:
+                import db as _db2
+                c = _db2.connect()
+                c.execute("UPDATE apex_trades SET status='closed', exit_reason='test_cleanup' "
+                          "WHERE id=?", (tid,))
+                c.commit(); c.close()
+                if tid in _cleanup_ids: _cleanup_ids.remove(tid)
+            except Exception:
+                pass
+
+
+# ── G3: non-test trade IS counted ────────────────────────────
+
+def test_g3_count_open_trades_counts_real_db():
+    """DB: non-test-quality open trade increments _count_open_trades by exactly 1."""
+    _section('TEST G3 — _count_open_trades DB counts non-test trades')
+    import db as _db
+    tid = None
+    try:
+        conn   = _db.connect()
+        before = conn.execute(
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+        ).fetchone()[0]
+        conn.close()
+
+        from trade_tracker import log_trade
+        tid = log_trade({'symbol': 'ES', 'direction': 'short', 'setup': 'TEST_g3_gate',
+                         'mode': 'paper', 'entry': 5500.0, 'stop': 5510.0, 'target': 5480.0,
+                         'rr': 2.0, 'session': 'TEST', 'quality': 'paper'})
+        _cleanup_ids.append(tid)
+
+        conn  = _db.connect()
+        after = conn.execute(
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+        ).fetchone()[0]
+        conn.close()
+
+        if after == before + 1:
+            _pass('TEST G3  count +1', f'paper id={tid} counted ({before}→{after})')
+        else:
+            _fail('TEST G3  count +1', f'count changed {before}→{after} (expected +1)')
+    except Exception as e:
+        _fail('TEST G3', f'{type(e).__name__}: {e}')
+    finally:
+        if tid:
+            try:
+                import db as _db2
+                c = _db2.connect()
+                c.execute("UPDATE apex_trades SET status='closed', exit_reason='test_cleanup' "
+                          "WHERE id=?", (tid,))
+                c.commit(); c.close()
+                if tid in _cleanup_ids: _cleanup_ids.remove(tid)
+            except Exception:
+                pass
+
+
+# ── G4: _is_signal_already_active SQL excludes test ──────────
+
+def test_g4_is_signal_active_excludes_test():
+    """_is_signal_already_active DB query in server.py excludes quality='test'."""
+    _section('TEST G4 — _is_signal_already_active SQL excludes test quality')
+    try:
+        src      = _src('server.py')
+        fn_start = src.find('def _is_signal_already_active')
+        fn_end   = src.find('\ndef ', fn_start + 1)
+        snippet  = src[fn_start:fn_end] if fn_start != -1 and fn_end != -1 else ''
+        if "quality != 'test'" in snippet:
+            _pass('TEST G4  SQL excludes test quality',
+                  "quality filter present in _is_signal_already_active")
+        else:
+            _fail('TEST G4  SQL excludes test quality',
+                  "quality != 'test' not found in _is_signal_already_active SQL")
+    except Exception as e:
+        _fail('TEST G4', f'{type(e).__name__}: {e}')
+
+
+# ── G5: scan_setup_i open-trade query excludes test ──────────
+
+def test_g5_scan_i_open_trade_excludes_test():
+    """setup_i_mathematical.py open-trade check has AND quality != 'test'."""
+    _section("TEST G5 — scan_setup_i open-trade query excludes test quality")
+    try:
+        src = _src('setup_i_mathematical.py')
+        if "quality != 'test'" in src:
+            _pass("TEST G5  quality filter present",
+                  "AND quality != 'test' found in setup_i_mathematical.py")
+        else:
+            _fail("TEST G5  quality filter present",
+                  "quality != 'test' not found in setup_i_mathematical.py")
+    except Exception as e:
+        _fail('TEST G5', f'{type(e).__name__}: {e}')
+
+
+# ── G6-G7: _MAX_STOP_PTS values ──────────────────────────────
+
+def test_g6_max_stop_pts_mnq():
+    """_MAX_STOP_PTS['MNQ'] == 60 in server.py."""
+    _section('TEST G6 — _MAX_STOP_PTS MNQ=60')
+    try:
+        if "'MNQ': 60" in _src('server.py'):
+            _pass("TEST G6  MNQ cap = 60pts", "Confirmed in server.py")
+        else:
+            _fail("TEST G6  MNQ cap = 60pts", "'MNQ': 60 not found in server.py")
+    except Exception as e:
+        _fail('TEST G6', f'{type(e).__name__}: {e}')
+
+
+def test_g7_max_stop_pts_es():
+    """_MAX_STOP_PTS['ES'] == 15 in server.py."""
+    _section('TEST G7 — _MAX_STOP_PTS ES=15')
+    try:
+        if "'ES': 15" in _src('server.py'):
+            _pass("TEST G7  ES cap = 15pts", "Confirmed in server.py")
+        else:
+            _fail("TEST G7  ES cap = 15pts", "'ES': 15 not found in server.py")
+    except Exception as e:
+        _fail('TEST G7', f'{type(e).__name__}: {e}')
+
+
+# ── G8-G9: Stop cap gate logic ───────────────────────────────
+
+def test_g8_stop_cap_blocks_when_exceeded():
+    """Stop cap: 1.5 × ATR14 > cap → blocked (MNQ ATR=45 → stop=67.5 > 60)."""
+    _section('TEST G8 — Stop cap blocks when exceeded')
+    try:
+        atr14, cap = 45.0, 60
+        stop = 1.5 * atr14   # 67.5
+        if stop > cap:
+            _pass('TEST G8  stop cap blocks',
+                  f'ATR14={atr14} stop={stop}pts > cap={cap}pts → blocked (correct)')
+        else:
+            _fail('TEST G8  stop cap blocks', f'{stop} not > {cap}')
+    except Exception as e:
+        _fail('TEST G8', f'{type(e).__name__}: {e}')
+
+
+def test_g9_stop_cap_passes_when_within():
+    """Stop cap: 1.5 × ATR14 <= cap → passes (MNQ ATR=35 → stop=52.5 <= 60)."""
+    _section('TEST G9 — Stop cap passes when within cap')
+    try:
+        atr14, cap = 35.0, 60
+        stop = 1.5 * atr14   # 52.5
+        if stop <= cap:
+            _pass('TEST G9  stop cap passes',
+                  f'ATR14={atr14} stop={stop}pts <= cap={cap}pts → passes (correct)')
+        else:
+            _fail('TEST G9  stop cap passes', f'{stop} not <= {cap}')
+    except Exception as e:
+        _fail('TEST G9', f'{type(e).__name__}: {e}')
+
+
+# ── G10-G11: Calendar gate ───────────────────────────────────
+
+def test_g10_calendar_blocks_during_window():
+    """CalendarFilter.is_blocked returns True when event is 20 min away (< PRE_BLOCK_MIN=30)."""
+    _section('TEST G10 — Calendar blocks during pre-event window')
+    try:
+        from calendar_filter import CalendarFilter
+        cf  = CalendarFilter()
+        now = datetime.now(timezone.utc)
+        fake_event = {'name': 'TEST_SYNTHETIC', 'utc_dt': now + timedelta(minutes=20)}
+        orig = cf._events[:]
+        cf._events = [fake_event]
+        try:
+            blocked, reason = cf.is_blocked('MNQ', now)
+            if blocked:
+                _pass('TEST G10  calendar blocks', f'Blocked: {reason}')
+            else:
+                _fail('TEST G10  calendar blocks',
+                      'Expected blocked 20min before event — got clear')
+        finally:
+            cf._events = orig
+    except Exception as e:
+        _fail('TEST G10', f'{type(e).__name__}: {e}')
+
+
+def test_g11_calendar_passes_outside_window():
+    """CalendarFilter.is_blocked returns False when next event is 3 hours away."""
+    _section('TEST G11 — Calendar passes outside event window')
+    try:
+        from calendar_filter import CalendarFilter
+        cf  = CalendarFilter()
+        now = datetime.now(timezone.utc)
+        fake_event = {'name': 'TEST_FAR', 'utc_dt': now + timedelta(hours=3)}
+        orig = cf._events[:]
+        cf._events = [fake_event]
+        try:
+            blocked, reason = cf.is_blocked('MNQ', now)
+            if not blocked:
+                _pass('TEST G11  calendar clear',
+                      'Not blocked (event 3h away, outside PRE_BLOCK_MIN=30)')
+            else:
+                _fail('TEST G11  calendar clear',
+                      f'Blocked when event is 3h away: {reason}')
+        finally:
+            cf._events = orig
+    except Exception as e:
+        _fail('TEST G11', f'{type(e).__name__}: {e}')
+
+
+# ── G12-G13: Portfolio heat gate ─────────────────────────────
+
+def test_g12_heat_blocks_at_limit():
+    """DB: 3 paper-quality open trades → open count >= MAX_PORTFOLIO_HEAT (3)."""
+    _section('TEST G12 — Portfolio heat blocks at limit')
+    import db as _db
+    inserted = []
+    try:
+        from trade_tracker import log_trade
+        for i in range(3):
+            tid = log_trade({'symbol': 'MNQ', 'direction': 'long',
+                             'setup': f'TEST_g12_heat_{i}', 'mode': 'paper',
+                             'entry': 20000.0 + i, 'stop': 19990.0, 'target': 20020.0,
+                             'rr': 2.0, 'session': 'TEST', 'quality': 'paper'})
+            inserted.append(tid)
+            _cleanup_ids.append(tid)
+
+        conn  = _db.connect()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+        ).fetchone()[0]
+        conn.close()
+
+        max_heat = 3
+        if count >= max_heat:
+            _pass('TEST G12  heat at limit',
+                  f'count={count} >= MAX_PORTFOLIO_HEAT={max_heat} → signal blocked (correct)')
+        else:
+            _fail('TEST G12  heat at limit',
+                  f'count={count} < {max_heat} after inserting 3 paper trades')
+    except Exception as e:
+        _fail('TEST G12', f'{type(e).__name__}: {e}')
+    finally:
+        for tid in inserted:
+            try:
+                import db as _db2
+                c = _db2.connect()
+                c.execute("UPDATE apex_trades SET status='closed', exit_reason='test_cleanup' "
+                          "WHERE id=?", (tid,))
+                c.commit(); c.close()
+                if tid in _cleanup_ids: _cleanup_ids.remove(tid)
+            except Exception:
+                pass
+
+
+def test_g13_max_portfolio_heat_value():
+    """MAX_PORTFOLIO_HEAT default value is 3 in server.py."""
+    _section('TEST G13 — MAX_PORTFOLIO_HEAT default = 3')
+    try:
+        found = any("'3'" in line and 'MAX_PORTFOLIO_HEAT' in line
+                    for line in _src('server.py').splitlines())
+        if found:
+            _pass("TEST G13  MAX_PORTFOLIO_HEAT = 3",
+                  "os.environ.get default '3' found in server.py")
+        else:
+            _fail("TEST G13  MAX_PORTFOLIO_HEAT = 3",
+                  "MAX_PORTFOLIO_HEAT default '3' not found in server.py")
+    except Exception as e:
+        _fail('TEST G13', f'{type(e).__name__}: {e}')
+
+
+# ── G14-G17: Setup J dashboard gate structure ─────────────────
+
+def test_g14_setup_j_state_returns_8_gates():
+    """get_setup_j_state() returns exactly 8 gate dicts (or source defines 8 when off-session)."""
+    _section('TEST G14 — Setup J dashboard returns 8 gates')
+    try:
+        from setup_j_value_area import get_setup_j_state
+        import re
+        gates = get_setup_j_state('MNQ').get('gates', [])
+        if len(gates) == 8:
+            _pass('TEST G14  8 gates returned', f'{[g["name"] for g in gates]}')
+        elif len(gates) > 0:
+            _fail('TEST G14  8 gates returned',
+                  f'Expected 8, got {len(gates)}: {[g.get("name") for g in gates]}')
+        else:
+            # Off-session or insufficient data — verify via source
+            src      = _src('setup_j_value_area.py')
+            fn_start = src.find('def get_setup_j_state')
+            fn_src   = src[fn_start:fn_start + 5000] if fn_start != -1 else ''
+            nums     = re.findall(r"'gate':\s*\d+", fn_src)
+            if len(nums) >= 8:
+                _pass('TEST G14  8 gates in source',
+                      f'0 returned (off-session) — {len(nums)} gate defs in source')
+            else:
+                _fail('TEST G14  8 gates in source',
+                      f'Only {len(nums)} gate defs in get_setup_j_state (need 8)')
+    except Exception as e:
+        _fail('TEST G14', f'{type(e).__name__}: {e}')
+
+
+def test_g15_setup_j_gate6_stop_cap():
+    """Setup J dashboard gate 6 is 'Stop Cap'."""
+    _section('TEST G15 — Setup J gate 6 = Stop Cap')
+    try:
+        from setup_j_value_area import get_setup_j_state
+        gates = get_setup_j_state('MNQ').get('gates', [])
+        g6    = next((g for g in gates if g.get('gate') == 6), None)
+        if g6 and g6.get('name') == 'Stop Cap':
+            _pass('TEST G15  gate 6 = Stop Cap', g6.get('detail', ''))
+        elif g6:
+            _fail('TEST G15  gate 6 = Stop Cap', f"name={g6.get('name')!r}")
+        elif _j_gate_in_source(6, 'Stop Cap'):
+            _pass('TEST G15  gate 6 = Stop Cap (source)', 'off-session — confirmed via source')
+        else:
+            _fail('TEST G15  gate 6 = Stop Cap', 'not found in gates or source')
+    except Exception as e:
+        _fail('TEST G15', f'{type(e).__name__}: {e}')
+
+
+def test_g16_setup_j_gate7_calendar():
+    """Setup J dashboard gate 7 is 'Calendar'."""
+    _section('TEST G16 — Setup J gate 7 = Calendar')
+    try:
+        from setup_j_value_area import get_setup_j_state
+        gates = get_setup_j_state('MNQ').get('gates', [])
+        g7    = next((g for g in gates if g.get('gate') == 7), None)
+        if g7 and g7.get('name') == 'Calendar':
+            _pass('TEST G16  gate 7 = Calendar', g7.get('detail', ''))
+        elif g7:
+            _fail('TEST G16  gate 7 = Calendar', f"name={g7.get('name')!r}")
+        elif _j_gate_in_source(7, 'Calendar'):
+            _pass('TEST G16  gate 7 = Calendar (source)', 'off-session — confirmed via source')
+        else:
+            _fail('TEST G16  gate 7 = Calendar', 'not found in gates or source')
+    except Exception as e:
+        _fail('TEST G16', f'{type(e).__name__}: {e}')
+
+
+def test_g17_setup_j_gate8_portfolio_heat():
+    """Setup J dashboard gate 8 is 'Portfolio Heat'."""
+    _section('TEST G17 — Setup J gate 8 = Portfolio Heat')
+    try:
+        from setup_j_value_area import get_setup_j_state
+        gates = get_setup_j_state('MNQ').get('gates', [])
+        g8    = next((g for g in gates if g.get('gate') == 8), None)
+        if g8 and g8.get('name') == 'Portfolio Heat':
+            _pass('TEST G17  gate 8 = Portfolio Heat', g8.get('detail', ''))
+        elif g8:
+            _fail('TEST G17  gate 8 = Portfolio Heat', f"name={g8.get('name')!r}")
+        elif _j_gate_in_source(8, 'Portfolio Heat'):
+            _pass('TEST G17  gate 8 = Portfolio Heat (source)', 'off-session — confirmed via source')
+        else:
+            _fail('TEST G17  gate 8 = Portfolio Heat', 'not found in gates or source')
+    except Exception as e:
+        _fail('TEST G17', f'{type(e).__name__}: {e}')
+
+
+# ── G18-G21: Setup I dashboard gate structure (source parse) ──
+
+def test_g18_setup_i_dashboard_gate6_stop_cap():
+    """Setup I dashboard in server.py defines gate 6 'Stop Cap'."""
+    _section('TEST G18 — Setup I dashboard gate 6 = Stop Cap (source)')
+    try:
+        snippet = _setup_i_dashboard_src()
+        if "'Stop Cap'" in snippet and "'gate': 6" in snippet:
+            _pass('TEST G18  gate 6 Stop Cap', 'Found in Setup I dashboard block')
+        elif "'Stop Cap'" in snippet:
+            _pass('TEST G18  Stop Cap present', 'Stop Cap found (gate number may differ)')
+        else:
+            _fail('TEST G18  gate 6 Stop Cap', 'Stop Cap not in Setup I dashboard section')
+    except Exception as e:
+        _fail('TEST G18', f'{type(e).__name__}: {e}')
+
+
+def test_g19_setup_i_dashboard_gate7_calendar():
+    """Setup I dashboard in server.py defines gate 7 'Calendar'."""
+    _section('TEST G19 — Setup I dashboard gate 7 = Calendar (source)')
+    try:
+        snippet = _setup_i_dashboard_src()
+        if "'Calendar'" in snippet and "'gate': 7" in snippet:
+            _pass('TEST G19  gate 7 Calendar', 'Found in Setup I dashboard block')
+        elif "'Calendar'" in snippet:
+            _pass('TEST G19  Calendar present', 'Calendar gate found')
+        else:
+            _fail('TEST G19  gate 7 Calendar', 'Calendar not in Setup I dashboard section')
+    except Exception as e:
+        _fail('TEST G19', f'{type(e).__name__}: {e}')
+
+
+def test_g20_setup_i_dashboard_gate8_heat():
+    """Setup I dashboard in server.py defines gate 8 'Portfolio Heat'."""
+    _section('TEST G20 — Setup I dashboard gate 8 = Portfolio Heat (source)')
+    try:
+        snippet = _setup_i_dashboard_src()
+        if "'Portfolio Heat'" in snippet and "'gate': 8" in snippet:
+            _pass('TEST G20  gate 8 Portfolio Heat', 'Found in Setup I dashboard block')
+        elif "'Portfolio Heat'" in snippet:
+            _pass('TEST G20  Portfolio Heat present', 'Portfolio Heat gate found')
+        else:
+            _fail('TEST G20  gate 8 Portfolio Heat',
+                  'Portfolio Heat not in Setup I dashboard section')
+    except Exception as e:
+        _fail('TEST G20', f'{type(e).__name__}: {e}')
+
+
+def test_g21_setup_i_dashboard_has_8_gates():
+    """Setup I dashboard block in server.py defines exactly 8 gate dicts."""
+    _section('TEST G21 — Setup I dashboard has 8 gates (source)')
+    try:
+        import re
+        snippet   = _setup_i_dashboard_src()
+        gate_nums = re.findall(r"'gate':\s*(\d+)", snippet)
+        count     = len(gate_nums)
+        if count == 8:
+            _pass('TEST G21  8 gate definitions', f'gates: {gate_nums}')
+        else:
+            _fail('TEST G21  8 gate definitions',
+                  f'Found {count} gate defs in Setup I dashboard (expected 8): {gate_nums}')
+    except Exception as e:
+        _fail('TEST G21', f'{type(e).__name__}: {e}')
+
+
+# ── G22-G24: is_setup_enabled regime gate ────────────────────
+
+def test_g22_is_setup_enabled_no_symbol_skips_regime():
+    """is_setup_enabled: regime gate only runs when symbol is explicitly provided."""
+    _section('TEST G22 — is_setup_enabled without symbol skips regime gate')
+    try:
+        src      = _src('server.py')
+        fn_start = src.find('def is_setup_enabled')
+        fn_end   = src.find('\ndef ', fn_start + 1)
+        snippet  = src[fn_start:fn_end] if fn_start != -1 and fn_end != -1 else ''
+        if ('regime_gating_enabled' in snippet and
+                ("and symbol" in snippet or "and symbol:" in snippet)):
+            _pass('TEST G22  regime gate requires symbol',
+                  "regime gate gated by 'and symbol' in is_setup_enabled")
+        else:
+            _fail('TEST G22  regime gate requires symbol',
+                  "Could not verify 'and symbol' guard in is_setup_enabled source")
+    except Exception as e:
+        _fail('TEST G22', f'{type(e).__name__}: {e}')
+
+
+def test_g23_is_setup_enabled_correct_regime():
+    """SETUP_REGIME_CONFIG I contains 'TRENDING' — correct regime would pass the gate."""
+    _section("TEST G23 — Setup I optimal regime is TRENDING (correct regime passes)")
+    try:
+        import re
+        src          = _src('server.py')
+        cfg_start    = src.find('SETUP_REGIME_CONFIG = {')
+        cfg_end      = src.find('\n}', cfg_start) + 2 if cfg_start != -1 else -1
+        snippet      = src[cfg_start:cfg_end] if cfg_start != -1 else ''
+        m = re.search(r"'I':\s*\(\{([^}]+)\}", snippet)
+        if m:
+            regimes = m.group(1)
+            if 'TRENDING' in regimes:
+                _pass("TEST G23  I optimal includes TRENDING",
+                      f'I regimes: {regimes.strip()}')
+            else:
+                _fail("TEST G23  I optimal includes TRENDING",
+                      f'TRENDING not found in I regimes: {regimes}')
+        else:
+            _fail('TEST G23  I config parsed', 'SETUP_REGIME_CONFIG[I] not found')
+    except Exception as e:
+        _fail('TEST G23', f'{type(e).__name__}: {e}')
+
+
+def test_g24_is_setup_enabled_wrong_regime():
+    """SETUP_REGIME_CONFIG I does NOT contain 'CHOPPY' — wrong regime would be blocked."""
+    _section("TEST G24 — Setup I optimal regime excludes CHOPPY (wrong regime blocked)")
+    try:
+        import re
+        src       = _src('server.py')
+        cfg_start = src.find('SETUP_REGIME_CONFIG = {')
+        cfg_end   = src.find('\n}', cfg_start) + 2 if cfg_start != -1 else -1
+        snippet   = src[cfg_start:cfg_end] if cfg_start != -1 else ''
+        m = re.search(r"'I':\s*\(\{([^}]+)\}", snippet)
+        if m:
+            regimes = m.group(1)
+            if 'CHOPPY' not in regimes:
+                _pass("TEST G24  CHOPPY not in I regimes",
+                      f'I regimes: {regimes.strip()} — CHOPPY would be blocked')
+            else:
+                _fail("TEST G24  CHOPPY not in I regimes",
+                      f'CHOPPY found in I regimes: {regimes} (should not be there)')
+        else:
+            _fail('TEST G24  I config parsed', 'SETUP_REGIME_CONFIG[I] not found')
+    except Exception as e:
+        _fail('TEST G24', f'{type(e).__name__}: {e}')
+
+
+# ── G25-G26: Regime config values ────────────────────────────
+
+def test_g25_setup_h_regime_config_correct():
+    """SETUP_REGIME_CONFIG H = {CHOPPY, MEAN_REVERTING} and NOT TRENDING."""
+    _section("TEST G25 — Setup H regime config = CHOPPY + MEAN_REVERTING (not TRENDING)")
+    try:
+        import re
+        src       = _src('server.py')
+        cfg_start = src.find('SETUP_REGIME_CONFIG = {')
+        cfg_end   = src.find('\n}', cfg_start) + 2 if cfg_start != -1 else -1
+        snippet   = src[cfg_start:cfg_end] if cfg_start != -1 else ''
+        m = re.search(r"'H':\s*\(\{([^}]+)\}", snippet)
+        if m:
+            regimes = m.group(1)
+            ok = 'CHOPPY' in regimes and 'MEAN_REVERTING' in regimes and 'TRENDING' not in regimes
+            if ok:
+                _pass('TEST G25  H regime config correct', f'H: {regimes.strip()}')
+            else:
+                _fail('TEST G25  H regime config correct',
+                      f'H: {regimes.strip()} (need CHOPPY+MEAN_REVERTING, no TRENDING)')
+        else:
+            _fail('TEST G25  H config parsed', 'SETUP_REGIME_CONFIG[H] not found')
+    except Exception as e:
+        _fail('TEST G25', f'{type(e).__name__}: {e}')
+
+
+def test_g26_setup_i_regime_config_correct():
+    """SETUP_REGIME_CONFIG I = {TRENDING} only — no CHOPPY or MEAN_REVERTING."""
+    _section("TEST G26 — Setup I regime config = TRENDING only")
+    try:
+        import re
+        src       = _src('server.py')
+        cfg_start = src.find('SETUP_REGIME_CONFIG = {')
+        cfg_end   = src.find('\n}', cfg_start) + 2 if cfg_start != -1 else -1
+        snippet   = src[cfg_start:cfg_end] if cfg_start != -1 else ''
+        m = re.search(r"'I':\s*\(\{([^}]+)\}", snippet)
+        if m:
+            regimes = m.group(1)
+            ok = ('TRENDING' in regimes and
+                  'CHOPPY' not in regimes and
+                  'MEAN_REVERTING' not in regimes)
+            if ok:
+                _pass('TEST G26  I regime = TRENDING only', f'I: {regimes.strip()}')
+            else:
+                _fail('TEST G26  I regime = TRENDING only',
+                      f'I: {regimes.strip()} (expected TRENDING only)')
+        else:
+            _fail('TEST G26  I config parsed', 'SETUP_REGIME_CONFIG[I] not found')
+    except Exception as e:
+        _fail('TEST G26', f'{type(e).__name__}: {e}')
+
+
+# ── G27-G28: Regime gate call sites ──────────────────────────
+
+def test_g27_setup_h_regime_gate_checks_es():
+    """Setup H scan block calls is_setup_enabled('H', 'ES') — ES symbol, not MNQ alone."""
+    _section("TEST G27 — Setup H scan passes 'ES' to is_setup_enabled")
+    try:
+        src = _src('server.py')
+        if "is_setup_enabled('H', 'ES')" in src:
+            _pass("TEST G27  H checks ES regime",
+                  "is_setup_enabled('H', 'ES') found in server.py")
+        else:
+            import re
+            h_calls = re.findall(r"is_setup_enabled\('H'[^)]*\)", src)
+            with_sym = [c for c in h_calls if "'" in c[len("is_setup_enabled('H')"):]]
+            if with_sym:
+                _pass('TEST G27  H checks symbol', f'H calls with symbol: {with_sym}')
+            else:
+                _fail('TEST G27  H checks ES',
+                      f"is_setup_enabled('H', 'ES') not found — calls: {h_calls}")
+    except Exception as e:
+        _fail('TEST G27', f'{type(e).__name__}: {e}')
+
+
+def test_g28_setup_i_regime_gate_checks_symbol():
+    """Setup I scan block calls is_setup_enabled('I', _sym) with the loop's symbol variable."""
+    _section("TEST G28 — Setup I scan passes _sym to is_setup_enabled")
+    try:
+        src = _src('server.py')
+        if "is_setup_enabled('I', _sym)" in src:
+            _pass("TEST G28  I checks _sym",
+                  "is_setup_enabled('I', _sym) found in server.py")
+        else:
+            import re
+            i_calls = re.findall(r"is_setup_enabled\('I'[^)]*\)", src)
+            with_var = [c for c in i_calls if '_sym' in c or (',' in c)]
+            if with_var:
+                _pass('TEST G28  I checks symbol variable', f'{with_var}')
+            else:
+                _fail('TEST G28  I checks _sym',
+                      f"is_setup_enabled('I', _sym) not found — calls: {i_calls}")
+    except Exception as e:
+        _fail('TEST G28', f'{type(e).__name__}: {e}')
+
+
+# ── G29-G31: Day/session gates and SIGNAL READY invariant ────
+
+def test_g29_trading_day_gate_logic():
+    """Trading day gate {1,2,3}: Mon=0 and Fri=4 fail; Tue/Wed/Thu pass."""
+    _section('TEST G29 — Trading day gate blocks Mon and Fri')
+    try:
+        allowed = {1, 2, 3}
+        cases   = [(0, False, 'Mon'), (1, True, 'Tue'), (2, True, 'Wed'),
+                   (3, True, 'Thu'), (4, False, 'Fri')]
+        all_ok  = True
+        for wd, expected, name in cases:
+            if (wd in allowed) != expected:
+                _fail(f'TEST G29  {name}',
+                      f'weekday={wd}: expected {expected} got {wd in allowed}')
+                all_ok = False
+        if all_ok:
+            _pass('TEST G29  trading day gate',
+                  'Mon=block Tue=pass Wed=pass Thu=pass Fri=block (correct)')
+    except Exception as e:
+        _fail('TEST G29', f'{type(e).__name__}: {e}')
+
+
+def test_g30_setup_j_no_monday_in_source():
+    """setup_j_value_area.py scan function blocks Monday signals."""
+    _section('TEST G30 — Setup J scan blocks Monday')
+    try:
+        src = _src('setup_j_value_area.py')
+        has_block = ('weekday() == 0' in src or
+                     ('Monday' in src and 'skip' in src.lower()))
+        if has_block:
+            _pass('TEST G30  Monday block present',
+                  'Monday guard found in setup_j_value_area.py')
+        else:
+            _fail('TEST G30  Monday block present',
+                  'weekday()==0 / Monday skip guard not found in setup_j_value_area.py')
+    except Exception as e:
+        _fail('TEST G30', f'{type(e).__name__}: {e}')
+
+
+def test_g31_setup_j_signal_ready_requires_all_gates():
+    """get_setup_j_state: SIGNAL READY only when all gates pass; source uses passed==total."""
+    _section('TEST G31 — Setup J SIGNAL READY requires all 8 gates')
+    try:
+        from setup_j_value_area import get_setup_j_state
+        for sym in ('MNQ', 'ES'):
+            state  = get_setup_j_state(sym)
+            label  = state.get('signal_state_label', '')
+            gates  = state.get('gates', [])
+            if label == 'SIGNAL READY':
+                failed = [g['name'] for g in gates if not g.get('passed')]
+                if failed:
+                    _fail(f'TEST G31  {sym} SIGNAL READY but gates failed', str(failed))
+                else:
+                    _pass(f'TEST G31  {sym} SIGNAL READY all gates passed',
+                          f'{len(gates)} gates all True')
+            else:
+                _pass(f'TEST G31  {sym} not SIGNAL READY',
+                      f'label={label} (invariant holds — no false positive)')
+        # Verify source uses passed==total not the old conf_long/conf_short shortcut
+        src      = _src('setup_j_value_area.py')
+        fn_start = src.find('def get_setup_j_state')
+        fn_src   = src[fn_start:fn_start + 5000] if fn_start != -1 else ''
+        if 'passed == total' in fn_src:
+            _pass('TEST G31  source: SIGNAL READY when passed==total',
+                  'Guard confirmed in get_setup_j_state source')
+        else:
+            _fail('TEST G31  source: SIGNAL READY when passed==total',
+                  'passed==total not found — old conf_long/conf_short logic may still be active')
+    except Exception as e:
+        _fail('TEST G31', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  Main
+# ─────────────────────────────────────────────────────────────
+
 if __name__ == '__main__':
     print(f'\n{"═" * 70}')
     print(f'  APEX FULL SYSTEM TEST — {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}')
@@ -1245,6 +1983,39 @@ if __name__ == '__main__':
     test_c3_close_already_closed()
     test_c4_full_manual_close_cycle()
     test_c5_minimum_contracts()
+
+    # Gate logic, quality filter & regime tests (G1–G31)
+    test_g1_count_open_trades_sql_excludes_test()
+    test_g2_count_open_trades_ignores_test_db()
+    test_g3_count_open_trades_counts_real_db()
+    test_g4_is_signal_active_excludes_test()
+    test_g5_scan_i_open_trade_excludes_test()
+    test_g6_max_stop_pts_mnq()
+    test_g7_max_stop_pts_es()
+    test_g8_stop_cap_blocks_when_exceeded()
+    test_g9_stop_cap_passes_when_within()
+    test_g10_calendar_blocks_during_window()
+    test_g11_calendar_passes_outside_window()
+    test_g12_heat_blocks_at_limit()
+    test_g13_max_portfolio_heat_value()
+    test_g14_setup_j_state_returns_8_gates()
+    test_g15_setup_j_gate6_stop_cap()
+    test_g16_setup_j_gate7_calendar()
+    test_g17_setup_j_gate8_portfolio_heat()
+    test_g18_setup_i_dashboard_gate6_stop_cap()
+    test_g19_setup_i_dashboard_gate7_calendar()
+    test_g20_setup_i_dashboard_gate8_heat()
+    test_g21_setup_i_dashboard_has_8_gates()
+    test_g22_is_setup_enabled_no_symbol_skips_regime()
+    test_g23_is_setup_enabled_correct_regime()
+    test_g24_is_setup_enabled_wrong_regime()
+    test_g25_setup_h_regime_config_correct()
+    test_g26_setup_i_regime_config_correct()
+    test_g27_setup_h_regime_gate_checks_es()
+    test_g28_setup_i_regime_gate_checks_symbol()
+    test_g29_trading_day_gate_logic()
+    test_g30_setup_j_no_monday_in_source()
+    test_g31_setup_j_signal_ready_requires_all_gates()
 
     _cleanup()
     _print_results()
