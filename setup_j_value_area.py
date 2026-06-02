@@ -171,30 +171,34 @@ def scan_setup_j(symbol: str, dt: datetime = None) -> Optional[dict]:
 
     # ── Gate: weekday (Tue-Fri only, no Monday) ─────────────
     if dt.weekday() == 0:   # Monday
+        logger.info(f'Setup J {symbol}: Monday — skip (Tue-Fri only)')
         return None
     if dt.weekday() >= 5:   # Weekend
         return None
 
     # ── Gate: session ────────────────────────────────────────
     if not (SESSION_START <= dt.hour < SESSION_END):
+        logger.info(f'Setup J {symbol}: outside session ({dt.hour:02d}:00 UTC, need {SESSION_START}-{SESSION_END})')
         return None
 
     # ── Gate: per-session dedup ──────────────────────────────
     today_str = dt.strftime('%Y-%m-%d')
     dedup_key = f'{symbol}_J_{today_str}'
     if dedup_key in _j_dedup_sent:
+        logger.info(f'Setup J {symbol}: session dedup — already fired today ({today_str})')
         return None
 
     # ── Load 5min bars — need ~200 bars for prev session + ATR ──
     df5 = _load_bars(symbol, '5min', limit=200)
     if df5.empty or len(df5) < 50:
-        logger.debug(f'Setup J {symbol}: insufficient 5min bars')
+        logger.info(f'Setup J {symbol}: insufficient 5min bars ({len(df5)}) — skip')
         return None
 
     # ── Compute ATR14 ─────────────────────────────────────────
     atr_series = _atr14_j(df5)
     atr_val    = float(atr_series.iloc[-1] if not atr_series.iloc[-1] != atr_series.iloc[-1] else 0)
     if atr_val <= 0 or math.isnan(atr_val):
+        logger.info(f'Setup J {symbol}: ATR14 invalid ({atr_val}) — skip')
         return None
 
     # ── Previous session bars (yesterday 13–19 UTC) ───────────
@@ -206,12 +210,12 @@ def scan_setup_j(symbol: str, dt: datetime = None) -> Optional[dict]:
     ].tail(78)  # up to 78 bars = full 6h session at 5min granularity
 
     if len(prev_bars) < 20:
-        logger.debug(f'Setup J {symbol}: insufficient previous session bars ({len(prev_bars)})')
+        logger.info(f'Setup J {symbol}: insufficient prev session bars ({len(prev_bars)}) — skip')
         return None
 
     vah, val = _calc_value_area(prev_bars, VA_PCT)
     if vah is None:
-        logger.debug(f'Setup J {symbol}: could not compute value area')
+        logger.info(f'Setup J {symbol}: could not compute value area — skip')
         return None
 
     # ── HTF bias ────────────────────────────────────────────
@@ -250,6 +254,11 @@ def scan_setup_j(symbol: str, dt: datetime = None) -> Optional[dict]:
         target    = entry - TARGET_RR * risk
 
     if direction is None:
+        logger.info(
+            f'Setup J {symbol}: no entry conditions met — '
+            f'close={bar_close:.2f} VAH={vah:.2f} VAL={val:.2f} '
+            f'bias={bias} low={bar_low:.2f} high={bar_high:.2f}'
+        )
         return None
 
     if abs(entry - stop) <= 0:
@@ -391,7 +400,49 @@ def get_setup_j_state(symbol: str) -> dict:
             ),
         }
 
-        gates = [g_session, g_va, g_bias, g_near, g_conf]
+        # Gate 6: stop cap (0.5 × ATR14 must not exceed symbol max)
+        _j_max_stop = {'MNQ': 60, 'ES': 15}.get(symbol, 9999)
+        _j_stop_dist = round(STOP_ATR_MULT * atr_val, 1)
+        stop_cap_ok = 0 < _j_stop_dist <= _j_max_stop
+        g_stopcap = {
+            'gate': 6, 'name': 'Stop Cap',
+            'passed': stop_cap_ok,
+            'detail': f'ATR14={atr_val:.1f} stop={_j_stop_dist}pts cap={_j_max_stop}pts',
+        }
+
+        # Gate 7: calendar blackout
+        try:
+            from calendar_filter import get_filter as _gcf_j
+            _j_blocked, _j_cal_rsn = _gcf_j().is_blocked(symbol, now)
+            cal_ok = not _j_blocked
+            cal_detail = _j_cal_rsn if _j_blocked else 'No blackout'
+        except Exception:
+            cal_ok = True
+            cal_detail = 'Calendar unavailable'
+        g_cal = {
+            'gate': 7, 'name': 'Calendar',
+            'passed': cal_ok,
+            'detail': cal_detail,
+        }
+
+        # Gate 8: portfolio heat
+        try:
+            _conn_h = _db.connect()
+            _j_heat = _conn_h.execute(
+                "SELECT COUNT(*) FROM apex_trades WHERE status='open' AND quality != 'test'"
+            ).fetchone()[0]
+            _conn_h.close()
+        except Exception:
+            _j_heat = 0
+        _j_max_heat = 3
+        heat_ok = _j_heat < _j_max_heat
+        g_heat = {
+            'gate': 8, 'name': 'Portfolio Heat',
+            'passed': heat_ok,
+            'detail': f'{_j_heat}/{_j_max_heat} open trades',
+        }
+
+        gates = [g_session, g_va, g_bias, g_near, g_conf, g_stopcap, g_cal, g_heat]
         passed = sum(1 for g in gates if g['passed'])
         total  = len(gates)
         score  = round(passed / total * 100)
@@ -400,7 +451,7 @@ def get_setup_j_state(symbol: str) -> dict:
             label = 'OFF SESSION'
         elif not va_ok:
             label = 'DEVELOPING'
-        elif conf_long or conf_short:
+        elif passed == total:
             label = 'SIGNAL READY'
         elif passed >= 3:
             label = 'SCANNING'

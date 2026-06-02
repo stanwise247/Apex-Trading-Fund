@@ -852,7 +852,7 @@ def scan_setup_i(symbol: str, dt: datetime = None) :
     try:
         conn = _db.connect()
         existing = conn.execute(
-            "SELECT id FROM apex_trades WHERE symbol=? AND setup='I_mathematical_alpha' AND status='open' LIMIT 1",
+            "SELECT id FROM apex_trades WHERE symbol=? AND setup='I_mathematical_alpha' AND status='open' AND quality != 'test' LIMIT 1",
             (symbol,)
         ).fetchone()
         conn.close()

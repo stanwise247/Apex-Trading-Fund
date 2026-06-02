@@ -198,7 +198,7 @@ SETUP_PAPER_INSTRUMENTS: dict = {
 }
 
 # Hard maximum stop distances per instrument (points). Signals exceeding these are rejected.
-_MAX_STOP_PTS: dict = {'MNQ': 50, 'ES': 12, 'GC': 8}
+_MAX_STOP_PTS: dict = {'MNQ': 60, 'ES': 15, 'GC': 8}
 
 
 def _stop_cap_ok(sig: dict) -> tuple:
@@ -2371,7 +2371,7 @@ def background_scheduler():
                     logger.warning(f'Setup F scanner error: {e}')
 
         # ── Setup I — Mathematical Alpha (every 5 min) ─────────────
-        # MNQ: paper only (stops too large). ES: live Tradovate execution.
+        # MNQ: live | ES: live | XGB dual-model, Tue/Wed/Thu, 13-20 UTC MNQ / 13-19 UTC ES
         if not hasattr(background_scheduler, '_last_setup_i'):
             background_scheduler._last_setup_i = 0
         if now - background_scheduler._last_setup_i >= 300:
@@ -2379,7 +2379,6 @@ def background_scheduler():
             if not is_setup_enabled('I'):
                 logger.info('Setup I: disabled via Control Centre — skipping')
             else:
-                logger.info('Setup I: block entered — scanning MNQ and ES')
                 try:
                     from setup_i_mathematical import scan_setup_i, format_i_alert
                     from live_scanner import send_telegram
@@ -2389,106 +2388,111 @@ def background_scheduler():
                         from risk_manager import RiskGate
                         background_scheduler._risk_gate = RiskGate()
                     _rg_i = background_scheduler._risk_gate
-                    # NOTE: _i_risk_footer is computed per-signal inside the loop —
-                    # computing it here (before the scan) caused AttributeError on
-                    # get_regime().label when no regime data was available, which
-                    # silently aborted the entire Setup I block.
                     for _sym in ['MNQ', 'ES']:
                         try:
+                            # ── Pre-scan gates — every outcome logged ─────────────
                             _heat_i = _count_open_trades()
                             if _heat_i >= MAX_PORTFOLIO_HEAT:
-                                logger.info(f'Portfolio heat: {_heat_i} trades open — new signal blocked for Setup I {_sym}')
+                                logger.info(f'[I-pre] Setup I {_sym}: heat {_heat_i}/{MAX_PORTFOLIO_HEAT} — BLOCKED')
                                 continue
+                            logger.info(f'[I-pre] Setup I {_sym}: heat {_heat_i}/{MAX_PORTFOLIO_HEAT} — OK')
+
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _i_has, _i_id = _has_open_trade_on_instrument(_sym)
                                 if _i_has:
-                                    logger.info(f'Setup I: skipped — {_sym} already has open trade #{_i_id}')
+                                    logger.info(f'[I-pre] Setup I {_sym}: open trade #{_i_id} — BLOCKED')
                                     continue
+                                logger.info(f'[I-pre] Setup I {_sym}: no open trade — OK')
+
                             if _rg_i.daily.is_daily_limit_hit():
-                                logger.info(f'Setup I {_sym}: daily limit hit — suppressed')
+                                logger.info(f'[I-pre] Setup I {_sym}: daily limit hit — BLOCKED')
                                 continue
+
                             if _now_utc_i.weekday() not in {1, 2, 3}:
+                                _i_day = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][_now_utc_i.weekday()]
                                 logger.info(
-                                    f'Setup I {_sym}: day filter blocked — '
-                                    f'weekday={_now_utc_i.weekday()} '
-                                    f'({["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][_now_utc_i.weekday()]}) '
-                                    f'need Tue/Wed/Thu'
+                                    f'[I-pre] Setup I {_sym}: day={_i_day} '
+                                    f'(weekday={_now_utc_i.weekday()}) not Tue/Wed/Thu — BLOCKED'
                                 )
                                 continue
-                            if not is_setup_enabled('I', _sym):
-                                logger.info(f'Setup I {_sym}: regime gate blocked — skipping')
-                                continue
-                            logger.info(f'Scanning Setup I for {_sym}')
-                            sig = scan_setup_i(_sym, _now_utc_i)
-                            # ← CRITICAL visibility: log every scan result so we know
-                            #   whether the model fired or not
                             logger.info(
-                                f'scan_setup_i {_sym} returned: '
-                                f'{"SIGNAL dir=" + sig["direction"] + " entry=" + str(sig.get("entry")) if sig else "None (no signal this tick)"}'
+                                f'[I-pre] Setup I {_sym}: '
+                                f'day={["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][_now_utc_i.weekday()]} — OK'
+                            )
+
+                            if not is_setup_enabled('I', _sym):
+                                logger.info(f'[I-pre] Setup I {_sym}: regime gate — BLOCKED')
+                                continue
+                            logger.info(f'[I-pre] Setup I {_sym}: regime gate — OK')
+
+                            # ── [I-1/6] Scan ─────────────────────────────────────
+                            logger.info(f'[I-1/6] Setup I {_sym}: scanning...')
+                            sig = scan_setup_i(_sym, _now_utc_i)
+                            logger.info(
+                                f'[I-1/6] scan_setup_i {_sym} returned: '
+                                f'{"SIGNAL dir=" + sig["direction"] + " entry=" + str(sig.get("entry")) if sig else "None — no signal conditions met"}'
                             )
                             if not sig:
                                 continue
 
-                            # ── Post-signal filters — every drop is logged, nothing silent ──
+                            # ── [I-2a/6] Calendar ────────────────────────────────
                             if _cal_block(_sym, sig['setup']):
-                                logger.info(
-                                    f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
-                                    f'calendar blackout — signal dropped'
-                                )
+                                logger.info(f'[I-2a/6] Setup I {_sym}: calendar blackout — BLOCKED')
                                 continue
+                            logger.info(f'[I-2a/6] Setup I {_sym}: calendar clear — OK')
+
+                            # ── [I-2b/6] Dedup ───────────────────────────────────
                             if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
-                                logger.info(
-                                    f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
-                                    f'_fired_today dedup fired — signal dropped'
-                                )
+                                logger.info(f'[I-2b/6] Setup I {_sym} {sig["direction"]}: dedup — BLOCKED (already fired today)')
                                 continue
                             if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
-                                logger.info(
-                                    f'[I-2b/6] Setup I {_sym} {sig["direction"]}: '
-                                    f'signal already active in DB — dropped'
-                                )
+                                logger.info(f'[I-2b/6] Setup I {_sym} {sig["direction"]}: already active in DB — BLOCKED')
                                 continue
+                            logger.info(f'[I-2b/6] Setup I {_sym} {sig["direction"]}: dedup — OK')
 
-                            # ── [I-2c/6] Stop cap check ───────────────────────────────
+                            # ── [I-2c/6] Stop cap ────────────────────────────────
                             _i_cap_ok, _i_cap_msg = _stop_cap_ok(sig)
                             if not _i_cap_ok:
-                                logger.warning(_i_cap_msg)
+                                logger.warning(f'[I-2c/6] {_i_cap_msg} — BLOCKED')
                                 continue
+                            _i_stop_dist = abs(float(sig.get('entry', 0)) - float(sig.get('stop', 0)))
+                            logger.info(
+                                f'[I-2c/6] Setup I {_sym}: stop cap OK — '
+                                f'{_i_stop_dist:.1f}pts ≤ {_MAX_STOP_PTS.get(_sym, "?")}pts'
+                            )
 
-                            # ── [I-3/6] log_trade — CRITICAL on any failure ────────────
+                            # ── [I-3/6] log_trade — CRITICAL on any failure ───────
                             _i_tid = None
                             try:
                                 logger.info(
-                                    f'[I-3/6] Calling log_trade: {_sym} {sig["direction"]} '
+                                    f'[I-3/6] log_trade: {_sym} {sig["direction"]} '
                                     f'entry={sig.get("entry")} stop={sig.get("stop")} '
                                     f'target={sig.get("target")} setup={sig.get("setup")}'
                                 )
                                 _i_tid = log_trade(sig)
-                                logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
-                                if not _i_tid:
+                                if _i_tid:
+                                    logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
+                                else:
                                     logger.critical(
-                                        f'[I-4/6] CRITICAL: Setup I log_trade() returned None — '
+                                        f'[I-4/6] CRITICAL: log_trade() returned None — '
                                         f'{_sym} {sig["direction"]} entry={sig.get("entry")} NOT in DB'
                                     )
                             except Exception as _i_lte:
                                 logger.critical(
-                                    f'[I-4/6] CRITICAL: Setup I log_trade() EXCEPTION — '
-                                    f'{_sym} {sig["direction"]} entry={sig.get("entry")}: {_i_lte}',
+                                    f'[I-4/6] CRITICAL: log_trade() EXCEPTION — '
+                                    f'{_sym} {sig["direction"]}: {_i_lte}',
                                     exc_info=True
                                 )
 
-                            # ── [I-5/6] send_telegram — ONLY if log_trade succeeded ─────
-                            # NEVER send Telegram for a trade that isn't in the DB.
-                            # If _i_tid is None (log_trade failed), skip Telegram entirely.
+                            # ── [I-5/6] send_telegram — only after log_trade ──────
                             if not _i_tid:
                                 logger.critical(
-                                    f'[I-5/6] CRITICAL: Skipping Telegram for {_sym} — '
-                                    f'log_trade did not return a trade_id. '
-                                    f'Signal lost. Check [I-4/6] CRITICAL above for reason.'
+                                    f'[I-5/6] CRITICAL: Skipping Telegram — '
+                                    f'log_trade did not return trade_id for {_sym}'
                                 )
                             else:
                                 try:
-                                    logger.info(f'[I-5/6] Calling send_telegram for {_sym} (trade_id={_i_tid})')
+                                    logger.info(f'[I-5/6] send_telegram: {_sym} trade_id={_i_tid}')
                                     try:
                                         _i_risk_footer = (
                                             f'\n⚙️ <i>Regime: {_rg_i.regime.get_regime().label} | '
@@ -2497,22 +2501,23 @@ def background_scheduler():
                                         )
                                     except Exception:
                                         _i_risk_footer = ''
-                                    msg = format_i_alert(sig) + _i_risk_footer
-                                    send_telegram(msg)
+                                    send_telegram(format_i_alert(sig) + _i_risk_footer)
+                                    logger.info(f'[I-5/6] Telegram sent OK — {_sym} trade_id={_i_tid}')
                                 except Exception as _i_te:
                                     logger.critical(
-                                        f'[I-5/6] CRITICAL: Setup I send_telegram failed {_sym}: {_i_te}',
+                                        f'[I-5/6] CRITICAL: send_telegram failed {_sym}: {_i_te}',
                                         exc_info=True
                                     )
 
-                            # ── [I-6/6] Tradovate — MNQ and ES both live ──────────────
+                            # ── [I-6/6] Tradovate execution ───────────────────────
                             if _i_tid:
                                 logger.info(
-                                    f'[I-6/6] {_sym} Setup I: executing on Tradovate live '
+                                    f'[I-6/6] {_sym} Setup I: executing on Tradovate '
                                     f'(trade_id={_i_tid})'
                                 )
                                 try:
                                     _execute_via_tradovate(sig, _i_tid)
+                                    logger.info(f'[I-6/6] {_sym} Setup I: Tradovate call complete')
                                 except Exception as _i_exe:
                                     logger.critical(
                                         f'[I-6/6] CRITICAL: _execute_via_tradovate raised '
@@ -2542,8 +2547,7 @@ def background_scheduler():
                     )
 
         # ── Setup J — Value Area Continuation (every 5 min, Tue-Fri session) ──
-        # ES=LIVE on MESM6 | MNQ=PAPER ONLY
-        # Backtest: ES Sharpe 8.34 | WR 54.7% | 11/11 months positive | MaxDD 4R
+        # ES=LIVE | MNQ=LIVE | Backtest: ES Sharpe 8.34 | WR 54.7% | 11/11 months positive | MaxDD 4R
         if not hasattr(background_scheduler, '_last_setup_j'):
             background_scheduler._last_setup_j = 0
         if now - background_scheduler._last_setup_j >= 300:
@@ -2551,7 +2555,6 @@ def background_scheduler():
             if not is_setup_enabled('J'):
                 logger.info('Setup J: disabled via Control Centre — skipping')
             else:
-                logger.info('Setup J: block entered — scanning ES and MNQ')
                 try:
                     from setup_j_value_area import scan_setup_j, format_j_alert
                     from live_scanner import send_telegram
@@ -2563,74 +2566,96 @@ def background_scheduler():
                     _rg_j = background_scheduler._risk_gate
                     for _sym_j in ['ES', 'MNQ']:
                         try:
+                            # ── Pre-scan gates — every outcome logged ─────────────
                             _heat_j = _count_open_trades()
                             if _heat_j >= MAX_PORTFOLIO_HEAT:
-                                logger.info(f'Portfolio heat: {_heat_j} trades open — new signal blocked for Setup J {_sym_j}')
+                                logger.info(f'[J-pre] Setup J {_sym_j}: heat {_heat_j}/{MAX_PORTFOLIO_HEAT} — BLOCKED')
                                 continue
+                            logger.info(f'[J-pre] Setup J {_sym_j}: heat {_heat_j}/{MAX_PORTFOLIO_HEAT} — OK')
+
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _j_has, _j_id = _has_open_trade_on_instrument(_sym_j)
                                 if _j_has:
-                                    logger.info(f'Setup J: skipped — {_sym_j} already has open trade #{_j_id}')
+                                    logger.info(f'[J-pre] Setup J {_sym_j}: open trade #{_j_id} — BLOCKED')
                                     continue
+                                logger.info(f'[J-pre] Setup J {_sym_j}: no open trade — OK')
+
                             if _rg_j.daily.is_daily_limit_hit():
-                                logger.info(f'Setup J {_sym_j}: daily limit hit — suppressed')
+                                logger.info(f'[J-pre] Setup J {_sym_j}: daily limit hit — BLOCKED')
                                 continue
-                            logger.info(f'Scanning Setup J for {_sym_j}')
+
+                            if not is_setup_enabled('J', _sym_j):
+                                logger.info(f'[J-pre] Setup J {_sym_j}: regime gate — BLOCKED')
+                                continue
+                            logger.info(f'[J-pre] Setup J {_sym_j}: regime gate — OK')
+
+                            # ── [J-1/6] Scan ─────────────────────────────────────
+                            logger.info(f'[J-1/6] Setup J {_sym_j}: scanning...')
                             sig_j = scan_setup_j(_sym_j, _now_utc_j)
                             logger.info(
-                                f'scan_setup_j {_sym_j} returned: '
-                                f'{"SIGNAL dir=" + sig_j["direction"] + " entry=" + str(sig_j.get("entry")) if sig_j else "None (no signal this tick)"}'
+                                f'[J-1/6] scan_setup_j {_sym_j} returned: '
+                                f'{"SIGNAL dir=" + sig_j["direction"] + " entry=" + str(sig_j.get("entry")) if sig_j else "None — no signal conditions met"}'
                             )
                             if not sig_j:
                                 continue
 
-                            # Post-signal filters
+                            # ── [J-2a/6] Calendar ────────────────────────────────
                             if _cal_block(_sym_j, sig_j['setup']):
-                                logger.info(f'[J-2b/6] Setup J {_sym_j}: calendar blackout — signal dropped')
+                                logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar blackout — BLOCKED')
                                 continue
+                            logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar clear — OK')
+
+                            # ── [J-2b/6] Dedup ───────────────────────────────────
                             if _check_and_mark_fired(_sym_j, sig_j['setup'], sig_j['direction']):
-                                logger.info(f'[J-2b/6] Setup J {_sym_j}: dedup fired — signal dropped')
+                                logger.info(f'[J-2b/6] Setup J {_sym_j} {sig_j["direction"]}: dedup — BLOCKED (already fired today)')
                                 continue
                             if _is_signal_already_active(_sym_j, sig_j['direction'], sig_j['setup']):
-                                logger.info(f'[J-2b/6] Setup J {_sym_j}: already active — signal dropped')
+                                logger.info(f'[J-2b/6] Setup J {_sym_j} {sig_j["direction"]}: already active in DB — BLOCKED')
                                 continue
+                            logger.info(f'[J-2b/6] Setup J {_sym_j} {sig_j["direction"]}: dedup — OK')
 
-                            # ── [J-2c/6] Stop cap check ──────────────────────
+                            # ── [J-2c/6] Stop cap ────────────────────────────────
                             _j_cap_ok, _j_cap_msg = _stop_cap_ok(sig_j)
                             if not _j_cap_ok:
-                                logger.warning(_j_cap_msg)
+                                logger.warning(f'[J-2c/6] {_j_cap_msg} — BLOCKED')
                                 continue
+                            _j_stop_dist = abs(float(sig_j.get('entry', 0)) - float(sig_j.get('stop', 0)))
+                            logger.info(
+                                f'[J-2c/6] Setup J {_sym_j}: stop cap OK — '
+                                f'{_j_stop_dist:.1f}pts ≤ {_MAX_STOP_PTS.get(_sym_j, "?")}pts'
+                            )
 
-                            # ── [J-3/6] log_trade ────────────────────────────
+                            # ── [J-3/6] log_trade ────────────────────────────────
                             _j_tid = None
                             try:
                                 logger.info(
-                                    f'[J-3/6] Calling log_trade: {_sym_j} {sig_j["direction"]} '
+                                    f'[J-3/6] log_trade: {_sym_j} {sig_j["direction"]} '
                                     f'entry={sig_j.get("entry")} stop={sig_j.get("stop")} '
                                     f'target={sig_j.get("target")} setup={sig_j.get("setup")}'
                                 )
                                 _j_tid = log_trade(sig_j)
-                                logger.info(f'[J-4/6] log_trade returned trade_id={_j_tid}')
-                                if not _j_tid:
+                                if _j_tid:
+                                    logger.info(f'[J-4/6] log_trade returned trade_id={_j_tid}')
+                                else:
                                     logger.critical(
-                                        f'[J-4/6] CRITICAL: Setup J log_trade() returned None — '
+                                        f'[J-4/6] CRITICAL: log_trade() returned None — '
                                         f'{_sym_j} {sig_j["direction"]} NOT in DB'
                                     )
                             except Exception as _j_lte:
                                 logger.critical(
-                                    f'[J-4/6] CRITICAL: Setup J log_trade() EXCEPTION — '
+                                    f'[J-4/6] CRITICAL: log_trade() EXCEPTION — '
                                     f'{_sym_j}: {_j_lte}', exc_info=True
                                 )
 
-                            # ── [J-5/6] send_telegram — only if trade logged ──
+                            # ── [J-5/6] send_telegram — only after log_trade ──────
                             if not _j_tid:
                                 logger.critical(
-                                    f'[J-5/6] CRITICAL: Skipping Telegram for {_sym_j} — '
-                                    f'log_trade did not return a trade_id. Signal not in DB.'
+                                    f'[J-5/6] CRITICAL: Skipping Telegram — '
+                                    f'log_trade did not return trade_id for {_sym_j}'
                                 )
                             else:
                                 try:
-                                    logger.info(f'[J-5/6] Calling send_telegram for {_sym_j} (trade_id={_j_tid})')
+                                    logger.info(f'[J-5/6] send_telegram: {_sym_j} trade_id={_j_tid}')
                                     try:
                                         _j_risk_footer = (
                                             f'\n⚙️ <i>Regime: {_rg_j.regime.get_regime().label} | '
@@ -2640,20 +2665,22 @@ def background_scheduler():
                                     except Exception:
                                         _j_risk_footer = ''
                                     send_telegram(format_j_alert(sig_j) + _j_risk_footer)
+                                    logger.info(f'[J-5/6] Telegram sent OK — {_sym_j} trade_id={_j_tid}')
                                 except Exception as _j_te:
                                     logger.critical(
-                                        f'[J-5/6] CRITICAL: Setup J send_telegram failed {_sym_j}: {_j_te}',
+                                        f'[J-5/6] CRITICAL: send_telegram failed {_sym_j}: {_j_te}',
                                         exc_info=True
                                     )
 
-                            # ── [J-6/6] Tradovate — MNQ and ES both live ─────────
+                            # ── [J-6/6] Tradovate execution ───────────────────────
                             if _j_tid:
                                 logger.info(
-                                    f'[J-6/6] {_sym_j} Setup J: executing on Tradovate live '
+                                    f'[J-6/6] {_sym_j} Setup J: executing on Tradovate '
                                     f'(trade_id={_j_tid})'
                                 )
                                 try:
                                     _execute_via_tradovate(sig_j, _j_tid)
+                                    logger.info(f'[J-6/6] {_sym_j} Setup J: Tradovate call complete')
                                 except Exception as _j_exe:
                                     logger.critical(
                                         f'[J-6/6] CRITICAL: _execute_via_tradovate raised for {_sym_j}: {_j_exe}',
@@ -3951,10 +3978,15 @@ def apex_scan():
     # Setup I — Mathematical Alpha state (dashboard display)
     setup_i_data = []
     try:
-        from setup_i_mathematical import get_setup_i_state
+        from setup_i_mathematical import get_setup_i_state, _load_5min, _atr_i
         from datetime import datetime as _dt_cls
-        from zoneinfo import ZoneInfo as _ZI
         _i_now = _dt_cls.now(__import__('datetime').timezone.utc)
+        try:
+            from calendar_filter import get_filter as _gcf_i
+            _cal_i = _gcf_i()
+        except Exception:
+            _cal_i = None
+        _heat_i_dash = _count_open_trades()
         for _sym in ('MNQ', 'ES'):
             _i = get_setup_i_state(_sym)
             _i_sess_end = 20 if _sym == 'MNQ' else 19
@@ -3967,6 +3999,26 @@ def apex_scan():
             _short_xgb_ok = _s_xgb is not None and _s_xgb > 0.58
             _short_lr_ok  = _lr is not None and _lr < 0.42
             _i_today_ok = _i_now.weekday() in {1, 2, 3}  # Tue=1, Wed=2, Thu=3
+            # Gate 6: stop cap (1.5 × ATR14 must not exceed _MAX_STOP_PTS)
+            try:
+                _df5_i   = _load_5min(_sym, limit=30)
+                _atr14_i = float(_atr_i(_df5_i, 14).iloc[-1] or 0)
+                _i_stop  = round(1.5 * _atr14_i, 1)
+                _i_cap   = _MAX_STOP_PTS.get(_sym, 9999)
+                _stop_ok = 0 < _i_stop <= _i_cap
+                _stop_det = f'ATR14={_atr14_i:.1f} stop={_i_stop}pts cap={_i_cap}pts'
+            except Exception:
+                _stop_ok = True; _stop_det = 'ATR unavailable'
+            # Gate 7: calendar blackout
+            try:
+                _i_blocked, _i_cal_rsn = _cal_i.is_blocked(_sym, _i_now) if _cal_i else (False, '')
+                _cal_i_ok  = not _i_blocked
+                _cal_i_det = _i_cal_rsn if _i_blocked else 'No blackout'
+            except Exception:
+                _cal_i_ok = True; _cal_i_det = 'Calendar unavailable'
+            # Gate 8: portfolio heat
+            _heat_i_ok  = _heat_i_dash < MAX_PORTFOLIO_HEAT
+            _heat_i_det = f'{_heat_i_dash}/{MAX_PORTFOLIO_HEAT} open trades'
             _i_gates = [
                 {
                     'gate': 1, 'name': 'Models Trained',
@@ -3999,6 +4051,21 @@ def apex_scan():
                         f'lr={_lr:.3f} (long needs >0.58, short needs <0.42)'
                         if _lr is not None else 'lr=None'
                     ),
+                },
+                {
+                    'gate': 6, 'name': 'Stop Cap',
+                    'passed': _stop_ok,
+                    'detail': _stop_det,
+                },
+                {
+                    'gate': 7, 'name': 'Calendar',
+                    'passed': _cal_i_ok,
+                    'detail': _cal_i_det,
+                },
+                {
+                    'gate': 8, 'name': 'Portfolio Heat',
+                    'passed': _heat_i_ok,
+                    'detail': _heat_i_det,
                 },
             ]
             _i_passed = sum(1 for g in _i_gates if g['passed'])
