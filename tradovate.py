@@ -781,20 +781,29 @@ def execute_apex_signal(signal: dict, risk_pct: float = None) -> dict:
     sizing          = calculate_position_size(balance, risk_pct, stop_pts, sym)
     pv              = sizing['point_value']
 
-    # Hurst-based position sizing multiplier: Hurst >= 0.70 AND confidence >= 0.67 → 1.25×
-    _hurst, _hurst_conf, _hurst_mult = _get_hurst_multiplier(sym)
-    if _hurst_mult > 1.0:
+    # Meridian L3 position sizing — replaces static Hurst multiplier
+    _hurst, _hurst_conf, _ = _get_hurst_multiplier(sym)
+    try:
+        import meridian_l3 as _ml3
+        _l3_mult, _l3_prob = _ml3.get_position_multiplier(sym, _hurst, _hurst_conf)
+    except Exception as _ml3_e:
+        logger.debug(f'Meridian L3 unavailable ({_ml3_e}) — using 1.0×')
+        _l3_mult, _l3_prob = 1.0, 0.5
+
+    if _l3_mult != 1.0:
         _base_contracts = sizing['contracts']
         sizing = dict(sizing)
-        sizing['contracts'] = min(MAX_CONTRACTS, math.ceil(_base_contracts * _hurst_mult))
+        sizing['contracts'] = min(MAX_CONTRACTS, math.ceil(_base_contracts * _l3_mult))
         sizing['dollar_risk'] = round(sizing['contracts'] * stop_pts * pv, 2)
         logger.info(
             f'Position sizing: Hurst={_hurst:.2f} conf={_hurst_conf:.2f} '
-            f'→ 1.25× multiplier applied ({_base_contracts} → {sizing["contracts"]} contracts)'
+            f'L3prob={_l3_prob:.2f} → {_l3_mult}× '
+            f'({_base_contracts} → {sizing["contracts"]} contracts)'
         )
     else:
         logger.debug(
-            f'Position sizing: Hurst={_hurst:.2f} conf={_hurst_conf:.2f} → standard sizing (1.0×)'
+            f'Position sizing: Hurst={_hurst:.2f} conf={_hurst_conf:.2f} '
+            f'L3prob={_l3_prob:.2f} → 1.0× (standard)'
         )
 
     actual_risk_pct = (sizing['contracts'] * stop_pts * pv / balance * 100) if balance > 0 else 0

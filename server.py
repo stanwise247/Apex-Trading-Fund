@@ -1712,7 +1712,23 @@ def background_scheduler():
     logger.info('Background scheduler started')
     logger.info('Regime confidence threshold: 0.50 (non-J setups fail closed below threshold)')
     logger.info('NY open blackout: 13:00-14:05 UTC active for momentum setups A/B/C/D/I')
-    logger.info('Hurst 1.25× multiplier active (Hurst>=0.70 AND confidence>=0.67)')
+    # Load Meridian L3 models on startup
+    try:
+        import meridian_l3 as _ml3_init
+        for _l3_sym in ('MNQ', 'ES'):
+            _l3_loaded = _ml3_init.load_model(_l3_sym)
+            _l3_info = _ml3_init._l3_cache.get(_l3_sym, {})
+            if _l3_loaded:
+                logger.info(
+                    f'Meridian L3: loaded {_l3_sym} '
+                    f'(AUC={_l3_info.get("auc", 0):.4f} '
+                    f'mode={_l3_info.get("mode", "?")} '
+                    f'trained={_l3_info.get("trained_at", "?")})'
+                )
+            else:
+                logger.warning(f'Meridian L3: no model for {_l3_sym} — position sizing uses 1.0×')
+    except Exception as _ml3_startup_e:
+        logger.warning(f'Meridian L3: startup load failed — {_ml3_startup_e}')
     last_daily, last_macro_log = time.time(), time.time()
     last_session_alerted = {}
     _tick = 0
@@ -1876,6 +1892,27 @@ def background_scheduler():
                     logger.info('Research Division: hypothesis engine complete')
                 except Exception as _hye:
                     logger.error(f'Research Division hypothesis engine failed: {_hye}')
+
+        # ── Meridian L3 — weekly retrain (Sunday 02:00 UTC) ──
+        _now_l3 = datetime.now(timezone.utc)
+        if _now_l3.weekday() == 6 and _now_l3.hour == 2:
+            if not hasattr(background_scheduler, '_last_l3_retrain_day') or \
+                    background_scheduler._last_l3_retrain_day != _today_utc:
+                background_scheduler._last_l3_retrain_day = _today_utc
+                try:
+                    import meridian_l3 as _ml3_rt
+                    for _rt_sym in ('MNQ', 'ES'):
+                        _rt_ok = _ml3_rt.retrain(_rt_sym)
+                        if _rt_ok:
+                            _rt_info = _ml3_rt._l3_cache.get(_rt_sym, {})
+                            send_telegram(
+                                f'[MERIDIAN L3] Weekly retrain complete — {_rt_sym}\n'
+                                f'AUC={_rt_info.get("auc", 0):.4f} '
+                                f'mode={_rt_info.get("mode", "?")} '
+                                f'trained={_rt_info.get("trained_at", "?")}'
+                            )
+                except Exception as _l3_rt_e:
+                    logger.error(f'Meridian L3 retrain failed: {_l3_rt_e}')
 
         # ── Research Division — combination explorer (Saturday 03:00 UTC) ──
         _now_combo = datetime.now(timezone.utc)
@@ -5616,6 +5653,45 @@ def apex_regime():
         if history:
             resp['history'] = history
         return jsonify(resp)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/meridian', methods=['GET'])
+def apex_meridian():
+    """Meridian L3 — current TRENDING probability and position multiplier for MNQ and ES."""
+    try:
+        import meridian_l3 as _ml3
+        result = {}
+        for sym in ('MNQ', 'ES'):
+            if sym not in _ml3._l3_cache:
+                _ml3.load_model(sym)
+            cache = _ml3._l3_cache.get(sym, {})
+            prob = _ml3.predict(sym)
+            # read latest hurst/conf from regime_log for multiplier calc
+            try:
+                _rc = _db.connect()
+                _rrow = _rc.execute(
+                    'SELECT hurst, confidence FROM regime_log '
+                    'WHERE symbol=? ORDER BY timestamp DESC LIMIT 1',
+                    (sym,)
+                ).fetchone()
+                _rc.close()
+                cur_hurst = float(_rrow[0] or 0) if _rrow else 0.5
+                cur_conf  = float(_rrow[1] or 0) if _rrow else 0.5
+            except Exception:
+                cur_hurst, cur_conf = 0.5, 0.5
+            mult, _ = _ml3.get_position_multiplier(sym, cur_hurst, cur_conf)
+            result[sym] = {
+                'l3_prob':       round(prob, 4),
+                'l3_prob_pct':   round(prob * 100, 1),
+                'multiplier':    mult,
+                'model_auc':     round(cache.get('auc', 0), 4),
+                'deploy_mode':   cache.get('mode', 'unknown'),
+                'trained_at':    cache.get('trained_at', None),
+                'model_loaded':  sym in _ml3._l3_cache,
+            }
+        return jsonify({'ok': True, 'meridian_l3': result})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
