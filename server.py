@@ -2442,9 +2442,6 @@ def background_scheduler():
                             logger.info(f'[I-2a/6] Setup I {_sym}: calendar clear — OK')
 
                             # ── [I-2b/6] Dedup ───────────────────────────────────
-                            if _check_and_mark_fired(_sym, sig['setup'], sig['direction']):
-                                logger.info(f'[I-2b/6] Setup I {_sym} {sig["direction"]}: dedup — BLOCKED (already fired today)')
-                                continue
                             if _is_signal_already_active(_sym, sig['direction'], sig['setup']):
                                 logger.info(f'[I-2b/6] Setup I {_sym} {sig["direction"]}: already active in DB — BLOCKED')
                                 continue
@@ -2472,6 +2469,7 @@ def background_scheduler():
                                 _i_tid = log_trade(sig)
                                 if _i_tid:
                                     logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
+                                    _check_and_mark_fired(_sym, sig['setup'], sig['direction'])
                                 else:
                                     logger.critical(
                                         f'[I-4/6] CRITICAL: log_trade() returned None — '
@@ -2606,9 +2604,6 @@ def background_scheduler():
                             logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar clear — OK')
 
                             # ── [J-2b/6] Dedup ───────────────────────────────────
-                            if _check_and_mark_fired(_sym_j, sig_j['setup'], sig_j['direction']):
-                                logger.info(f'[J-2b/6] Setup J {_sym_j} {sig_j["direction"]}: dedup — BLOCKED (already fired today)')
-                                continue
                             if _is_signal_already_active(_sym_j, sig_j['direction'], sig_j['setup']):
                                 logger.info(f'[J-2b/6] Setup J {_sym_j} {sig_j["direction"]}: already active in DB — BLOCKED')
                                 continue
@@ -2636,6 +2631,7 @@ def background_scheduler():
                                 _j_tid = log_trade(sig_j)
                                 if _j_tid:
                                     logger.info(f'[J-4/6] log_trade returned trade_id={_j_tid}')
+                                    _check_and_mark_fired(_sym_j, sig_j['setup'], sig_j['direction'])
                                 else:
                                     logger.critical(
                                         f'[J-4/6] CRITICAL: log_trade() returned None — '
