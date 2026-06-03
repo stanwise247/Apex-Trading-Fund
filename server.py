@@ -1848,6 +1848,18 @@ def background_scheduler():
                 shadow_signals = _rd_ss.run_shadow_lab_scans()
                 if shadow_signals:
                     logger.info(f'Shadow lab: {len(shadow_signals)} signal(s) generated this tick')
+                    for _ss_item in shadow_signals:
+                        _ss_sig = _ss_item.get('signal', {})
+                        _ss_msg = (
+                            f'[SHADOW LAB] {_ss_item.get("strategy_name", "")}\n'
+                            f'{_ss_sig.get("symbol", "")} {str(_ss_sig.get("direction", "")).upper()} '
+                            f'@ {_ss_sig.get("entry", "?")}\n'
+                            f'Stop: {_ss_sig.get("stop", "?")} | '
+                            f'Target: {_ss_sig.get("target", "?")} | '
+                            f'RR: {_ss_sig.get("rr", "?")} | '
+                            f'trade_id={_ss_item.get("trade_id", "?")}'
+                        )
+                        send_telegram(_ss_msg)
             except Exception as _ss_e:
                 logger.warning(f'Shadow lab scan error: {_ss_e}')
 

@@ -114,6 +114,10 @@ class BacktestResult:
     bars_analysed: int
 
 
+# In-memory dedup for Gap ORB shadow scan — resets on process restart (Railway redeploy)
+_gap_orb_fired: dict = {}   # key: 'YYYY-MM-DD', value: True when signal already fired today
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  CONNECTION HELPER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1498,6 +1502,7 @@ def seed_shadow_lab_candidates() -> None:
 
     if count > 0:
         logger.info(f'Research Division: shadow lab already seeded ({count} candidates)')
+        _ensure_gap_orb_in_shadow_lab()
         return
 
     # Step 3: insert candidates
@@ -1541,6 +1546,8 @@ def seed_shadow_lab_candidates() -> None:
         logger.error(f'Research Division: shadow lab seed failed — {e}', exc_info=True)
     finally:
         _close(c)
+
+    _ensure_gap_orb_in_shadow_lab()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2886,11 +2893,214 @@ def scan_shadow_value_area(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
         return None
 
 
+def _ensure_gap_orb_in_shadow_lab() -> None:
+    """
+    Idempotent: insert Gap ORB MNQ into shadow_lab if not already present.
+    Called on every startup from seed_shadow_lab_candidates() regardless of prior seeding.
+    """
+    try:
+        c = _conn()
+        try:
+            existing = c.execute(
+                "SELECT id FROM shadow_lab WHERE strategy_name = ?",
+                ('Gap ORB MNQ',)
+            ).fetchone()
+            if existing:
+                logger.info('Research Division: Gap ORB MNQ already in shadow lab')
+                return
+            today = date.today()
+            promo = (today + timedelta(weeks=8)).isoformat()
+            c.execute(
+                "INSERT INTO shadow_lab "
+                "(strategy_name, description, entered_date, week_number, total_weeks, "
+                " backtest_sharpe, backtest_win_rate, status, promotion_eligible_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    'Gap ORB MNQ',
+                    ('Regime-enhanced Opening Range Breakout on MNQ. '
+                     'Fires 14:05-19:00 UTC on gap days (open >0.15% from prior close), '
+                     'Tue/Wed/Thu only. Requires TRENDING regime + confidence>=0.50. '
+                     'Stop: ORB boundary + 0.5xATR (cap 60pts). Target: 2.0R. '
+                     'Promotion: WR>=50%, Sharpe>=3.0, >=15 live signals (8-week window). '
+                     'Backtest: Sharpe 4.98, WR 55.2%, 29 trades/year.'),
+                    today.isoformat(), 0, 8,
+                    4.98, 0.552,
+                    'ACTIVE', promo,
+                )
+            )
+            c.commit()
+            logger.info('Research Division: Gap ORB MNQ added to shadow lab (8-week programme starts today)')
+        except Exception as e:
+            _rollback(c)
+            logger.error(f'_ensure_gap_orb_in_shadow_lab: insert failed — {e}', exc_info=True)
+        finally:
+            _close(c)
+    except Exception as e:
+        logger.error(f'_ensure_gap_orb_in_shadow_lab: connection failed — {e}')
+
+
+def scan_shadow_gap_orb(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
+    """
+    Gap ORB MNQ — Opening Range Breakout on gap days.
+
+    Backtest (365 days): Sharpe 4.98 | WR 55.2% | 29 trades | MaxDD 3.9R
+    Parameters:
+      Symbol:    MNQ only
+      Days:      Tuesday / Wednesday / Thursday (Friday 20% WR — excluded)
+      Gap:       Day open must gap >0.15% from prior session close (either direction)
+      ORB:       High/Low of first 3 x 5min bars (13:00, 13:05, 13:10 UTC)
+      Entry:     First bar close above ORB High (long) or below ORB Low (short)
+                 after 14:05 UTC blackout clears
+      Regime:    TRENDING + confidence >= 0.50 (live regime_log)
+      Stop:      ORB boundary + 0.5xATR buffer | hard cap 60pts MNQ
+      Target:    2.0R from entry
+      Dedup:     Once per day (in-memory _gap_orb_fired)
+    """
+    try:
+        import pandas as pd
+
+        if symbol != 'MNQ':
+            return None
+        if len(df_5m) < 50:
+            return None
+
+        df = df_5m.copy()
+        if 'minute' not in df.columns:
+            df['minute'] = df['dt'].dt.minute
+
+        now = df['dt'].iloc[-1]
+        if hasattr(now, 'to_pydatetime'):
+            now = now.to_pydatetime()
+        today = now.date()
+
+        # Day filter: Tue / Wed / Thu only
+        if now.weekday() not in (1, 2, 3):
+            return None
+
+        # Time filter: 14:05-19:00 UTC
+        in_window = (now.hour > 14) or (now.hour == 14 and now.minute >= 5)
+        if not in_window or now.hour >= 19:
+            return None
+
+        # Dedup: once per session day
+        today_str = str(today)
+        if _gap_orb_fired.get(today_str):
+            return None
+
+        # ── ORB: first 3 bars at 13:00-13:10 UTC ─────────────────────────────
+        today_bars = df[df['date'] == today]
+        orb_bars   = today_bars[
+            (today_bars['hour'] == 13) & (today_bars['minute'].isin([0, 5, 10]))
+        ]
+        if len(orb_bars) < 3:
+            return None
+        orb_high = float(orb_bars['high'].max())
+        orb_low  = float(orb_bars['low'].min())
+
+        # ── Gap: today open vs prior day close ───────────────────────────────
+        open_bar = today_bars[(today_bars['hour'] == 13) & (today_bars['minute'] == 0)]
+        if len(open_bar) == 0:
+            return None
+        day_open = float(open_bar.iloc[0]['open'])
+
+        prev_bars = df[df['date'] < today]
+        if len(prev_bars) == 0:
+            return None
+        prev_close = float(prev_bars.iloc[-1]['close'])
+        if prev_close <= 0:
+            return None
+
+        gap_pct = abs(day_open - prev_close) / prev_close * 100
+        if gap_pct <= 0.15:
+            return None
+
+        # ── ATR ───────────────────────────────────────────────────────────────
+        atr_val = float(_atr14(df).iloc[-1] or 0)
+        if atr_val <= 0:
+            return None
+
+        # ── Regime gate: live TRENDING + confidence >= 0.50 ──────────────────
+        regime   = 'UNKNOWN'
+        conf_val = 0.0
+        try:
+            rc = _conn()
+            try:
+                rrow = rc.execute(
+                    "SELECT regime, confidence FROM regime_log "
+                    "WHERE symbol=? ORDER BY timestamp DESC LIMIT 1",
+                    (symbol,)
+                ).fetchone()
+                if rrow:
+                    regime   = rrow[0] or 'UNKNOWN'
+                    conf_val = float(rrow[1] or 0)
+            finally:
+                _close(rc)
+        except Exception as _re:
+            logger.debug(f'scan_shadow_gap_orb: regime lookup failed ({_re}) — blocking')
+            return None
+
+        if regime != 'TRENDING' or conf_val < 0.50:
+            return None
+
+        # ── Direction: bar close must break ORB level ─────────────────────────
+        bar_close = float(df['close'].iloc[-1])
+        if bar_close > orb_high:
+            direction = 'long'
+        elif bar_close < orb_low:
+            direction = 'short'
+        else:
+            return None
+
+        # ── Stop / target ─────────────────────────────────────────────────────
+        if direction == 'long':
+            stop_dist = max(bar_close - orb_low, 0.5 * atr_val)
+            stop      = bar_close - stop_dist
+            target    = bar_close + 2.0 * stop_dist
+        else:
+            stop_dist = max(orb_high - bar_close, 0.5 * atr_val)
+            stop      = bar_close + stop_dist
+            target    = bar_close - 2.0 * stop_dist
+
+        if stop_dist > 60:   # MNQ hard stop cap
+            return None
+
+        # ── Mark fired for today ──────────────────────────────────────────────
+        _gap_orb_fired[today_str] = True
+
+        logger.info(
+            f'[SHADOW LAB] Gap ORB MNQ {direction.upper()} | '
+            f'entry={bar_close:.2f} stop={stop:.2f} target={target:.2f} | '
+            f'orb={orb_low:.2f}-{orb_high:.2f} | gap={gap_pct:.3f}% | '
+            f'regime={regime} conf={conf_val:.2f}'
+        )
+
+        return {
+            'symbol':    symbol,
+            'direction': direction,
+            'setup':     'shadow_gap_orb',
+            'entry':     round(bar_close, 2),
+            'stop':      round(stop, 2),
+            'target':    round(target, 2),
+            'rr':        2.0,
+            'atr':       round(atr_val, 2),
+            'orb_high':  round(orb_high, 2),
+            'orb_low':   round(orb_low, 2),
+            'gap_pct':   round(gap_pct, 3),
+            'regime':    regime,
+            'conf':      round(conf_val, 2),
+            'quality':   'shadow_lab',
+        }
+    except Exception as e:
+        logger.warning(f'scan_shadow_gap_orb {symbol}: {e}')
+        return None
+
+
 # Shadow strategy name → scan function mapping
 _SHADOW_SCAN_MAP = {
     'Post-Low-Vol Expansion': scan_shadow_post_low_vol,
     'Monday NY Open Long': scan_shadow_monday_ny_open,
     'Value Area Continuation': scan_shadow_value_area,
+    'Gap ORB MNQ': scan_shadow_gap_orb,
 }
 
 
