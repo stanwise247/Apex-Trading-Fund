@@ -21,6 +21,7 @@ Account: configured via TRADOVATE_ACCOUNT in .env
 """
 
 import os
+import math
 import time
 import logging
 import requests
@@ -424,6 +425,27 @@ def get_positions() -> dict:
 #  POSITION SIZE CALCULATOR
 # ─────────────────────────────────────────────────────────────
 
+def _get_hurst_multiplier(symbol: str) -> tuple:
+    """Return (hurst, confidence, multiplier) from latest regime_log row."""
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            'SELECT hurst, confidence FROM regime_log '
+            'WHERE symbol=? ORDER BY timestamp DESC LIMIT 1',
+            (symbol,)
+        ).fetchone()
+        conn.close()
+        if not row:
+            return (0.0, 0.0, 1.0)
+        hurst, conf = float(row[0] or 0), float(row[1] or 0)
+        if hurst >= 0.70 and conf >= 0.67:
+            return (hurst, conf, 1.25)
+        return (hurst, conf, 1.0)
+    except Exception as _e:
+        logger.debug(f'_get_hurst_multiplier: failed ({_e}) — using 1.0×')
+        return (0.0, 0.0, 1.0)
+
+
 def calculate_position_size(
     account_balance: float,
     risk_pct: float,
@@ -758,6 +780,23 @@ def execute_apex_signal(signal: dict, risk_pct: float = None) -> dict:
     # Calculate size — always returns >= 1 contract
     sizing          = calculate_position_size(balance, risk_pct, stop_pts, sym)
     pv              = sizing['point_value']
+
+    # Hurst-based position sizing multiplier: Hurst >= 0.70 AND confidence >= 0.67 → 1.25×
+    _hurst, _hurst_conf, _hurst_mult = _get_hurst_multiplier(sym)
+    if _hurst_mult > 1.0:
+        _base_contracts = sizing['contracts']
+        sizing = dict(sizing)
+        sizing['contracts'] = min(MAX_CONTRACTS, math.ceil(_base_contracts * _hurst_mult))
+        sizing['dollar_risk'] = round(sizing['contracts'] * stop_pts * pv, 2)
+        logger.info(
+            f'Position sizing: Hurst={_hurst:.2f} conf={_hurst_conf:.2f} '
+            f'→ 1.25× multiplier applied ({_base_contracts} → {sizing["contracts"]} contracts)'
+        )
+    else:
+        logger.debug(
+            f'Position sizing: Hurst={_hurst:.2f} conf={_hurst_conf:.2f} → standard sizing (1.0×)'
+        )
+
     actual_risk_pct = (sizing['contracts'] * stop_pts * pv / balance * 100) if balance > 0 else 0
 
     if sizing.get('min_override'):

@@ -143,7 +143,8 @@ def is_setup_enabled(setup_id: str, symbol: str = None) -> bool:
                 try:
                     from regime_engine import get_current_regime
                     regime_info = get_current_regime(symbol)
-                    if regime_info and regime_info.get('confidence', 0) >= 0.33:
+                    conf = regime_info.get('confidence', 0) if regime_info else 0
+                    if regime_info and conf >= 0.50:
                         current_regime = regime_info.get('regime', 'UNKNOWN')
                         optimal = [
                             r.strip()
@@ -161,7 +162,14 @@ def is_setup_enabled(setup_id: str, symbol: str = None) -> bool:
                                 f'Setup {sid}: regime gate passed — '
                                 f'{current_regime} in {optimal}'
                             )
-                    # confidence < 0.33 or no regime data: fail open (allow)
+                    elif sid != 'J':
+                        # confidence < 0.50 and not Setup J — fail closed
+                        logger.info(
+                            f'Setup {sid}: regime gate blocked — '
+                            f'low confidence ({conf:.2f} < 0.50)'
+                        )
+                        return False
+                    # Setup J at any confidence: fail open (accepts all regimes)
                 except Exception as _rge:
                     logger.debug(f'Setup {sid}: regime gate error (fail open): {_rge}')
             return True
@@ -1556,10 +1564,21 @@ def _cal_block(symbol: str, setup: str) -> bool:
     """
     if not SIGNAL_FILTERS.get('economic_calendar', True):
         return False
+
+    _now_utc = datetime.now(timezone.utc)
+
+    # NY-open soft blackout 13:00–14:05 UTC (11.6% TRENDING probability — worst hour of day).
+    # Applies to momentum setups A/B/C/D/I only. H and J are unaffected.
+    _setup_letter = (setup or '')[:1].upper()
+    if _setup_letter in ('A', 'B', 'C', 'D', 'I'):
+        if _now_utc.hour == 13 or (_now_utc.hour == 14 and _now_utc.minute <= 5):
+            logger.info(f'{setup} {symbol}: skipped — NY open soft blackout 13:00-14:05 UTC')
+            return True
+
     try:
         from calendar_filter import get_filter as _gcf
         _cf = _gcf()
-        _blocked, _reason = _cf.is_blocked(symbol, datetime.now(timezone.utc))
+        _blocked, _reason = _cf.is_blocked(symbol, _now_utc)
         if _blocked:
             logger.warning(f'{setup} {symbol}: skipped — economic calendar blackout: {_reason}')
         return _blocked
@@ -1691,6 +1710,9 @@ def _check_1h_bias(symbol: str, direction: str) -> tuple:
 
 def background_scheduler():
     logger.info('Background scheduler started')
+    logger.info('Regime confidence threshold: 0.50 (non-J setups fail closed below threshold)')
+    logger.info('NY open blackout: 13:00-14:05 UTC active for momentum setups A/B/C/D/I')
+    logger.info('Hurst 1.25× multiplier active (Hurst>=0.70 AND confidence>=0.67)')
     last_daily, last_macro_log = time.time(), time.time()
     last_session_alerted = {}
     _tick = 0
