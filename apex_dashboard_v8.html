@@ -885,6 +885,27 @@ tr:hover td { background: var(--bg3); }
 .score-chip-bt   { background: rgba(0,113,227,0.1); color: var(--blue); }
 .score-chip-live { background: rgba(52,199,89,0.1); color: var(--green); }
 .score-chip-na   { background: var(--bg3); color: var(--text3); }
+
+/* ── Meridian L3 ── */
+.meridian-footer { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:5px 0 2px; border-top:1px solid var(--border); margin-top:6px; }
+.ml3-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 7px; border-radius:var(--r-pill); font-family:var(--mono); font-size:10px; font-weight:600; }
+.ml3-green { background:rgba(52,199,89,0.12);  color:var(--green); }
+.ml3-amber { background:rgba(255,159,10,0.12); color:var(--amber); }
+.ml3-red   { background:rgba(255,59,48,0.12);  color:var(--red); }
+.ml3-dim   { background:var(--bg3); color:var(--text3); }
+.meridian-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px; }
+.meridian-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r-card); padding:18px; }
+.meridian-sym { font-family:var(--sans); font-size:13px; font-weight:700; color:var(--text); margin-bottom:12px; }
+.meridian-gauge-wrap { display:flex; align-items:center; gap:14px; margin-bottom:10px; }
+.meridian-prob-val { font-family:var(--mono); font-size:32px; font-weight:700; line-height:1; }
+.meridian-trend-arrow { font-size:22px; line-height:1; }
+.meridian-bar-bg { height:6px; border-radius:3px; background:var(--bg3); margin-bottom:12px; overflow:hidden; }
+.meridian-bar-fill { height:100%; border-radius:3px; transition:width 0.4s ease; }
+.meridian-meta-row { display:flex; gap:14px; flex-wrap:wrap; }
+.meridian-meta-item { display:flex; flex-direction:column; gap:2px; }
+.meridian-meta-label { font-size:9px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text3); font-family:var(--sans); }
+.meridian-meta-val { font-size:11px; color:var(--text2); font-family:var(--mono); }
+@media(max-width:700px){ .meridian-grid { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -919,6 +940,7 @@ tr:hover td { background: var(--bg3); }
     <button class="nav-btn"        data-rtab="rsch-discovery" onclick="switchResearchTab('rsch-discovery')">Discovery</button>
     <button class="nav-btn"        data-rtab="rsch-patterns"  onclick="switchResearchTab('rsch-patterns')">Patterns</button>
     <button class="nav-btn"        data-rtab="rsch-decisions" onclick="switchResearchTab('rsch-decisions')">Decisions</button>
+    <button class="nav-btn"        data-rtab="rsch-meridian"  onclick="switchResearchTab('rsch-meridian')">Meridian L3</button>
   </nav>
 
   <nav class="topnav" id="nav-command" style="display:none">
@@ -1155,6 +1177,20 @@ tr:hover td { background: var(--bg3); }
   </div>
 </div>
 
+<!-- ═══════════════════ RESEARCH — MERIDIAN L3 ═══════════════════ -->
+<div class="page" id="page-rsch-meridian">
+  <div class="section-title" style="margin-bottom:12px">
+    Meridian L3 — Regime Probability
+    <button class="refresh-btn" onclick="fetchMeridian().then(loadMeridianPanel)">Refresh</button>
+  </div>
+  <div id="meridianPanelContent">
+    <div class="meridian-grid">
+      <div class="meridian-card"><div class="skeleton" style="height:160px"></div></div>
+      <div class="meridian-card"><div class="skeleton" style="height:160px"></div></div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════ COMMAND — OVERVIEW ═══════════════════ -->
 <div class="page" id="page-cmd-overview">
   <div class="cmd-stat-grid">
@@ -1300,6 +1336,8 @@ let _allTrades = [];
 let _equityChart = null;
 let _drilldownData = null;
 let _intervals = {};
+let _meridianCache = {};
+let _meridianHistory = { MNQ: [], ES: [] };
 
 // Setup metadata
 const SETUP_META = {
@@ -1937,7 +1975,111 @@ function buildSetupCard(letter, contentHtml, nextGate, gatesForDrilldown, allGat
     </div>
     <div class="gate-section" style="margin-top:2px">${contentHtml}</div>
     <div class="next-gate-row" style="font-size:10px">→ ${nextGate||'—'}</div>
+    ${meridianFooter(meta.syms)}
   </div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// MERIDIAN L3
+// ═══════════════════════════════════════════════════════
+function _ml3ChipClass(prob) {
+  if (prob == null) return 'ml3-dim';
+  if (prob > 55)   return 'ml3-green';
+  if (prob >= 35)  return 'ml3-amber';
+  return 'ml3-red';
+}
+
+function _ml3TrendArrow(hist) {
+  if (!hist || hist.length < 2) return '→';
+  const delta = hist[hist.length - 1] - hist[0];
+  if (delta > 2)  return '↑';
+  if (delta < -2) return '↓';
+  return '→';
+}
+
+function meridianFooter(syms) {
+  if (!syms || !syms.length) return '';
+  const relevant = syms.filter(s => s === 'MNQ' || s === 'ES');
+  if (!relevant.length) return '';
+  let chips = '';
+  for (const sym of relevant) {
+    const d = _meridianCache[sym];
+    const prob = d ? d.l3_prob_pct : null;
+    const cls  = _ml3ChipClass(prob);
+    const val  = prob != null ? prob.toFixed(0) + '%' : '—';
+    chips += `<span class="ml3-chip ${cls}" data-sym="${sym}"><span class="ml3-lbl">${sym}</span>&nbsp;<span class="ml3-val">${val}</span></span>`;
+  }
+  return `<div class="meridian-footer"><span style="font-size:9px;color:var(--text3);font-family:var(--sans);letter-spacing:0.05em;text-transform:uppercase;align-self:center">L3</span>${chips}</div>`;
+}
+
+async function fetchMeridian() {
+  try {
+    const r = await fetch('/api/apex/meridian');
+    const d = await r.json();
+    if (!d.ok || !d.meridian_l3) return;
+    _meridianCache = d.meridian_l3;
+    for (const sym of ['MNQ', 'ES']) {
+      if (!_meridianCache[sym]) continue;
+      const prob = _meridianCache[sym].l3_prob_pct;
+      if (prob != null) {
+        _meridianHistory[sym].push(prob);
+        if (_meridianHistory[sym].length > 6) _meridianHistory[sym].shift();
+      }
+    }
+    // Live-update chips on setup cards without full re-render
+    for (const sym of ['MNQ', 'ES']) {
+      const d2 = _meridianCache[sym];
+      if (!d2) continue;
+      document.querySelectorAll(`.ml3-chip[data-sym="${sym}"]`).forEach(el => {
+        el.className = 'ml3-chip ' + _ml3ChipClass(d2.l3_prob_pct);
+        const valEl = el.querySelector('.ml3-val');
+        if (valEl) valEl.textContent = d2.l3_prob_pct != null ? d2.l3_prob_pct.toFixed(0) + '%' : '—';
+      });
+    }
+    if (_currentMode === 'research' && _researchTab === 'rsch-meridian') {
+      loadMeridianPanel();
+    }
+  } catch(_e) {}
+}
+
+function loadMeridianPanel() {
+  const el = document.getElementById('meridianPanelContent');
+  if (!el) return;
+  let html = '<div class="meridian-grid">';
+  for (const sym of ['MNQ', 'ES']) {
+    const d     = _meridianCache[sym];
+    const hist  = _meridianHistory[sym] || [];
+    const prob  = d ? d.l3_prob_pct  : null;
+    const mult  = d ? d.multiplier   : null;
+    const auc   = d ? d.model_auc    : null;
+    const mode  = d ? (d.deploy_mode || '—') : '—';
+    const trained = d && d.trained_at ? d.trained_at.slice(0, 10) : '—';
+    const loaded  = d ? (d.model_loaded ? 'Yes' : 'No') : '—';
+    const probColor = prob > 55 ? 'var(--green)' : prob >= 35 ? 'var(--amber)' : prob != null ? 'var(--red)' : 'var(--text3)';
+    const barPct    = prob != null ? Math.min(Math.max(prob, 0), 100) : 0;
+    const barColor  = prob > 55 ? 'var(--green)' : prob >= 35 ? 'var(--amber)' : 'var(--red)';
+    const arrow     = _ml3TrendArrow(hist);
+    const arrowColor = arrow === '↑' ? 'var(--green)' : arrow === '↓' ? 'var(--red)' : 'var(--text3)';
+    html += `
+    <div class="meridian-card">
+      <div class="meridian-sym">${sym} — Meridian L3</div>
+      <div class="meridian-gauge-wrap">
+        <div class="meridian-prob-val" style="color:${probColor}">${prob != null ? prob.toFixed(1) + '%' : '—'}</div>
+        <div class="meridian-trend-arrow" style="color:${arrowColor}" title="Trend over last ${hist.length} readings">${arrow}</div>
+        ${mult != null ? `<div style="font-family:var(--mono);font-size:13px;color:var(--text2)">×${mult.toFixed(2)}</div>` : ''}
+      </div>
+      <div class="meridian-bar-bg"><div class="meridian-bar-fill" style="width:${barPct}%;background:${barColor}"></div></div>
+      <div class="meridian-meta-row">
+        <div class="meridian-meta-item"><span class="meridian-meta-label">AUC</span><span class="meridian-meta-val">${auc != null ? auc.toFixed(3) : '—'}</span></div>
+        <div class="meridian-meta-item"><span class="meridian-meta-label">Mode</span><span class="meridian-meta-val">${mode}</span></div>
+        <div class="meridian-meta-item"><span class="meridian-meta-label">Trained</span><span class="meridian-meta-val">${trained}</span></div>
+        <div class="meridian-meta-item"><span class="meridian-meta-label">Loaded</span><span class="meridian-meta-val">${loaded}</span></div>
+        <div class="meridian-meta-item"><span class="meridian-meta-label">Readings</span><span class="meridian-meta-val">${hist.length}/6</span></div>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 function renderSetupsGrid(scanData, trades) {
@@ -2387,6 +2529,8 @@ function startRefreshLoop() {
   setInterval(() => { if (_activeTab === 'performance') loadPerformance(); }, 60000);
   // Diagnostics: 60s
   setInterval(() => { if (_activeTab === 'diagnostics') loadDiagnostics(); }, 60000);
+  // Meridian L3: 30s (background, always)
+  setInterval(() => fetchMeridian(), 30000);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2427,6 +2571,7 @@ function switchResearchTab(tab) {
     'rsch-decisions': loadResearchDecisions,
     'rsch-discovery': loadDiscovery,
     'rsch-patterns':  loadPatterns,
+    'rsch-meridian':  loadMeridianPanel,
   };
   if (loaders[tab]) loaders[tab]();
 }
@@ -3301,6 +3446,7 @@ window.addEventListener('DOMContentLoaded', () => {
   startClock();
   startRefreshLoop();
   loadOverview();
+  fetchMeridian();
 });
 
 // ── Manual Close Modal ────────────────────────────────────────────
