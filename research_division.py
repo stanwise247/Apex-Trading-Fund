@@ -116,6 +116,8 @@ class BacktestResult:
 
 # In-memory dedup for Gap ORB shadow scan — resets on process restart (Railway redeploy)
 _gap_orb_fired: dict = {}   # key: 'YYYY-MM-DD', value: True when signal already fired today
+_shadow_k_es_fired: dict = {}   # Setup K ES dedup — one signal per day
+_shadow_k_mnq_fired: dict = {}  # Setup K MNQ dedup — one signal per day
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1503,6 +1505,8 @@ def seed_shadow_lab_candidates() -> None:
     if count > 0:
         logger.info(f'Research Division: shadow lab already seeded ({count} candidates)')
         _ensure_gap_orb_in_shadow_lab()
+        _ensure_k_es_in_shadow_lab()
+        _ensure_k_mnq_in_shadow_lab()
         return
 
     # Step 3: insert candidates
@@ -1548,6 +1552,8 @@ def seed_shadow_lab_candidates() -> None:
         _close(c)
 
     _ensure_gap_orb_in_shadow_lab()
+    _ensure_k_es_in_shadow_lab()
+    _ensure_k_mnq_in_shadow_lab()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3095,12 +3101,394 @@ def scan_shadow_gap_orb(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
         return None
 
 
+def _ensure_k_es_in_shadow_lab() -> None:
+    """Idempotent: insert Setup K ES into shadow_lab if not already present."""
+    try:
+        c = _conn()
+        try:
+            existing = c.execute(
+                "SELECT id FROM shadow_lab WHERE strategy_name = ?",
+                ('Setup K ES',)
+            ).fetchone()
+            if existing:
+                logger.info('Research Division: Setup K ES already in shadow lab')
+                return
+            today = date.today()
+            promo = (today + timedelta(weeks=8)).isoformat()
+            c.execute(
+                "INSERT INTO shadow_lab "
+                "(strategy_name, description, entered_date, week_number, total_weeks, "
+                " backtest_sharpe, backtest_win_rate, status, promotion_eligible_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    'Setup K ES',
+                    ('Meridian Transition Entry on ES. '
+                     'Entry: first TRENDING bar after >=3 consecutive CHOPPY bars. '
+                     'Session: 14:05-16:00 UTC, Tue/Wed/Thu only. '
+                     'Direction: VWAP filter (above=long, below=short). '
+                     'Stop: 1.0xATR (cap 15pts). Target: 2.5R. '
+                     'Requires confidence>=0.50. '
+                     'Promotion: WR>=50%, Sharpe>=3.0, >=15 live signals (8-week window). '
+                     'Backtest: Sharpe 6.40, WR 48.9%, 3.9/mo, MaxDD 5.0R, 11/13 pos months.'),
+                    today.isoformat(), 0, 8,
+                    6.40, 0.489,
+                    'ACTIVE', promo,
+                )
+            )
+            c.commit()
+            logger.info('Research Division: Setup K ES added to shadow lab (8-week programme starts today)')
+        except Exception as e:
+            _rollback(c)
+            logger.error(f'_ensure_k_es_in_shadow_lab: insert failed — {e}', exc_info=True)
+        finally:
+            _close(c)
+    except Exception as e:
+        logger.error(f'_ensure_k_es_in_shadow_lab: connection failed — {e}')
+
+
+def _ensure_k_mnq_in_shadow_lab() -> None:
+    """Idempotent: insert Setup K MNQ into shadow_lab if not already present."""
+    try:
+        c = _conn()
+        try:
+            existing = c.execute(
+                "SELECT id FROM shadow_lab WHERE strategy_name = ?",
+                ('Setup K MNQ',)
+            ).fetchone()
+            if existing:
+                logger.info('Research Division: Setup K MNQ already in shadow lab')
+                return
+            today = date.today()
+            promo = (today + timedelta(weeks=8)).isoformat()
+            c.execute(
+                "INSERT INTO shadow_lab "
+                "(strategy_name, description, entered_date, week_number, total_weeks, "
+                " backtest_sharpe, backtest_win_rate, status, promotion_eligible_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    'Setup K MNQ',
+                    ('Meridian Transition Entry on MNQ. '
+                     'Entry: CHOPPY>=4 consecutive bars + autocorr rising >=0.02 (15min window) '
+                     '+ Hurst>0.60 + Hurst rising >=0.01 + autocorr>-0.02 (L3 proxy). '
+                     'Session: 14:05-16:00 UTC, Tue/Wed only. '
+                     'Direction: VWAP filter (above=long, below=short). '
+                     'Stop: 1.0xATR (cap 60pts). Target: 2.5R. '
+                     'Requires confidence>=0.50. '
+                     'Promotion: WR>=50%, Sharpe>=3.0, >=15 live signals (8-week window). '
+                     'Backtest: Sharpe 8.35, WR 57.1%, 1.8/mo, MaxDD 2.5R, 8/10 pos months.'),
+                    today.isoformat(), 0, 8,
+                    8.35, 0.571,
+                    'ACTIVE', promo,
+                )
+            )
+            c.commit()
+            logger.info('Research Division: Setup K MNQ added to shadow lab (8-week programme starts today)')
+        except Exception as e:
+            _rollback(c)
+            logger.error(f'_ensure_k_mnq_in_shadow_lab: insert failed — {e}', exc_info=True)
+        finally:
+            _close(c)
+    except Exception as e:
+        logger.error(f'_ensure_k_mnq_in_shadow_lab: connection failed — {e}')
+
+
+def _get_regime_window_rd(symbol: str, n: int = 10) -> list:
+    """Return last n regime_log rows for symbol as list of dicts (newest last)."""
+    try:
+        rc = _conn()
+        try:
+            rows = rc.execute(
+                "SELECT regime, hurst, autocorr, confidence "
+                "FROM regime_log WHERE symbol=? ORDER BY timestamp DESC LIMIT ?",
+                (symbol, n)
+            ).fetchall()
+        finally:
+            _close(rc)
+        if not rows:
+            return []
+        return list(reversed(rows))   # chronological order, newest last
+    except Exception as _e:
+        logger.debug(f'_get_regime_window_rd {symbol}: {_e}')
+        return []
+
+
+def scan_shadow_k_es(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
+    """
+    Setup K ES — Meridian Transition Entry.
+
+    Backtest (365 days): Sharpe 6.40 | WR 48.9% | 3.9/mo | MaxDD 5.0R | 11/13 pos months
+    Parameters:
+      Symbol:    ES only
+      Days:      Tuesday / Wednesday / Thursday
+      Session:   14:05-16:00 UTC (post NY-open blackout, pre midday decay)
+      Entry:     First bar where regime transitions to TRENDING
+                 after >= 3 consecutive CHOPPY bars
+      Direction: Close > session VWAP → long | Close < VWAP → short
+      Regime:    confidence >= 0.50
+      Stop:      1.0 × ATR14 | hard cap 15pts ES
+      Target:    2.5R
+      Dedup:     Once per day (in-memory _shadow_k_es_fired)
+    """
+    try:
+        import pandas as pd
+
+        if symbol != 'ES':
+            return None
+        if len(df_5m) < 50:
+            return None
+
+        df = df_5m.copy()
+        if 'minute' not in df.columns:
+            df['minute'] = df['dt'].dt.minute
+
+        now = df['dt'].iloc[-1]
+        if hasattr(now, 'to_pydatetime'):
+            now = now.to_pydatetime()
+        today = now.date()
+
+        # Day filter: Tue / Wed / Thu only
+        if now.weekday() not in (1, 2, 3):
+            return None
+
+        # Time filter: 14:05-16:00 UTC (cut midday 16h+ decay)
+        in_window = (now.hour == 14 and now.minute >= 5) or now.hour == 15
+        if not in_window:
+            return None
+
+        # Dedup: once per session day
+        today_str = str(today)
+        if _shadow_k_es_fired.get(today_str):
+            return None
+
+        # Regime window: need last 10 bars
+        rw = _get_regime_window_rd('ES', n=10)
+        if len(rw) < 5:
+            return None
+
+        latest = rw[-1]
+        regime   = latest[0] or 'UNKNOWN'
+        conf_val = float(latest[3] or 0)
+
+        # Gate: must be TRENDING now
+        if regime != 'TRENDING':
+            return None
+
+        # Gate: confidence >= 0.50
+        if conf_val < 0.50:
+            return None
+
+        # Gate: >= 3 of the 4 preceding bars were CHOPPY
+        prior_choppy = sum(1 for row in rw[-5:-1] if row[0] == 'CHOPPY')
+        if prior_choppy < 3:
+            return None
+
+        # ATR
+        atr_val = float(_atr14(df).iloc[-1] or 0)
+        if atr_val <= 0 or atr_val > 15:   # ES hard cap 15pts
+            return None
+
+        # VWAP direction
+        today_bars = df[df['date'] == today]
+        session_bars = today_bars[today_bars['hour'] >= 13]
+        if len(session_bars) < 5:
+            return None
+        vol_sum = float(session_bars['volume'].sum())
+        if vol_sum == 0:
+            return None
+        vwap = float((session_bars['close'] * session_bars['volume']).sum() / vol_sum)
+        bar_close = float(df['close'].iloc[-1])
+        direction = 'long' if bar_close > vwap else 'short'
+
+        # Stop / target
+        stop_dist = atr_val
+        if direction == 'long':
+            stop   = bar_close - stop_dist
+            target = bar_close + 2.5 * stop_dist
+        else:
+            stop   = bar_close + stop_dist
+            target = bar_close - 2.5 * stop_dist
+
+        # Mark fired
+        _shadow_k_es_fired[today_str] = True
+
+        logger.info(
+            f'[SHADOW LAB K-ES] Setup K ES {direction.upper()} | '
+            f'entry={bar_close:.2f} stop={stop:.2f} target={target:.2f} | '
+            f'prior_choppy={prior_choppy} atr={atr_val:.2f} vwap={vwap:.2f} | '
+            f'conf={conf_val:.2f}'
+        )
+
+        return {
+            'symbol':       symbol,
+            'direction':    direction,
+            'setup':        'shadow_k_es',
+            'entry':        round(bar_close, 2),
+            'stop':         round(stop, 2),
+            'target':       round(target, 2),
+            'rr':           2.5,
+            'atr':          round(atr_val, 2),
+            'vwap':         round(vwap, 2),
+            'prior_choppy': prior_choppy,
+            'conf':         round(conf_val, 2),
+            'quality':      'shadow_lab',
+        }
+    except Exception as e:
+        logger.warning(f'scan_shadow_k_es {symbol}: {e}')
+        return None
+
+
+def scan_shadow_k_mnq(symbol: str, df_5m, df_1h, df_4h) -> Optional[dict]:
+    """
+    Setup K MNQ — Meridian Transition Entry.
+
+    Backtest (365 days): Sharpe 8.35 | WR 57.1% | 1.8/mo | MaxDD 2.5R | 8/10 pos months
+    Parameters:
+      Symbol:    MNQ only
+      Days:      Tuesday / Wednesday only (Thursday 0% WR — excluded)
+      Session:   14:05-16:00 UTC
+      Entry:     CHOPPY >= 4 consecutive bars
+                 + autocorr rising >= 0.02 over last 3 bars (15 min)
+                 + Hurst > 0.60 + Hurst rising >= 0.01 over 3 bars
+                 + autocorr > -0.02 (not deeply negative)
+      Direction: Close > session VWAP → long | Close < VWAP → short
+      Regime:    confidence >= 0.50
+      Stop:      1.0 × ATR14 | hard cap 60pts MNQ
+      Target:    2.5R
+      Dedup:     Once per day (in-memory _shadow_k_mnq_fired)
+    """
+    try:
+        import pandas as pd
+
+        if symbol != 'MNQ':
+            return None
+        if len(df_5m) < 50:
+            return None
+
+        df = df_5m.copy()
+        if 'minute' not in df.columns:
+            df['minute'] = df['dt'].dt.minute
+
+        now = df['dt'].iloc[-1]
+        if hasattr(now, 'to_pydatetime'):
+            now = now.to_pydatetime()
+        today = now.date()
+
+        # Day filter: Tue / Wed only (Thu had 0% WR)
+        if now.weekday() not in (1, 2):
+            return None
+
+        # Time filter: 14:05-16:00 UTC
+        in_window = (now.hour == 14 and now.minute >= 5) or now.hour == 15
+        if not in_window:
+            return None
+
+        # Dedup: once per session day
+        today_str = str(today)
+        if _shadow_k_mnq_fired.get(today_str):
+            return None
+
+        # Regime window: need last 8 bars
+        rw = _get_regime_window_rd('MNQ', n=8)
+        if len(rw) < 5:
+            return None
+
+        latest = rw[-1]
+        prev3  = rw[-4] if len(rw) >= 4 else rw[0]
+
+        conf_val = float(latest[3] or 0)
+        if conf_val < 0.50:
+            return None
+
+        # Gate: >= 4 consecutive CHOPPY bars (trailing)
+        consec = 0
+        for row in reversed(rw):
+            if row[0] == 'CHOPPY':
+                consec += 1
+            else:
+                break
+        if consec < 4:
+            return None
+
+        # Gate: autocorr rising >= 0.02 over 15 min (3 bars)
+        ac_now  = float(latest[2] or 0)
+        ac_prev = float(prev3[2] or 0)
+        if ac_now - ac_prev < 0.02:
+            return None
+
+        # Gate: L3 proxy — Hurst > 0.60, rising >= 0.01, autocorr > -0.02
+        h_now  = float(latest[1] or 0)
+        h_prev = float(prev3[1] or 0)
+        if not (h_now > 0.60 and ac_now > -0.02 and h_now - h_prev >= 0.01):
+            return None
+
+        # ATR
+        atr_val = float(_atr14(df).iloc[-1] or 0)
+        if atr_val <= 0 or atr_val > 60:   # MNQ hard cap 60pts
+            return None
+
+        # VWAP direction
+        today_bars = df[df['date'] == today]
+        session_bars = today_bars[today_bars['hour'] >= 13]
+        if len(session_bars) < 5:
+            return None
+        vol_sum = float(session_bars['volume'].sum())
+        if vol_sum == 0:
+            return None
+        vwap = float((session_bars['close'] * session_bars['volume']).sum() / vol_sum)
+        bar_close = float(df['close'].iloc[-1])
+        direction = 'long' if bar_close > vwap else 'short'
+
+        # Stop / target
+        stop_dist = atr_val
+        if direction == 'long':
+            stop   = bar_close - stop_dist
+            target = bar_close + 2.5 * stop_dist
+        else:
+            stop   = bar_close + stop_dist
+            target = bar_close - 2.5 * stop_dist
+
+        # Mark fired
+        _shadow_k_mnq_fired[today_str] = True
+
+        logger.info(
+            f'[SHADOW LAB K-MNQ] Setup K MNQ {direction.upper()} | '
+            f'entry={bar_close:.2f} stop={stop:.2f} target={target:.2f} | '
+            f'consec_choppy={consec} ac_rise={ac_now-ac_prev:.3f} '
+            f'hurst={h_now:.3f} h_rise={h_now-h_prev:.3f} | '
+            f'atr={atr_val:.2f} vwap={vwap:.2f} conf={conf_val:.2f}'
+        )
+
+        return {
+            'symbol':         symbol,
+            'direction':      direction,
+            'setup':          'shadow_k_mnq',
+            'entry':          round(bar_close, 2),
+            'stop':           round(stop, 2),
+            'target':         round(target, 2),
+            'rr':             2.5,
+            'atr':            round(atr_val, 2),
+            'vwap':           round(vwap, 2),
+            'consec_choppy':  consec,
+            'autocorr':       round(ac_now, 4),
+            'ac_rise':        round(ac_now - ac_prev, 4),
+            'hurst':          round(h_now, 4),
+            'h_rise':         round(h_now - h_prev, 4),
+            'conf':           round(conf_val, 2),
+            'quality':        'shadow_lab',
+        }
+    except Exception as e:
+        logger.warning(f'scan_shadow_k_mnq {symbol}: {e}')
+        return None
+
+
 # Shadow strategy name → scan function mapping
 _SHADOW_SCAN_MAP = {
     'Post-Low-Vol Expansion': scan_shadow_post_low_vol,
     'Monday NY Open Long': scan_shadow_monday_ny_open,
     'Value Area Continuation': scan_shadow_value_area,
     'Gap ORB MNQ': scan_shadow_gap_orb,
+    'Setup K ES':  scan_shadow_k_es,
+    'Setup K MNQ': scan_shadow_k_mnq,
 }
 
 
@@ -3129,7 +3517,7 @@ def run_shadow_lab_scans() -> list:
         if scan_func is None:
             continue
 
-        for symbol in ('MNQ',):
+        for symbol in ('MNQ', 'ES'):
             try:
                 conn = _conn()
                 try:
