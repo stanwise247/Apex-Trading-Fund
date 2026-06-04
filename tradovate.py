@@ -782,11 +782,11 @@ def execute_apex_signal(signal: dict, risk_pct: float = None) -> dict:
     pv              = sizing['point_value']
 
     # Meridian L3 position sizing — replaces static Hurst multiplier
-    # H (VWAP reversal) and J (Value Area): mean-reverting setups where L3 TRENDING
-    # probability is inverted relative to their edge — backtest confirmed L3 hurts both
-    # (H: 2.47→2.08 Sharpe, J: 2.99→1.59). Always use 1.0× for these setups.
+    # D (FVG fill), H (VWAP reversal), J (Value Area): short-duration / mean-reverting setups
+    # where L3 TRENDING probability is orthogonal or inverted to their edge.
+    # Backtest confirmed L3 hurts all three — always use 1.0× for these setups.
     _setup_letter = (setup or '').split('_')[0].upper()
-    if _setup_letter in ('H', 'J'):
+    if _setup_letter in ('D', 'H', 'J'):
         _l3_mult, _l3_prob = 1.0, 0.5
         logger.debug(f'Position sizing: Setup {setup} opted out of L3 multiplier — 1.0× fixed')
     else:
