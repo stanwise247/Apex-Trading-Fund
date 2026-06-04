@@ -894,7 +894,7 @@ tr:hover td { background: var(--bg3); }
 .ml3-red   { background:rgba(255,59,48,0.12);  color:var(--red); }
 .ml3-dim   { background:var(--bg3); color:var(--text3); }
 .meridian-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px; }
-.meridian-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r-card); padding:18px; }
+.meridian-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:18px; }
 .meridian-sym { font-family:var(--sans); font-size:13px; font-weight:700; color:var(--text); margin-bottom:12px; }
 .meridian-gauge-wrap { display:flex; align-items:center; gap:14px; margin-bottom:10px; }
 .meridian-prob-val { font-family:var(--mono); font-size:32px; font-weight:700; line-height:1; }
@@ -1181,7 +1181,7 @@ tr:hover td { background: var(--bg3); }
 <div class="page" id="page-rsch-meridian">
   <div class="section-title" style="margin-bottom:12px">
     Meridian L3 — Regime Probability
-    <button class="refresh-btn" onclick="fetchMeridian().then(loadMeridianPanel)">Refresh</button>
+    <button class="refresh-btn" onclick="fetchMeridian()">Refresh</button>
   </div>
   <div id="meridianPanelContent">
     <div class="meridian-grid">
@@ -2016,35 +2016,44 @@ async function fetchMeridian() {
   try {
     const r = await fetch('/api/apex/meridian');
     const d = await r.json();
-    if (!d.ok || !d.meridian_l3) return;
-    _meridianCache = d.meridian_l3;
-    for (const sym of ['MNQ', 'ES']) {
-      if (!_meridianCache[sym]) continue;
-      const prob = _meridianCache[sym].l3_prob_pct;
-      if (prob != null) {
-        _meridianHistory[sym].push(prob);
-        if (_meridianHistory[sym].length > 6) _meridianHistory[sym].shift();
+    if (d.ok && d.meridian_l3) {
+      _meridianCache = d.meridian_l3;
+      for (const sym of ['MNQ', 'ES']) {
+        if (!_meridianCache[sym]) continue;
+        const prob = _meridianCache[sym].l3_prob_pct;
+        if (prob != null) {
+          _meridianHistory[sym].push(prob);
+          if (_meridianHistory[sym].length > 6) _meridianHistory[sym].shift();
+        }
+      }
+      // Live-update chips on setup cards without full re-render
+      for (const sym of ['MNQ', 'ES']) {
+        const d2 = _meridianCache[sym];
+        if (!d2) continue;
+        document.querySelectorAll(`.ml3-chip[data-sym="${sym}"]`).forEach(el => {
+          el.className = 'ml3-chip ' + _ml3ChipClass(d2.l3_prob_pct);
+          const valEl = el.querySelector('.ml3-val');
+          if (valEl) valEl.textContent = d2.l3_prob_pct != null ? d2.l3_prob_pct.toFixed(0) + '%' : '—';
+        });
       }
     }
-    // Live-update chips on setup cards without full re-render
-    for (const sym of ['MNQ', 'ES']) {
-      const d2 = _meridianCache[sym];
-      if (!d2) continue;
-      document.querySelectorAll(`.ml3-chip[data-sym="${sym}"]`).forEach(el => {
-        el.className = 'ml3-chip ' + _ml3ChipClass(d2.l3_prob_pct);
-        const valEl = el.querySelector('.ml3-val');
-        if (valEl) valEl.textContent = d2.l3_prob_pct != null ? d2.l3_prob_pct.toFixed(0) + '%' : '—';
-      });
-    }
-    if (_currentMode === 'research' && _researchTab === 'rsch-meridian') {
-      loadMeridianPanel();
-    }
   } catch(_e) {}
+  // Always refresh panel if on meridian tab — whether fetch succeeded or not
+  if (_currentMode === 'research' && _researchTab === 'rsch-meridian') {
+    loadMeridianPanel();
+  }
 }
 
 function loadMeridianPanel() {
   const el = document.getElementById('meridianPanelContent');
   if (!el) return;
+  const hasData = Object.keys(_meridianCache).length > 0;
+  if (!hasData) {
+    el.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;padding:24px 0">
+      Waiting for Meridian L3 data… <button class="refresh-btn" onclick="fetchMeridian()" style="margin-left:10px">Retry</button>
+    </div>`;
+    return;
+  }
   let html = '<div class="meridian-grid">';
   for (const sym of ['MNQ', 'ES']) {
     const d     = _meridianCache[sym];
@@ -2571,7 +2580,7 @@ function switchResearchTab(tab) {
     'rsch-decisions': loadResearchDecisions,
     'rsch-discovery': loadDiscovery,
     'rsch-patterns':  loadPatterns,
-    'rsch-meridian':  loadMeridianPanel,
+    'rsch-meridian':  () => { loadMeridianPanel(); fetchMeridian(); },
   };
   if (loaders[tab]) loaders[tab]();
 }
