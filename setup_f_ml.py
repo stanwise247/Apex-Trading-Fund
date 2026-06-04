@@ -455,13 +455,58 @@ def train_model(symbol: str) -> float:
     return oos_auc
 
 
+def _load_model_from_db(symbol: str, max_age_days: int = 35):
+    """Load apex_f_{symbol} from ml_models DB. Returns sklearn model or None."""
+    model_name = f'apex_f_{symbol}'
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            'SELECT model_bytes, trained_at, oos_auc FROM ml_models WHERE model_name=?',
+            (model_name,)
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        model_bytes, trained_at_str, oos_auc = row
+        try:
+            trained_at = datetime.fromisoformat(str(trained_at_str).replace('Z', '+00:00'))
+            if trained_at.tzinfo is None:
+                trained_at = trained_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+        age_days = (datetime.now(timezone.utc) - trained_at).days
+        if age_days >= max_age_days:
+            logger.info(f'Setup F DB model stale ({age_days}d) for {symbol} — will retrain')
+            return None
+        payload = pickle.loads(bytes(model_bytes))
+        # retrain_setup_f.py wraps as {'model': clf, 'metadata': {...}}
+        model = payload['model'] if isinstance(payload, dict) and 'model' in payload else payload
+        if hasattr(model, 'n_features_in_') and model.n_features_in_ != len(FEATURE_NAMES):
+            logger.warning(f'DB model {model_name}: feature count mismatch — skipping')
+            return None
+        logger.info(
+            f'Setup F model loaded from DB: {model_name} '
+            f'(trained {str(trained_at_str)[:10]}, AUC={oos_auc})'
+        )
+        return model
+    except Exception as _e:
+        logger.warning(f'Setup F DB load failed for {model_name}: {_e}')
+        return None
+
+
 def load_or_train_model(symbol: str):
-    """Load model from pkl if < 30 days old, else retrain."""
+    """Load model: memory cache → DB → local pkl → retrain."""
     now = datetime.now(timezone.utc)
     if symbol in _model_cache:
         cached_at, model = _model_cache[symbol]
         if (now - cached_at).total_seconds() < 300:
             return model
+
+    # Try DB first — works on Railway where local pkl doesn't persist
+    model = _load_model_from_db(symbol)
+    if model is not None:
+        _model_cache[symbol] = (now, model)
+        return model
 
     pkl_path = f'apex_rf_{symbol}.pkl'
     if os.path.exists(pkl_path):
