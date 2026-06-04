@@ -782,13 +782,21 @@ def execute_apex_signal(signal: dict, risk_pct: float = None) -> dict:
     pv              = sizing['point_value']
 
     # Meridian L3 position sizing — replaces static Hurst multiplier
-    _hurst, _hurst_conf, _ = _get_hurst_multiplier(sym)
-    try:
-        import meridian_l3 as _ml3
-        _l3_mult, _l3_prob = _ml3.get_position_multiplier(sym, _hurst, _hurst_conf)
-    except Exception as _ml3_e:
-        logger.debug(f'Meridian L3 unavailable ({_ml3_e}) — using 1.0×')
+    # H (VWAP reversal) and J (Value Area): mean-reverting setups where L3 TRENDING
+    # probability is inverted relative to their edge — backtest confirmed L3 hurts both
+    # (H: 2.47→2.08 Sharpe, J: 2.99→1.59). Always use 1.0× for these setups.
+    _setup_letter = (setup or '').split('_')[0].upper()
+    if _setup_letter in ('H', 'J'):
         _l3_mult, _l3_prob = 1.0, 0.5
+        logger.debug(f'Position sizing: Setup {setup} opted out of L3 multiplier — 1.0× fixed')
+    else:
+        _hurst, _hurst_conf, _ = _get_hurst_multiplier(sym)
+        try:
+            import meridian_l3 as _ml3
+            _l3_mult, _l3_prob = _ml3.get_position_multiplier(sym, _hurst, _hurst_conf)
+        except Exception as _ml3_e:
+            logger.debug(f'Meridian L3 unavailable ({_ml3_e}) — using 1.0×')
+            _l3_mult, _l3_prob = 1.0, 0.5
 
     if _l3_mult != 1.0:
         _base_contracts = sizing['contracts']
