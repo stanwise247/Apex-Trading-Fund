@@ -1,275 +1,185 @@
 """
-Setup I — Mathematical Alpha Backtest
-6 months of MNQ/NQ + ES 5min data, no lookahead.
-Reports: total signals, win rate, avg R, total R, Sharpe, max drawdown,
-         profit factor. Compare to existing setups.
-OOS AUC gate: 0.55 — deploy only if mean AUC >= 0.55 AND Sharpe >= 3.0
+backtest_setup_i.py  — Task 4 (research only, no code changes)
 """
-
-import sys, logging, warnings
+import os, sys, warnings, pickle
 import numpy as np
 import pandas as pd
-from datetime import datetime, timezone, timedelta
+import psycopg2
 
 warnings.filterwarnings('ignore')
-logging.basicConfig(level=logging.WARNING)
-
 sys.path.insert(0, '/Users/stanleywise/Desktop/apex')
-import db as _db
-from setup_i_mathematical import (
-    calculate_features_i, _build_labels_long_i, _build_labels_short_i, _atr_i, hurst_rs,
-    FEATURE_NAMES_I, OOS_AUC_GATE,
-    _XGBOOST_AVAILABLE, SESSION_START, SESSION_END, ALLOWED_DAYS, _make_xgb,
-)
 
-try:
-    from xgboost import XGBClassifier
-except Exception:
-    from sklearn.ensemble import GradientBoostingClassifier as XGBClassifier
+DATABASE_URL        = os.environ['DATABASE_URL']
+XGB_LONG_THRESHOLD  = 0.58
+LR_LONG_THRESHOLD   = 0.58
+LR_SHORT_THRESHOLD  = 1.0 - LR_LONG_THRESHOLD
+SESSION_START       = 13
+SESSION_END_MNQ     = 20
+SESSION_END_ES      = 19
+ALLOWED_DAYS        = {1, 2, 3}
+TARGET_RR           = 2.5
+STOP_ATR_MULT       = 1.5
+MAX_BARS_FORWARD    = 60
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
-SEP = '='*68
-def banner(t): print(f'\n{SEP}\n  {t}\n{SEP}')
-
-
-# ─── Load data ────────────────────────────────────────────────
-banner('Loading data')
-six_months_ago = int((datetime.now(timezone.utc) - timedelta(days=180)).timestamp())
-conn = _db.connect()
-
-for sym_try in ('MNQ', 'NQ'):
-    rows = conn.execute(
+def load_ohlcv(symbol):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
         'SELECT ts, open, high, low, close, volume FROM ohlcv '
-        'WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
-        (sym_try, '5min', six_months_ago)
-    ).fetchall()
-    if len(rows) >= 500:
-        PRIMARY_SYM = sym_try
-        break
+        'WHERE symbol=%s AND timeframe=%s AND ts > 1000000 ORDER BY ts ASC',
+        (symbol, '5min'))
+    rows = cur.fetchall(); conn.close()
+    if not rows: return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=['ts','open','high','low','close','volume'])
+    for c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['dt'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+    return df.dropna(subset=['open','close']).reset_index(drop=True)
 
-es_rows = conn.execute(
-    'SELECT ts, open, high, low, close, volume FROM ohlcv '
-    'WHERE symbol=? AND timeframe=? AND ts>=? ORDER BY ts ASC',
-    ('ES', '5min', six_months_ago)
-).fetchall()
-conn.close()
+def load_regime(symbol):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        'SELECT EXTRACT(EPOCH FROM timestamp)::float AS ts, regime, confidence '
+        'FROM regime_log WHERE symbol=%s ORDER BY timestamp ASC', (symbol,))
+    rows = cur.fetchall(); conn.close()
+    if not rows: return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=['ts','regime','confidence'])
+    df['ts'] = df['ts'].astype(float)
+    return df
 
-COLS = ['ts', 'open', 'high', 'low', 'close', 'volume']
-df_5m = pd.DataFrame(rows, columns=COLS)
-df_es = pd.DataFrame(es_rows, columns=COLS)
-for col in COLS:
-    df_5m[col] = pd.to_numeric(df_5m[col], errors='coerce')
-    df_es[col]  = pd.to_numeric(df_es[col], errors='coerce')
+def load_models(symbol):
+    conn = get_conn(); cur = conn.cursor()
+    models = {}
+    for sfx in ('short','long'):
+        cur.execute('SELECT model_bytes FROM ml_models WHERE model_name=%s',
+                    (f'apex_xi_{symbol}_{sfx}',))
+        row = cur.fetchone()
+        if row:
+            try: models[sfx] = pickle.loads(bytes(row[0]))
+            except Exception as e: print(f'  load {sfx} error: {e}')
+    conn.close()
+    xgb_s = models['short']['xgb'] if 'short' in models else None
+    xgb_l = models['long']['xgb']  if 'long'  in models else None
+    ref   = models.get('short') or models.get('long')
+    lr    = ref['lr']     if ref else None
+    sc    = ref['scaler'] if ref else None
+    return xgb_s, xgb_l, lr, sc
 
-df_5m['dt'] = pd.to_datetime(df_5m['ts'], unit='s', utc=True)
-df_es['dt']  = pd.to_datetime(df_es['ts'], unit='s', utc=True)
-df_5m = df_5m.reset_index(drop=True)
-df_es  = df_es.reset_index(drop=True)
+def calc_atr(df, period=14):
+    h, l, pc = df['high'], df['low'], df['close'].shift(1)
+    tr = pd.concat([h-l,(h-pc).abs(),(l-pc).abs()],axis=1).max(axis=1)
+    return tr.rolling(period).mean()
 
-print(f'Primary: {PRIMARY_SYM} — {len(df_5m)} 5min bars')
-print(f'ES: {len(df_es)} 5min bars')
+def simulate(df, df_regime, xgb_s, xgb_l, lr, sc, variant, symbol):
+    from setup_i_mathematical import calculate_features_i
+    warnings.filterwarnings('ignore')
+    sess_end = SESSION_END_MNQ if symbol == 'MNQ' else SESSION_END_ES
 
+    X_all    = calculate_features_i(df)
+    atr      = calc_atr(df,14).values
+    highs    = df['high'].values; lows = df['low'].values; closes = df['close'].values
+    ts_vals  = df['ts'].values
+    dow_vals = df['dt'].dt.dayofweek.values
+    hour_vals= df['dt'].dt.hour.values
+    n = len(df); trades = []
 
-# ─── Features & labels ───────────────────────────────────────
-banner('Computing features and labels')
-print('Building 6 features (may take 60-90s)...')
-X_all = calculate_features_i(df_5m, df_es if not df_es.empty else None)
+    for i in range(50, n - MAX_BARS_FORWARD):
+        if dow_vals[i] not in ALLOWED_DAYS: continue
+        if hour_vals[i] < SESSION_START or hour_vals[i] >= sess_end: continue
+        X_i = X_all[i:i+1]
+        if np.isnan(X_i).any(): continue
 
-# Verify Hurst fix — should vary 0.3-0.8, NOT all 0.5
-hurst_col = X_all[:, 0]
-hurst_nonnan = hurst_col[~np.isnan(hurst_col)]
-print(f'\nHurst validation (FIX 1 check):')
-if len(hurst_nonnan) >= 10:
-    print(f'  First 10 values: {hurst_nonnan[:10].round(4)}')
-    print(f'  Unique values (first 200): {len(np.unique(hurst_nonnan[:200]))}')
-    print(f'  Min={hurst_nonnan.min():.4f}  Max={hurst_nonnan.max():.4f}  Std={hurst_nonnan.std():.4f}')
-    print(f'  All same? {len(np.unique(hurst_nonnan[:200])) == 1}  ← should be False')
-else:
-    print(f'  Insufficient non-NaN Hurst values: {len(hurst_nonnan)}')
+        regime_label, regime_conf = 'TRENDING', 0.5
+        if not df_regime.empty:
+            idx = np.searchsorted(df_regime['ts'].values, float(ts_vals[i]), side='right') - 1
+            if idx >= 0:
+                regime_label = df_regime['regime'].iloc[idx]
+                regime_conf  = float(df_regime['confidence'].iloc[idx])
 
-print(f'\nComputing direction labels (RR 1.5, stop 1.5×ATR, max 100 bars)...')
-y_long_all  = _build_labels_long_i(df_5m,  rr=1.5, stop_atr=1.5, max_bars=100)
-y_short_all = _build_labels_short_i(df_5m, rr=1.5, stop_atr=1.5, max_bars=100)
+        if variant in ('regime','regime_l3') and regime_label != 'TRENDING': continue
 
-session_mask = (
-    df_5m['dt'].dt.hour.between(SESSION_START, SESSION_END - 1) &
-    df_5m['dt'].dt.dayofweek.isin(ALLOWED_DAYS)
-).values
+        l3_mult = 1.0
+        if variant == 'regime_l3' and regime_label == 'TRENDING':
+            if regime_conf >= 0.65:   l3_mult = 1.5
+            elif regime_conf >= 0.55: l3_mult = 1.25
+            elif regime_conf < 0.35:  l3_mult = 0.75
 
-valid_mask = (
-    ~np.isnan(X_all).any(axis=1) &
-    ~np.isnan(y_long_all) &
-    ~np.isnan(y_short_all) &
-    session_mask
-)
-X     = X_all[valid_mask]
-y_l   = y_long_all[valid_mask].astype(int)
-y_s   = y_short_all[valid_mask].astype(int)
-df_v  = df_5m[valid_mask].reset_index(drop=True)
+        try:
+            X_s      = sc.transform(X_i)
+            lr_prob  = float(lr.predict_proba(X_s)[0,1])
+            sp       = float(xgb_s.predict_proba(X_s)[0,1]) if xgb_s else 0.0
+            lp       = float(xgb_l.predict_proba(X_s)[0,1]) if xgb_l else 0.0
+        except Exception: continue
 
-print(f'Valid session samples: {len(X)}')
-print(f'  Long label:  {y_l.mean():.1%} positive (price rose 1.5R)')
-print(f'  Short label: {y_s.mean():.1%} positive (price fell 1.5R)')
+        if   sp > XGB_LONG_THRESHOLD and lr_prob < LR_SHORT_THRESHOLD: direction = 'short'
+        elif lp > XGB_LONG_THRESHOLD and lr_prob > LR_LONG_THRESHOLD:  direction = 'long'
+        else: continue
 
-if len(X) < 200:
-    print('ERROR: Insufficient data for backtest.')
-    sys.exit(1)
+        a = float(atr[i]) if not np.isnan(atr[i]) else 0
+        if a <= 0: continue
+        entry  = closes[i]
+        stop   = entry - STOP_ATR_MULT*a if direction=='long' else entry + STOP_ATR_MULT*a
+        target = entry + TARGET_RR*STOP_ATR_MULT*a if direction=='long' else entry - TARGET_RR*STOP_ATR_MULT*a
 
+        outcome = None
+        for k in range(i+1, min(i+MAX_BARS_FORWARD, n)):
+            if direction == 'long':
+                if highs[k] >= target: outcome='win'; break
+                if lows[k]  <= stop:  outcome='loss'; break
+            else:
+                if lows[k]  <= target: outcome='win'; break
+                if highs[k] >= stop:   outcome='loss'; break
+        if outcome is None: continue
 
-# ─── Feature IC (correlation with next-bar return) ───────────
-banner('Feature Information Coefficients')
-fwd_ret  = (df_5m['close'].shift(-1)  / df_5m['close'] - 1).values
-fwd12_ret = (df_5m['close'].shift(-12) / df_5m['close'] - 1).values
-fwd_ret_v  = fwd_ret[valid_mask]
-fwd12_v   = fwd12_ret[valid_mask]
+        r = (TARGET_RR if outcome=='win' else -1.0) * l3_mult
+        trades.append({'ts': float(ts_vals[i]),
+                       'month': pd.Timestamp(df['dt'].iloc[i]).strftime('%Y-%m'),
+                       'direction': direction, 'outcome': outcome, 'r': r,
+                       'regime': regime_label, 'sp': round(sp,3), 'lp': round(lp,3), 'lr': round(lr_prob,3)})
+    return pd.DataFrame(trades)
 
-print(f'\n{"Feature":<18} {"IC (1-bar)":>12} {"IC (12-bar)":>13} {"Keep?"}')
-print('-'*55)
-for i, name in enumerate(FEATURE_NAMES_I):
-    fv = X[:, i]
-    v1  = ~np.isnan(fv) & ~np.isnan(fwd_ret_v)
-    v12 = ~np.isnan(fv) & ~np.isnan(fwd12_v)
-    ic1  = float(np.corrcoef(fv[v1],  fwd_ret_v[v1])[0, 1])  if v1.sum()  > 10 else float('nan')
-    ic12 = float(np.corrcoef(fv[v12], fwd12_v[v12])[0, 1])   if v12.sum() > 10 else float('nan')
-    keep = 'KEEP' if (abs(ic1) >= 0.015 or abs(ic12) >= 0.015) else 'weak'
-    print(f'{name:<18} {f"{ic1:+.4f}" if not np.isnan(ic1) else "   N/A":>12} '
-          f'{f"{ic12:+.4f}" if not np.isnan(ic12) else "   N/A":>13}  {keep}')
+def metrics(trades):
+    if trades.empty:
+        return {'signals':0,'spm':0,'wr':0,'sharpe':0,'maxdd':0,'total_r':0,'pf':0,'pm':0,'tm':0}
+    n = len(trades); wins = (trades['r']>0).sum(); total_r = trades['r'].sum()
+    monthly = trades.groupby('month')['r'].sum()
+    sharpe  = (monthly.mean()/(monthly.std()+1e-9))*np.sqrt(12)
+    maxdd   = float((trades['r'].cumsum()-trades['r'].cumsum().cummax()).min())
+    wins_r  = trades.loc[trades['r']>0,'r'].sum()
+    loss_r  = abs(trades.loc[trades['r']<0,'r'].sum())
+    pf = wins_r/loss_r if loss_r>0 else float('inf')
+    return {'signals':n,'spm':round(n/max(len(monthly),1),1),'wr':round(wins/n*100,1),
+            'sharpe':round(float(sharpe),2),'maxdd':round(maxdd,2),'total_r':round(float(total_r),2),
+            'pf':round(float(pf),2) if np.isfinite(float(pf)) else 0,
+            'pm':int((monthly>0).sum()),'tm':len(monthly)}
 
+def run(symbol):
+    print(f'\n{"="*60}')
+    print(f'SETUP I BACKTEST — {symbol}')
+    print(f'{"="*60}')
+    print('Loading models...')
+    xgb_s, xgb_l, lr, sc = load_models(symbol)
+    if xgb_s is None and xgb_l is None: print(f'No models — abort'); return
+    print(f'  xgb_short={"OK" if xgb_s else "missing"} xgb_long={"OK" if xgb_l else "missing"}')
+    df = load_ohlcv(symbol)
+    if df.empty: print(f'No data'); return
+    print(f'Loaded {len(df):,} bars | {df["dt"].iloc[0].date()} → {df["dt"].iloc[-1].date()}')
+    months = (df["dt"].iloc[-1]-df["dt"].iloc[0]).days/30.44
+    print(f'~{months:.1f} months | regime rows: {len(load_regime(symbol)):,}')
+    df_regime = load_regime(symbol)
 
-# ─── Walk-forward setup (shared across both directions) ───────
-n   = len(X)
-seg = n // 6
-segments = [range(i * seg, (i + 1) * seg) for i in range(6)]
-segments[-1] = range(5 * seg, n)
+    print(f'\n{"Variant":<14}{"Signals":<10}{"Sig/Mo":<10}{"WR%":<8}{"Sharpe":<10}{"MaxDD":<10}{"TotalR":<10}{"PF":<8}"+Mo/Tot"')
+    print('-'*90)
+    for v in ('raw','regime','regime_l3'):
+        t = simulate(df.copy(), df_regime, xgb_s, xgb_l, lr, sc, v, symbol)
+        m = metrics(t)
+        print(f'{v:<14}{m["signals"]:<10}{m["spm"]:<10}{m["wr"]:<8}{m["sharpe"]:<10}{m["maxdd"]:<10}{m["total_r"]:<10}{m["pf"]:<8}{m["pm"]}/{m["tm"]}')
+        if not t.empty:
+            s = t.head(2)
+            for _,row in s.iterrows():
+                print(f'  eg: {row["month"]} {row["direction"]} sp={row["sp"]} lp={row["lp"]} lr={row["lr"]} → {row["outcome"]} ({row["r"]:+.2f}R)')
 
-tr_idx = np.concatenate([list(segments[s]) for s in [0, 1, 2, 3, 4]])
-te_idx = np.array(list(segments[5]))
-
-X_tr, X_te = X[tr_idx], X[te_idx]
-y_tr_l, y_te_l = y_l[tr_idx], y_l[te_idx]
-y_tr_s, y_te_s = y_s[tr_idx], y_s[te_idx]
-df_te = df_v.iloc[te_idx].reset_index(drop=True)
-
-scaler = StandardScaler()
-X_tr_s = scaler.fit_transform(X_tr)
-X_te_s = scaler.transform(X_te)
-
-# Shared LR trained on long labels (direction filter in live scan)
-lr_clf = LogisticRegression(class_weight='balanced', max_iter=500, random_state=42)
-lr_clf.fit(X_tr_s, y_tr_l)
-lr_probs = lr_clf.predict_proba(X_te_s)[:, 1]
-
-
-def _pnl_stats(pnl):
-    wins = pnl > 0
-    total_r  = pnl.sum()
-    avg_r    = pnl.mean()
-    wr       = wins.mean()
-    gross_w  = pnl[wins].sum()  if wins.sum()  > 0 else 0
-    gross_l  = abs(pnl[~wins].sum()) if (~wins).sum() > 0 else 1e-9
-    pf       = gross_w / gross_l
-    cumR     = np.cumsum(pnl)
-    max_dd   = abs((cumR - np.maximum.accumulate(cumR)).min())
-    sharpe   = (avg_r / pnl.std() * np.sqrt(len(pnl) * 2)) if pnl.std() > 0 else 0.0
-    return dict(n=len(pnl), wr=wr, avg_r=avg_r, total_r=total_r,
-                pf=pf, max_dd=max_dd, sharpe=sharpe)
-
-
-# ─── SHORT model backtest ─────────────────────────────────────
-banner('SHORT Model — OOS Backtest (train mo 1-5 / test mo 6)')
-
-pos_w_s   = float((y_tr_s == 0).sum()) / float((y_tr_s == 1).sum() + 1e-9)
-xgb_short = _make_xgb(pos_w_s)
-xgb_short.fit(X_tr_s, y_tr_s)
-short_probs = xgb_short.predict_proba(X_te_s)[:, 1]
-
-try:
-    short_auc = float(roc_auc_score(y_te_s, short_probs))
-except Exception:
-    short_auc = 0.5
-
-# Short signal: xgb_short > 0.62 AND lr < 0.38
-sig_short = (short_probs > 0.62) & (lr_probs < 0.38)
-print(f'\nTrain: {len(X_tr)} | Test: {len(X_te)} | Short label pos%: {y_tr_s.mean():.1%}')
-print(f'OOS AUC (short model):   {short_auc:.3f} | Gate: {OOS_AUC_GATE} | {"PASS ✓" if short_auc >= OOS_AUC_GATE else "FAIL ✗"}')
-print(f'Short signals (xgb>0.62 AND lr<0.38): {sig_short.sum()}')
-
-if hasattr(xgb_short, 'feature_importances_'):
-    print(f'\nFeature importance (SHORT model):')
-    for name, imp in sorted(zip(FEATURE_NAMES_I, xgb_short.feature_importances_), key=lambda x: -x[1]):
-        print(f'  {name:<14} {imp:>6.1%}  {"#" * int(imp * 40)}')
-
-if sig_short.sum() > 0:
-    pnl_s = np.where(y_te_s[sig_short] == 1, 1.5, -1.0)
-    st = _pnl_stats(pnl_s)
-    print(f'\nShort signal P&L:')
-    print(f'  N={st["n"]}  WR={st["wr"]:.1%}  AvgR={st["avg_r"]:.3f}  TotalR={st["total_r"]:.2f}R')
-    print(f'  PF={st["pf"]:.2f}  MaxDD={st["max_dd"]:.2f}R  Sharpe={st["sharpe"]:.2f}')
-    short_sharpe = st['sharpe']
-else:
-    print('No short signals at threshold.')
-    short_sharpe = 0.0
-
-short_ok = short_auc >= OOS_AUC_GATE
-print(f'\nSHORT deployment: {"PASS ✓" if short_ok else "FAIL ✗"} (AUC={short_auc:.3f})')
-
-
-# ─── LONG model backtest ──────────────────────────────────────
-banner('LONG Model — OOS Backtest (train mo 1-5 / test mo 6)')
-
-pos_w_l  = float((y_tr_l == 0).sum()) / float((y_tr_l == 1).sum() + 1e-9)
-xgb_long = _make_xgb(pos_w_l)
-xgb_long.fit(X_tr_s, y_tr_l)
-long_probs = xgb_long.predict_proba(X_te_s)[:, 1]
-
-try:
-    long_auc = float(roc_auc_score(y_te_l, long_probs))
-except Exception:
-    long_auc = 0.5
-
-# Long signal: xgb_long > 0.62 AND lr > 0.62
-sig_long = (long_probs > 0.62) & (lr_probs > 0.62)
-print(f'\nTrain: {len(X_tr)} | Test: {len(X_te)} | Long label pos%: {y_tr_l.mean():.1%}')
-print(f'OOS AUC (long model):    {long_auc:.3f} | Gate: {OOS_AUC_GATE} | {"PASS ✓" if long_auc >= OOS_AUC_GATE else "FAIL ✗"}')
-print(f'Long signals (xgb>0.62 AND lr>0.62): {sig_long.sum()}')
-
-if hasattr(xgb_long, 'feature_importances_'):
-    print(f'\nFeature importance (LONG model):')
-    for name, imp in sorted(zip(FEATURE_NAMES_I, xgb_long.feature_importances_), key=lambda x: -x[1]):
-        print(f'  {name:<14} {imp:>6.1%}  {"#" * int(imp * 40)}')
-
-if sig_long.sum() > 0:
-    pnl_l_arr = np.where(y_te_l[sig_long] == 1, 1.5, -1.0)
-    lt = _pnl_stats(pnl_l_arr)
-    print(f'\nLong signal P&L:')
-    print(f'  N={lt["n"]}  WR={lt["wr"]:.1%}  AvgR={lt["avg_r"]:.3f}  TotalR={lt["total_r"]:.2f}R')
-    print(f'  PF={lt["pf"]:.2f}  MaxDD={lt["max_dd"]:.2f}R  Sharpe={lt["sharpe"]:.2f}')
-    long_sharpe = lt['sharpe']
-else:
-    print('No long signals at threshold.')
-    long_sharpe = 0.0
-
-long_ok = long_auc >= OOS_AUC_GATE
-print(f'\nLONG deployment: {"PASS ✓" if long_ok else "FAIL ✗"} (AUC={long_auc:.3f})')
-
-
-# ─── Deployment Gate Summary ──────────────────────────────────
-banner('Deployment Gate Summary')
-print(f'\n{"Direction":<10} {"OOS AUC":>10} {"Gate":>8} {"Signals":>9} {"Sharpe":>9} {"Decision"}')
-print('-'*62)
-print(f'{"SHORT":<10} {short_auc:>10.3f} {OOS_AUC_GATE:>8} {sig_short.sum():>9} {short_sharpe:>9.2f} '
-      f'{"DEPLOY ✓" if short_ok else "DO NOT DEPLOY ✗"}')
-print(f'{"LONG":<10} {long_auc:>10.3f} {OOS_AUC_GATE:>8} {sig_long.sum():>9} {long_sharpe:>9.2f} '
-      f'{"DEPLOY ✓" if long_ok else "DO NOT DEPLOY ✗"}')
-
-if short_ok or long_ok:
-    active = []
-    if short_ok: active.append('SHORT')
-    if long_ok:  active.append('LONG')
-    print(f'\nActive directions if deployed: {" + ".join(active)}')
-    print('Each direction is independent — short can be live while long is disabled.')
-
-print(f'\nBacktest complete. Do not deploy until results reviewed above.')
+if __name__=='__main__':
+    for sym in ('MNQ','ES'): run(sym)
+    print('\nTask 4 complete — research only, no code changes.')

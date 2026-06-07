@@ -65,7 +65,7 @@ SIGNAL_FILTERS = {
 
 # Setup-level enable flags — set to False to fully disable a setup's signal path.
 # Checked at the top of each scheduler block before any model/feature work.
-setup_f_enabled: bool = False   # Disabled: dedup/log_trade gap under investigation
+setup_f_enabled: bool = True    # Enabled: RF models trained (AUC 0.59/0.61), DB-persisted
 SETUP_E_MIN_ATR = {'MNQ': 25.0, 'NQ': 25.0, 'ES': 8.0, 'GC': 5.0}   # pts on 5min chart
 
 # ── Execution limits — configurable via Railway env vars without redeployment ──
@@ -144,32 +144,41 @@ def is_setup_enabled(setup_id: str, symbol: str = None) -> bool:
                     from regime_engine import get_current_regime
                     regime_info = get_current_regime(symbol)
                     conf = regime_info.get('confidence', 0) if regime_info else 0
+                    # Pre-compute optimal regimes — needed for both branches
+                    _optimal = [
+                        r.strip()
+                        for r in (row.get('optimal_regimes') or '').split(',')
+                        if r.strip()
+                    ]
+                    _trending_only = (_optimal == ['TRENDING'])
                     if regime_info and conf >= 0.50:
                         current_regime = regime_info.get('regime', 'UNKNOWN')
-                        optimal = [
-                            r.strip()
-                            for r in (row.get('optimal_regimes') or '').split(',')
-                            if r.strip()
-                        ]
-                        if optimal and current_regime not in optimal:
+                        if _optimal and current_regime not in _optimal:
                             logger.info(
                                 f'Setup {sid}: regime gate blocked — '
-                                f'current={current_regime} optimal={optimal}'
+                                f'current={current_regime} optimal={_optimal}'
                             )
                             return False
-                        elif optimal and current_regime in optimal:
+                        elif _optimal and current_regime in _optimal:
                             logger.debug(
                                 f'Setup {sid}: regime gate passed — '
-                                f'{current_regime} in {optimal}'
+                                f'{current_regime} in {_optimal}'
                             )
-                    elif sid != 'J':
-                        # confidence < 0.50 and not Setup J — fail closed
+                    elif _trending_only:
+                        # Low confidence — only block TRENDING-only setups (A/B/C/I/E).
+                        # Multi-regime setups (H=CHOPPY/MR, D/F=TRENDING+CHOPPY, J=all)
+                        # fail open: their own signal conditions validate the entry.
                         logger.info(
                             f'Setup {sid}: regime gate blocked — '
-                            f'low confidence ({conf:.2f} < 0.50)'
+                            f'low confidence ({conf:.2f} < 0.50), TRENDING-only setup'
                         )
                         return False
-                    # Setup J at any confidence: fail open (accepts all regimes)
+                    else:
+                        # Multi-regime setup + low confidence → fail open
+                        logger.debug(
+                            f'Setup {sid}: regime gate passed — multi-regime fail-open '
+                            f'(conf={conf:.2f} < 0.50, optimal={_optimal})'
+                        )
                 except Exception as _rge:
                     logger.debug(f'Setup {sid}: regime gate error (fail open): {_rge}')
             return True
@@ -226,6 +235,24 @@ def _stop_cap_ok(sig: dict) -> tuple:
             f'— signal REJECTED (high volatility)'
         )
     return True, ''
+
+
+def _write_scan_log(symbol: str, pattern_name: str, score, direction: str,
+                    entry, stop, target1, target2, outcome: str, notes: str = ''):
+    """Write one row to scan_log (SQLite). Silently swallows all errors."""
+    try:
+        conn = _db.connect()
+        conn.execute(
+            'INSERT INTO scan_log '
+            '(ts, symbol, pattern_name, score, direction, entry, stop, target1, target2, outcome, notes) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (int(time.time()), symbol, pattern_name, score, direction,
+             entry, stop, target1, target2, outcome, (notes or '')[:255])
+        )
+        conn.commit()
+        conn.close()
+    except Exception as _sl_e:
+        logger.debug(f'scan_log write failed: {_sl_e}')
 
 
 def _seed_strategy_config():
@@ -2223,8 +2250,10 @@ def background_scheduler():
 
                     # ── Control Centre: check setup enabled ───────────────
                     _ctrl_sid = _setup[0].upper() if _setup else ''
-                    if _ctrl_sid and not is_setup_enabled(_ctrl_sid):
+                    if _ctrl_sid and not is_setup_enabled(_ctrl_sid, _sym):
                         logger.info(f'Setup {_ctrl_sid}: disabled via Control Centre — skipping')
+                        _write_scan_log(_sym, _setup, None, _dirn, None, None, None, None,
+                                        'BLOCKED_REGIME', f'regime gate blocked {_ctrl_sid}')
                         continue
 
                     # ── FILTER 1: max 1 concurrent trade per instrument ───
@@ -2371,6 +2400,11 @@ def background_scheduler():
                     )
                     for _sym in ['MNQ', 'ES']:  # GC paper only — no live signals
                         try:
+                            if not is_setup_enabled('F', _sym):
+                                logger.info(f'Setup F {_sym}: regime gate — BLOCKED')
+                                _write_scan_log(_sym, 'F_ml_regime', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'Setup F regime gate')
+                                continue
                             # ── FILTER 1: max 1 concurrent per instrument ─────
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _f1f_has, _f1f_id = _has_open_trade_on_instrument(_sym)
@@ -2385,6 +2419,10 @@ def background_scheduler():
                                 continue
                             sig = scan_setup_f(_sym, _now_utc)
                             if sig:
+                                _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                                sig.get('confidence'), sig['direction'],
+                                                sig.get('entry'), sig.get('stop'),
+                                                sig.get('target'), None, 'SIGNAL', 'scan_setup_f generated')
                                 if _has_opposite_swing_trade(_sym, sig['direction']):
                                     logger.info(f'Setup F {_sym} {sig["direction"]} suppressed — opposite swing trade open')
                                     continue
@@ -2396,6 +2434,10 @@ def background_scheduler():
                                 )
                                 # Economic calendar gate
                                 if _cal_block(_sym, sig['setup']):
+                                    _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                                    sig.get('confidence'), sig['direction'],
+                                                    sig.get('entry'), sig.get('stop'),
+                                                    sig.get('target'), None, 'BLOCKED_CALENDAR', 'calendar gate')
                                     continue
                                 # Unified dedup: mark fired BEFORE telegram
                                 # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
@@ -2406,6 +2448,10 @@ def background_scheduler():
                                 _f_cap_ok, _f_cap_msg = _stop_cap_ok(sig)
                                 if not _f_cap_ok:
                                     logger.warning(_f_cap_msg)
+                                    _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                                    sig.get('confidence'), sig['direction'],
+                                                    sig.get('entry'), sig.get('stop'),
+                                                    sig.get('target'), None, 'BLOCKED_STOP_CAP', _f_cap_msg[:200])
                                     continue
                                 _f_tid = None
                                 try:
@@ -2416,6 +2462,11 @@ def background_scheduler():
                                     _f_tid = log_trade(sig)
                                     if _f_tid:
                                         logger.info(f'Setup F: trade logged id={_f_tid} {_sym} {sig["direction"]}')
+                                        _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                                        sig.get('confidence'), sig['direction'],
+                                                        sig.get('entry'), sig.get('stop'),
+                                                        sig.get('target'), None,
+                                                        'EXECUTED', f'trade_id={_f_tid}')
                                     else:
                                         logger.error(
                                             f'CRITICAL: Setup F log_trade() returned None — {_sym} {sig["direction"]} NOT in DB'
@@ -2792,15 +2843,32 @@ def background_scheduler():
                             _heat_d = _count_open_trades()
                             if _heat_d >= MAX_PORTFOLIO_HEAT:
                                 logger.info(f'Portfolio heat: {_heat_d} trades open — new signal blocked for Setup D {_sym_d}')
+                                _write_scan_log(_sym_d, 'D_fvg_fill', None, '', None, None, None, None,
+                                                'BLOCKED_HEAT', f'heat={_heat_d}/{MAX_PORTFOLIO_HEAT}')
+                                continue
+                            if not is_setup_enabled('D', _sym_d):
+                                logger.info(f'Setup D {_sym_d}: regime gate — BLOCKED')
+                                _write_scan_log(_sym_d, 'D_fvg_fill', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'Setup D regime gate')
                                 continue
                             logger.info(f'Scanning Setup D for {_sym_d}')
                             sig_d = scan_setup_d(_sym_d, _now_utc_d)
                             if not sig_d:
                                 continue
+                            _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                            sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                            sig_d.get('entry'), sig_d.get('stop'),
+                                            sig_d.get('target'), sig_d.get('target2'),
+                                            'SIGNAL', 'scan_setup_d generated')
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _f1d_has, _f1d_id = _has_open_trade_on_instrument(_sym_d)
                                 if _f1d_has:
                                     logger.info(f'Setup D: skipped — {_sym_d} already has open trade #{_f1d_id}')
+                                    _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                                    sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                                    sig_d.get('entry'), sig_d.get('stop'),
+                                                    sig_d.get('target'), sig_d.get('target2'),
+                                                    'BLOCKED_CONCURRENT', f'open trade #{_f1d_id}')
                                     continue
                             if SIGNAL_FILTERS['primary_session_only_bcd']:
                                 if sig_d.get('quality', 'primary') != 'primary':
@@ -2813,8 +2881,18 @@ def background_scheduler():
                                         f'Setup D: skipped — 1h bias conflicts with {sig_d["direction"]} '
                                         f'direction ({_f3d_detail})'
                                     )
+                                    _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                                    sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                                    sig_d.get('entry'), sig_d.get('stop'),
+                                                    sig_d.get('target'), sig_d.get('target2'),
+                                                    'BLOCKED_HTF_BIAS', _f3d_detail[:200])
                                     continue
                             if _cal_block(_sym_d, sig_d['setup']):
+                                _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                                sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                                sig_d.get('entry'), sig_d.get('stop'),
+                                                sig_d.get('target'), sig_d.get('target2'),
+                                                'BLOCKED_CALENDAR', 'calendar gate')
                                 continue
                             if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
                                 continue
@@ -2827,12 +2905,22 @@ def background_scheduler():
                             _d_cap_ok, _d_cap_msg = _stop_cap_ok(sig_d)
                             if not _d_cap_ok:
                                 logger.warning(_d_cap_msg)
+                                _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                                sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                                sig_d.get('entry'), sig_d.get('stop'),
+                                                sig_d.get('target'), sig_d.get('target2'),
+                                                'BLOCKED_STOP_CAP', _d_cap_msg[:200])
                                 continue
                             _d_tid = None
                             try:
                                 _d_tid = _log_trade(sig_d)
                                 if _d_tid:
                                     logger.info(f'Setup D: trade logged id={_d_tid} {_sym_d} {sig_d["direction"]}')
+                                    _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                                    sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                                    sig_d.get('entry'), sig_d.get('stop'),
+                                                    sig_d.get('target'), sig_d.get('target2'),
+                                                    'EXECUTED', f'trade_id={_d_tid}')
                                 else:
                                     logger.error(f'CRITICAL: Setup D log_trade() returned None — {_sym_d} {sig_d["direction"]} NOT in DB')
                             except Exception as _d_lte:
