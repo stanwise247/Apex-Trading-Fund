@@ -87,7 +87,7 @@ _STRATEGY_CACHE_TTL = 60             # seconds
 _STRATEGY_DEFAULTS = {
     'A': True, 'B': True, 'C': True, 'D': True,
     'E': False,            # E disabled — confirmed losing record
-    'F': False,            # F suspended — no live validation
+    'F': True,             # F live — RF models trained (AUC 0.59/0.61), DB-persisted
     'H': True, 'I': True,
     'J': True,             # J Value Area Continuation — promoted from shadow lab
 }
@@ -201,7 +201,7 @@ SETUP_REGIME_CONFIG = {
     'E': ({'TRENDING'},                          True),   # disabled anyway
     'H': ({'CHOPPY', 'MEAN_REVERTING'},          True),
     'I': ({'TRENDING'},                          True),
-    'F': ({'TRENDING', 'CHOPPY'},                False),  # suspended
+    'F': ({'TRENDING', 'CHOPPY'},                False),  # RF model is its own gate; no regime_gating needed
     'J': ({'TRENDING', 'CHOPPY', 'MEAN_REVERTING'}, True),  # works in all regimes
 }
 
@@ -210,7 +210,6 @@ SETUP_REGIME_CONFIG = {
 # Empty set = all instruments execute live (subject to PAPER_ONLY_SETUPS env).
 SETUP_PAPER_INSTRUMENTS: dict = {
     'E': {'MNQ', 'ES'},         # Setup E disabled — all paper
-    'F': {'MNQ', 'ES', 'GC'},   # Setup F suspended — all paper
     # H, I, J: MNQ now live — all instruments execute via Tradovate when TRADOVATE_ENABLED=true
 }
 
