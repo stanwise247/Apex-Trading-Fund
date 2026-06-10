@@ -2515,6 +2515,8 @@ def background_scheduler():
                             _heat_i = _count_open_trades()
                             if _heat_i >= MAX_PORTFOLIO_HEAT:
                                 logger.info(f'[I-pre] Setup I {_sym}: heat {_heat_i}/{MAX_PORTFOLIO_HEAT} — BLOCKED')
+                                _write_scan_log(_sym, 'I_mathematical', None, '', None, None, None, None,
+                                                'BLOCKED_HEAT', f'heat={_heat_i}/{MAX_PORTFOLIO_HEAT}')
                                 continue
                             logger.info(f'[I-pre] Setup I {_sym}: heat {_heat_i}/{MAX_PORTFOLIO_HEAT} — OK')
 
@@ -2522,6 +2524,8 @@ def background_scheduler():
                                 _i_has, _i_id = _has_open_trade_on_instrument(_sym)
                                 if _i_has:
                                     logger.info(f'[I-pre] Setup I {_sym}: open trade #{_i_id} — BLOCKED')
+                                    _write_scan_log(_sym, 'I_mathematical', None, '', None, None, None, None,
+                                                    'BLOCKED_CONCURRENT', f'open trade #{_i_id}')
                                     continue
                                 logger.info(f'[I-pre] Setup I {_sym}: no open trade — OK')
 
@@ -2543,8 +2547,12 @@ def background_scheduler():
 
                             if not is_setup_enabled('I', _sym):
                                 logger.info(f'[I-pre] Setup I {_sym}: regime gate — BLOCKED')
+                                _write_scan_log(_sym, 'I_mathematical', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'Setup I regime gate')
                                 continue
                             logger.info(f'[I-pre] Setup I {_sym}: regime gate — OK')
+                            _write_scan_log(_sym, 'I_mathematical', None, '', None, None, None, None,
+                                            'SCANNING', 'Setup I entering scan')
 
                             # ── [I-1/6] Scan ─────────────────────────────────────
                             logger.info(f'[I-1/6] Setup I {_sym}: scanning...')
@@ -2555,10 +2563,20 @@ def background_scheduler():
                             )
                             if not sig:
                                 continue
+                            _write_scan_log(_sym, sig.get('setup', 'I_mathematical'),
+                                            sig.get('xgb_prob'), sig.get('direction', ''),
+                                            sig.get('entry'), sig.get('stop'),
+                                            sig.get('target'), None,
+                                            'SIGNAL', f'xgb={sig.get("xgb_prob")} lr={sig.get("lr_prob")}')
 
                             # ── [I-2a/6] Calendar ────────────────────────────────
                             if _cal_block(_sym, sig['setup']):
                                 logger.info(f'[I-2a/6] Setup I {_sym}: calendar blackout — BLOCKED')
+                                _write_scan_log(_sym, sig.get('setup', 'I_mathematical'),
+                                                sig.get('xgb_prob'), sig.get('direction', ''),
+                                                sig.get('entry'), sig.get('stop'),
+                                                sig.get('target'), None,
+                                                'BLOCKED_CALENDAR', 'calendar blackout')
                                 continue
                             logger.info(f'[I-2a/6] Setup I {_sym}: calendar clear — OK')
 
@@ -2572,6 +2590,11 @@ def background_scheduler():
                             _i_cap_ok, _i_cap_msg = _stop_cap_ok(sig)
                             if not _i_cap_ok:
                                 logger.warning(f'[I-2c/6] {_i_cap_msg} — BLOCKED')
+                                _write_scan_log(_sym, sig.get('setup', 'I_mathematical'),
+                                                sig.get('xgb_prob'), sig.get('direction', ''),
+                                                sig.get('entry'), sig.get('stop'),
+                                                sig.get('target'), None,
+                                                'BLOCKED_STOP_CAP', _i_cap_msg[:200])
                                 continue
                             _i_stop_dist = abs(float(sig.get('entry', 0)) - float(sig.get('stop', 0)))
                             logger.info(
@@ -2591,6 +2614,11 @@ def background_scheduler():
                                 if _i_tid:
                                     logger.info(f'[I-4/6] log_trade returned trade_id={_i_tid}')
                                     _check_and_mark_fired(_sym, sig['setup'], sig['direction'])
+                                    _write_scan_log(_sym, sig.get('setup', 'I_mathematical'),
+                                                    sig.get('xgb_prob'), sig.get('direction', ''),
+                                                    sig.get('entry'), sig.get('stop'),
+                                                    sig.get('target'), None,
+                                                    'EXECUTED', f'trade_id={_i_tid}')
                                 else:
                                     logger.critical(
                                         f'[I-4/6] CRITICAL: log_trade() returned None — '
@@ -2689,6 +2717,8 @@ def background_scheduler():
                             _heat_j = _count_open_trades()
                             if _heat_j >= MAX_PORTFOLIO_HEAT:
                                 logger.info(f'[J-pre] Setup J {_sym_j}: heat {_heat_j}/{MAX_PORTFOLIO_HEAT} — BLOCKED')
+                                _write_scan_log(_sym_j, 'J_value_area', None, '', None, None, None, None,
+                                                'BLOCKED_HEAT', f'heat={_heat_j}/{MAX_PORTFOLIO_HEAT}')
                                 continue
                             logger.info(f'[J-pre] Setup J {_sym_j}: heat {_heat_j}/{MAX_PORTFOLIO_HEAT} — OK')
 
@@ -2696,6 +2726,8 @@ def background_scheduler():
                                 _j_has, _j_id = _has_open_trade_on_instrument(_sym_j)
                                 if _j_has:
                                     logger.info(f'[J-pre] Setup J {_sym_j}: open trade #{_j_id} — BLOCKED')
+                                    _write_scan_log(_sym_j, 'J_value_area', None, '', None, None, None, None,
+                                                    'BLOCKED_CONCURRENT', f'open trade #{_j_id}')
                                     continue
                                 logger.info(f'[J-pre] Setup J {_sym_j}: no open trade — OK')
 
@@ -2705,8 +2737,12 @@ def background_scheduler():
 
                             if not is_setup_enabled('J', _sym_j):
                                 logger.info(f'[J-pre] Setup J {_sym_j}: regime gate — BLOCKED')
+                                _write_scan_log(_sym_j, 'J_value_area', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'Setup J regime gate')
                                 continue
                             logger.info(f'[J-pre] Setup J {_sym_j}: regime gate — OK')
+                            _write_scan_log(_sym_j, 'J_value_area', None, '', None, None, None, None,
+                                            'SCANNING', 'Setup J entering scan')
 
                             # ── [J-1/6] Scan ─────────────────────────────────────
                             logger.info(f'[J-1/6] Setup J {_sym_j}: scanning...')
@@ -2717,10 +2753,20 @@ def background_scheduler():
                             )
                             if not sig_j:
                                 continue
+                            _write_scan_log(_sym_j, sig_j.get('setup', 'J_value_area'),
+                                            sig_j.get('score'), sig_j.get('direction', ''),
+                                            sig_j.get('entry'), sig_j.get('stop'),
+                                            sig_j.get('target'), None,
+                                            'SIGNAL', f'VAH={sig_j.get("vah")} VAL={sig_j.get("val")}')
 
                             # ── [J-2a/6] Calendar ────────────────────────────────
                             if _cal_block(_sym_j, sig_j['setup']):
                                 logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar blackout — BLOCKED')
+                                _write_scan_log(_sym_j, sig_j.get('setup', 'J_value_area'),
+                                                sig_j.get('score'), sig_j.get('direction', ''),
+                                                sig_j.get('entry'), sig_j.get('stop'),
+                                                sig_j.get('target'), None,
+                                                'BLOCKED_CALENDAR', 'calendar blackout')
                                 continue
                             logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar clear — OK')
 
@@ -2734,6 +2780,11 @@ def background_scheduler():
                             _j_cap_ok, _j_cap_msg = _stop_cap_ok(sig_j)
                             if not _j_cap_ok:
                                 logger.warning(f'[J-2c/6] {_j_cap_msg} — BLOCKED')
+                                _write_scan_log(_sym_j, sig_j.get('setup', 'J_value_area'),
+                                                sig_j.get('score'), sig_j.get('direction', ''),
+                                                sig_j.get('entry'), sig_j.get('stop'),
+                                                sig_j.get('target'), None,
+                                                'BLOCKED_STOP_CAP', _j_cap_msg[:200])
                                 continue
                             _j_stop_dist = abs(float(sig_j.get('entry', 0)) - float(sig_j.get('stop', 0)))
                             logger.info(
@@ -2753,6 +2804,11 @@ def background_scheduler():
                                 if _j_tid:
                                     logger.info(f'[J-4/6] log_trade returned trade_id={_j_tid}')
                                     _check_and_mark_fired(_sym_j, sig_j['setup'], sig_j['direction'])
+                                    _write_scan_log(_sym_j, sig_j.get('setup', 'J_value_area'),
+                                                    sig_j.get('score'), sig_j.get('direction', ''),
+                                                    sig_j.get('entry'), sig_j.get('stop'),
+                                                    sig_j.get('target'), None,
+                                                    'EXECUTED', f'trade_id={_j_tid}')
                                 else:
                                     logger.critical(
                                         f'[J-4/6] CRITICAL: log_trade() returned None — '
@@ -2980,10 +3036,15 @@ def background_scheduler():
                         _heat_h = _count_open_trades()
                         if _heat_h >= MAX_PORTFOLIO_HEAT:
                             logger.info(f'Portfolio heat: {_heat_h} trades open — new signal blocked for Setup H')
+                            _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
+                                            'BLOCKED_HEAT', f'heat={_heat_h}/{MAX_PORTFOLIO_HEAT}')
                         elif not _rg.daily.is_daily_limit_hit():
-                            logger.info('Scanning Setup H for ES (live)')
+                            _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
+                                            'SCANNING', 'Setup H ES entering scanner')
                             if not is_setup_enabled('H', 'ES'):
                                 logger.info('Setup H ES: regime gate blocked — skipping')
+                                _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'Setup H ES regime gate')
                                 sig_es = None
                             else:
                                 sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
@@ -2992,10 +3053,20 @@ def background_scheduler():
                                 f'{"SIGNAL dir=" + sig_es["direction"] if sig_es else "None (no signal this tick)"}'
                             )
                             if sig_es:
+                                _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                sig_es.get('score'), sig_es.get('direction', ''),
+                                                sig_es.get('entry'), sig_es.get('stop'),
+                                                sig_es.get('target'), None,
+                                                'SIGNAL', 'scan_setup_h ES generated')
                                 if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                     _f1h_has, _f1h_id = _has_open_trade_on_instrument('ES')
                                     if _f1h_has:
                                         logger.info(f'Setup H: skipped — ES already has open trade #{_f1h_id}')
+                                        _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                        sig_es.get('score'), sig_es.get('direction', ''),
+                                                        sig_es.get('entry'), sig_es.get('stop'),
+                                                        sig_es.get('target'), None,
+                                                        'BLOCKED_CONCURRENT', f'open trade #{_f1h_id}')
                                         sig_es = None
                             if sig_es:
                                 if not _has_opposite_swing_trade('ES', sig_es['direction']):
@@ -3005,12 +3076,22 @@ def background_scheduler():
                                                 _h_es_cap_ok, _h_es_cap_msg = _stop_cap_ok(sig_es)
                                                 if not _h_es_cap_ok:
                                                     logger.warning(_h_es_cap_msg)
+                                                    _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                                    sig_es.get('score'), sig_es.get('direction', ''),
+                                                                    sig_es.get('entry'), sig_es.get('stop'),
+                                                                    sig_es.get('target'), None,
+                                                                    'BLOCKED_STOP_CAP', _h_es_cap_msg[:200])
                                                 else:
                                                     _h_tid = None
                                                     try:
                                                         _h_tid = log_trade(sig_es)
                                                         if _h_tid:
                                                             logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
+                                                            _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                                            sig_es.get('score'), sig_es.get('direction', ''),
+                                                                            sig_es.get('entry'), sig_es.get('stop'),
+                                                                            sig_es.get('target'), None,
+                                                                            'EXECUTED', f'trade_id={_h_tid}')
                                                         else:
                                                             logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
                                                     except Exception as _lte:
@@ -3039,10 +3120,15 @@ def background_scheduler():
                         _heat_h_mnq = _count_open_trades()
                         if _heat_h_mnq >= MAX_PORTFOLIO_HEAT:
                             logger.info(f'Portfolio heat: {_heat_h_mnq} trades open — new signal blocked for Setup H MNQ')
+                            _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
+                                            'BLOCKED_HEAT', f'heat={_heat_h_mnq}/{MAX_PORTFOLIO_HEAT}')
                         elif not _rg.daily.is_daily_limit_hit():
-                            logger.info('Scanning Setup H for MNQ (live)')
+                            _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
+                                            'SCANNING', 'Setup H MNQ entering scanner')
                             if not is_setup_enabled('H', 'MNQ'):
                                 logger.info('Setup H MNQ: regime gate blocked — skipping')
+                                _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'Setup H MNQ regime gate')
                                 sig_mnq_h = None
                             else:
                                 sig_mnq_h = scan_setup_h('MNQ', _now_utc, paper_only=False)
@@ -3051,10 +3137,20 @@ def background_scheduler():
                                 f'{"SIGNAL dir=" + sig_mnq_h["direction"] if sig_mnq_h else "None (no signal this tick)"}'
                             )
                             if sig_mnq_h:
+                                _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                sig_mnq_h.get('target'), None,
+                                                'SIGNAL', 'scan_setup_h MNQ generated')
                                 if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                     _f1hm_has, _f1hm_id = _has_open_trade_on_instrument('MNQ')
                                     if _f1hm_has:
                                         logger.info(f'Setup H: skipped — MNQ already has open trade #{_f1hm_id}')
+                                        _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                        sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                        sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                        sig_mnq_h.get('target'), None,
+                                                        'BLOCKED_CONCURRENT', f'open trade #{_f1hm_id}')
                                         sig_mnq_h = None
                             if sig_mnq_h:
                                 if not _has_opposite_swing_trade('MNQ', sig_mnq_h['direction']):
@@ -3064,12 +3160,22 @@ def background_scheduler():
                                                 _hm_cap_ok, _hm_cap_msg = _stop_cap_ok(sig_mnq_h)
                                                 if not _hm_cap_ok:
                                                     logger.warning(_hm_cap_msg)
+                                                    _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                                    sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                                    sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                                    sig_mnq_h.get('target'), None,
+                                                                    'BLOCKED_STOP_CAP', _hm_cap_msg[:200])
                                                 else:
                                                     _hm_tid = None
                                                     try:
                                                         _hm_tid = log_trade(sig_mnq_h)
                                                         if _hm_tid:
                                                             logger.info(f'Trade logged: id={_hm_tid} MNQ {sig_mnq_h["direction"]} {sig_mnq_h["setup"]}')
+                                                            _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                                            sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                                            sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                                            sig_mnq_h.get('target'), None,
+                                                                            'EXECUTED', f'trade_id={_hm_tid}')
                                                         else:
                                                             logger.error('CRITICAL: Setup H log_trade() returned None — MNQ NOT in DB')
                                                     except Exception as _lte_hm:
@@ -4059,6 +4165,16 @@ def apex_scan():
                 _f_desc  = f"P={_f_prob*100:.1f}% — long >{_f_long_t*100:.0f}%, short <{_f_short_t*100:.0f}%"
             pred['readiness_score']       = _f_score
             pred['next_gate_description'] = _f_desc
+            try:
+                from regime_engine import get_current_regime as _gcr_f
+                _f_reg = _gcr_f(_sym)
+                pred['regime']           = _f_reg.get('regime', 'UNKNOWN') if _f_reg else 'UNKNOWN'
+                pred['regime_confidence']= round(float(_f_reg.get('confidence', 0) if _f_reg else 0), 3)
+                pred['regime_optimal']   = (_strategy_enabled_cache.get('F', {}).get('optimal_regimes') or 'CHOPPY,TRENDING')
+                pred['regime_gating']    = False  # F uses RF model as its own gate
+            except Exception:
+                pred['regime'] = 'UNKNOWN'; pred['regime_confidence'] = 0.0
+                pred['regime_optimal'] = 'CHOPPY,TRENDING'; pred['regime_gating'] = False
             setup_f_predictions.append(pred)
     except Exception as e:
         logger.debug(f'Setup F prediction error: {e}')
@@ -4070,6 +4186,21 @@ def apex_scan():
         for _sym in ('ES', 'MNQ'):
             _h = get_h_state(_sym)
             # Build gate-by-gate structure from state data
+            try:
+                from regime_engine import get_current_regime as _gcr_h
+                _h_reg_info = _gcr_h(_sym)
+                _h_reg_name = _h_reg_info.get('regime', 'UNKNOWN') if _h_reg_info else 'UNKNOWN'
+                _h_reg_conf = float(_h_reg_info.get('confidence', 0) if _h_reg_info else 0)
+                _h_reg_optimal = [r.strip() for r in (_strategy_enabled_cache.get('H', {}).get('optimal_regimes') or 'CHOPPY,MEAN_REVERTING').split(',') if r.strip()]
+                _h_reg_pass = bool(_h_reg_info and _h_reg_conf >= 0.50 and _h_reg_name in _h_reg_optimal)
+                _h_reg_detail = (
+                    f'regime={_h_reg_name}  conf={_h_reg_conf:.2f}  '
+                    f'required={"/".join(_h_reg_optimal)}  threshold=0.50  '
+                    + ('✓ PASS' if _h_reg_pass else '✗ FAIL')
+                )
+            except Exception:
+                _h_reg_name = 'UNKNOWN'; _h_reg_conf = 0.0
+                _h_reg_pass = True; _h_reg_detail = 'regime engine unavailable (fail open)'
             _h_gates = [
                 {
                     'gate': 1, 'name': 'Session',
@@ -4082,7 +4213,12 @@ def apex_scan():
                     'detail': f'VWAP={_h.get("vwap")} upper={_h.get("upper_band")} lower={_h.get("lower_band")}' if _h.get('vwap') else f'{_h.get("signal_state")}',
                 },
                 {
-                    'gate': 3, 'name': 'Outside 2σ Band',
+                    'gate': 3, 'name': 'Regime Gate',
+                    'passed': _h_reg_pass,
+                    'detail': _h_reg_detail,
+                },
+                {
+                    'gate': 4, 'name': 'Outside 2σ Band',
                     'passed': _h.get('signal_state') in ('ABOVE_UPPER', 'BELOW_LOWER'),
                     'detail': (
                         f'ABOVE upper={_h.get("upper_band")} price={_h.get("price")} dist={_h.get("dist_upper_atr")}×ATR'
@@ -4093,7 +4229,7 @@ def apex_scan():
                     ),
                 },
                 {
-                    'gate': 4, 'name': 'HTF Bias Aligned',
+                    'gate': 5, 'name': 'HTF Bias Aligned',
                     'passed': (
                         (_h.get('signal_state') == 'ABOVE_UPPER' and _h.get('htf_bias') == 'bearish') or
                         (_h.get('signal_state') == 'BELOW_LOWER' and _h.get('htf_bias') == 'bullish')
@@ -4153,6 +4289,22 @@ def apex_scan():
             _short_xgb_ok = _s_xgb is not None and _s_xgb > 0.58
             _short_lr_ok  = _lr is not None and _lr < 0.42
             _i_today_ok = _i_now.weekday() in {1, 2, 3}  # Tue=1, Wed=2, Thu=3
+            # Regime gate — replicate is_setup_enabled('I', _sym) logic for dashboard
+            try:
+                from regime_engine import get_current_regime as _gcr_i
+                _i_reg_info = _gcr_i(_sym)
+                _i_reg_name = _i_reg_info.get('regime', 'UNKNOWN') if _i_reg_info else 'UNKNOWN'
+                _i_reg_conf = float(_i_reg_info.get('confidence', 0) if _i_reg_info else 0)
+                _i_reg_optimal = [r.strip() for r in (_strategy_enabled_cache.get('I', {}).get('optimal_regimes') or 'TRENDING').split(',') if r.strip()]
+                _i_reg_pass = bool(_i_reg_info and _i_reg_conf >= 0.50 and _i_reg_name in _i_reg_optimal)
+                _i_reg_detail = (
+                    f'regime={_i_reg_name}  conf={_i_reg_conf:.2f}  '
+                    f'required={"/".join(_i_reg_optimal)}  threshold=0.50  '
+                    + ('✓ PASS' if _i_reg_pass else '✗ FAIL')
+                )
+            except Exception:
+                _i_reg_name = 'UNKNOWN'; _i_reg_conf = 0.0
+                _i_reg_pass = True; _i_reg_detail = 'regime engine unavailable (fail open)'
             # Gate 6: stop cap (1.5 × ATR14 must not exceed _MAX_STOP_PTS)
             try:
                 _df5_i   = _load_5min(_sym, limit=30)
@@ -4189,17 +4341,22 @@ def apex_scan():
                     ),
                 },
                 {
-                    'gate': 3, 'name': 'Session',
+                    'gate': 3, 'name': 'Regime Gate',
+                    'passed': _i_reg_pass,
+                    'detail': _i_reg_detail,
+                },
+                {
+                    'gate': 4, 'name': 'Session',
                     'passed': _i_in_sess,
                     'detail': f'{_i_now.hour:02d}:00 UTC session 13-{_i_sess_end} UTC',
                 },
                 {
-                    'gate': 4, 'name': 'XGB Probability > 0.58',
+                    'gate': 5, 'name': 'XGB Probability > 0.58',
                     'passed': _long_xgb_ok or _short_xgb_ok,
                     'detail': f'long_xgb={_l_xgb} short_xgb={_s_xgb} (need >0.58)',
                 },
                 {
-                    'gate': 5, 'name': 'LogReg Confirmation',
+                    'gate': 6, 'name': 'LogReg Confirmation',
                     'passed': _long_lr_ok or _short_lr_ok,
                     'detail': (
                         f'lr={_lr:.3f} (long needs >0.58, short needs <0.42)'
@@ -4207,17 +4364,17 @@ def apex_scan():
                     ),
                 },
                 {
-                    'gate': 6, 'name': 'Stop Cap',
+                    'gate': 7, 'name': 'Stop Cap',
                     'passed': _stop_ok,
                     'detail': _stop_det,
                 },
                 {
-                    'gate': 7, 'name': 'Calendar',
+                    'gate': 8, 'name': 'Calendar',
                     'passed': _cal_i_ok,
                     'detail': _cal_i_det,
                 },
                 {
-                    'gate': 8, 'name': 'Portfolio Heat',
+                    'gate': 9, 'name': 'Portfolio Heat',
                     'passed': _heat_i_ok,
                     'detail': _heat_i_det,
                 },
@@ -4252,6 +4409,37 @@ def apex_scan():
         from setup_j_value_area import get_setup_j_state
         for _sym_j_scan in ('ES', 'MNQ'):
             _j_state = get_setup_j_state(_sym_j_scan)
+            # Inject regime gate at position 1 (before other gates)
+            try:
+                from regime_engine import get_current_regime as _gcr_j
+                _j_reg_info = _gcr_j(_sym_j_scan)
+                _j_reg_name = _j_reg_info.get('regime', 'UNKNOWN') if _j_reg_info else 'UNKNOWN'
+                _j_reg_conf = float(_j_reg_info.get('confidence', 0) if _j_reg_info else 0)
+                _j_reg_optimal = [r.strip() for r in (_strategy_enabled_cache.get('J', {}).get('optimal_regimes') or 'CHOPPY,MEAN_REVERTING,TRENDING').split(',') if r.strip()]
+                _j_reg_pass = bool(_j_reg_info and _j_reg_conf >= 0.50 and _j_reg_name in _j_reg_optimal)
+                _j_reg_detail = (
+                    f'regime={_j_reg_name}  conf={_j_reg_conf:.2f}  '
+                    f'required={"/".join(_j_reg_optimal)}  threshold=0.50  '
+                    + ('✓ PASS' if _j_reg_pass else '✗ FAIL')
+                )
+            except Exception:
+                _j_reg_name = 'UNKNOWN'; _j_reg_conf = 0.0
+                _j_reg_pass = True; _j_reg_detail = 'regime engine unavailable (fail open)'
+            _j_regime_gate = {'gate': 0, 'name': 'Regime Gate', 'passed': _j_reg_pass, 'detail': _j_reg_detail}
+            existing_gates = _j_state.get('gates', [])
+            # Renumber existing gates to start at 1 if they start at 0, else shift up by 1
+            _j_min_gate = min((g.get('gate', 1) for g in existing_gates), default=1)
+            if _j_min_gate == 0:
+                # Already 0-based — insert regime gate before index 0 with gate=-1 then renumber
+                for _jg in existing_gates:
+                    _jg['gate'] = _jg.get('gate', 0) + 1
+                _j_regime_gate['gate'] = 0
+            else:
+                # 1-based — shift all up by 1 and insert at gate=1
+                for _jg in existing_gates:
+                    _jg['gate'] = _jg.get('gate', 1) + 1
+                _j_regime_gate['gate'] = 1
+            _j_state['gates'] = [_j_regime_gate] + existing_gates
             setup_j_data.append(_j_state)
     except Exception as _j_scan_e:
         logger.debug(f'Setup J state error: {_j_scan_e}')
