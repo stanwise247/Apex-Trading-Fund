@@ -213,14 +213,58 @@ SETUP_PAPER_INSTRUMENTS: dict = {
     # H, I, J: MNQ now live — all instruments execute via Tradovate when TRADOVATE_ENABLED=true
 }
 
-# Hard maximum stop distances per instrument (points). Signals exceeding these are rejected.
+# Static fallback stop caps (points). Used when ATR data is unavailable.
 _MAX_STOP_PTS: dict = {'MNQ': 60, 'ES': 15, 'GC': 8}
+
+# Simple per-symbol ATR cache: (atr_value, computed_at_epoch)
+_atr_cache: dict = {}
+_ATR_CACHE_TTL = 300  # seconds
+
+
+def _get_stop_cap(symbol: str) -> int:
+    """
+    Dynamic stop cap scaled to current ATR:
+      MNQ: ATR<45=60pts | ATR 45-60=75pts | ATR>60=90pts
+      ES:  ATR<12=15pts | ATR 12-16=20pts  | ATR>16=25pts
+      GC:  static 8pts
+    Falls back to _MAX_STOP_PTS on any data error.
+    """
+    static = _MAX_STOP_PTS.get(symbol)
+    if symbol not in ('MNQ', 'ES'):
+        return static if static is not None else 9999
+    now_ts = time.time()
+    cached_atr, cached_at = _atr_cache.get(symbol, (None, 0))
+    if cached_atr is not None and (now_ts - cached_at) < _ATR_CACHE_TTL:
+        atr = cached_atr
+    else:
+        try:
+            from market_structure import load_bars
+            import pandas as _pd_atr
+            _df = load_bars(symbol, '5min', limit=300)
+            if _df.empty or len(_df) < 20:
+                return static if static is not None else 9999
+            _h  = _df['high'].astype(float)
+            _lo = _df['low'].astype(float)
+            _pc = _df['close'].astype(float).shift(1)
+            _tr = _pd_atr.concat([_h - _lo, (_h - _pc).abs(), (_lo - _pc).abs()], axis=1).max(axis=1)
+            atr = float(_tr.rolling(14).mean().iloc[-1])
+            _atr_cache[symbol] = (atr, now_ts)
+        except Exception:
+            return static if static is not None else 9999
+    if symbol == 'MNQ':
+        if atr < 45:   return 60
+        elif atr < 60: return 75
+        else:          return 90
+    else:  # ES
+        if atr < 12:   return 15
+        elif atr < 16: return 20
+        else:          return 25
 
 
 def _stop_cap_ok(sig: dict) -> tuple:
-    """Return (True, '') or (False, warning_msg) when stop distance exceeds per-instrument cap."""
+    """Return (True, '') or (False, warning_msg) when stop distance exceeds dynamic ATR-based cap."""
     sym = sig.get('symbol', '')
-    max_pts = _MAX_STOP_PTS.get(sym)
+    max_pts = _get_stop_cap(sym)
     if max_pts is None:
         return True, ''
     try:
@@ -2166,51 +2210,85 @@ def background_scheduler():
                     logger.info('Scanning FVG for MNQ')
                     fvg_signals = scan_fvg('MNQ', now_utc)
                     for sig in fvg_signals:
+                        _fvg_setup = sig.get('setup', 'D_fvg_fill')
+                        _fvg_sym   = sig.get('symbol', 'MNQ')
+                        # ── Regime gate (mirrors Setup D) ─────────────────
+                        if not is_setup_enabled('D', _fvg_sym):
+                            logger.info(f'FVG: regime gate blocked — skipping {_fvg_sym}')
+                            _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
+                                            sig.get('entry'), sig.get('stop'),
+                                            sig.get('target'), None,
+                                            'BLOCKED_REGIME', 'FVG regime gate')
+                            continue
                         # ── FILTER 1: max 1 concurrent per instrument ─────
                         if SIGNAL_FILTERS['max_concurrent_per_instrument']:
-                            _f1fvg_has, _f1fvg_id = _has_open_trade_on_instrument(sig['symbol'])
+                            _f1fvg_has, _f1fvg_id = _has_open_trade_on_instrument(_fvg_sym)
                             if _f1fvg_has:
-                                logger.info(f'FVG: skipped — {sig["symbol"]} already has open trade #{_f1fvg_id}')
+                                logger.info(f'FVG: skipped — {_fvg_sym} already has open trade #{_f1fvg_id}')
+                                _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
+                                                sig.get('entry'), sig.get('stop'),
+                                                sig.get('target'), None,
+                                                'BLOCKED_CONCURRENT', f'open trade #{_f1fvg_id}')
                                 continue
-                        if _has_opposite_swing_trade(sig['symbol'], sig['direction']):
+                        if _has_opposite_swing_trade(_fvg_sym, sig['direction']):
                             logger.info(
                                 f'FVG {sig["direction"]} suppressed — '
-                                f'opposite swing trade open on {sig["symbol"]}'
+                                f'opposite swing trade open on {_fvg_sym}'
                             )
                             continue
-                        if _cal_block(sig['symbol'], sig.get('setup', 'FVG')):
+                        if _cal_block(_fvg_sym, _fvg_setup):
+                            _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
+                                            sig.get('entry'), sig.get('stop'),
+                                            sig.get('target'), None,
+                                            'BLOCKED_CALENDAR', 'calendar gate')
                             continue
-                        if _check_and_mark_fired(sig['symbol'], sig.get('setup', 'FVG'), sig['direction']):
+                        if _check_and_mark_fired(_fvg_sym, _fvg_setup, sig['direction']):
                             continue
-                        if _is_signal_already_active(sig['symbol'], sig['direction'], sig.get('setup', 'FVG')):
+                        if _is_signal_already_active(_fvg_sym, sig['direction'], _fvg_setup):
                             continue
                         _fvg_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
                         _fvg_risk_usd = round(_fvg_stop_pts * 2, 0)
                         logger.info(
-                            f'Signal: MNQ {sig["direction"]} {sig.get("setup","FVG")} | '
+                            f'Signal: {_fvg_sym} {sig["direction"]} {_fvg_setup} | '
                             f'stop={_fvg_stop_pts} pts | risk=${_fvg_risk_usd:.0f} | contracts=1'
                         )
                         _fvg_cap_ok, _fvg_cap_msg = _stop_cap_ok(sig)
                         if not _fvg_cap_ok:
                             logger.warning(_fvg_cap_msg)
+                            _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
+                                            sig.get('entry'), sig.get('stop'),
+                                            sig.get('target'), None,
+                                            'BLOCKED_STOP_CAP', _fvg_cap_msg[:200])
                             continue
+                        _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
+                                        sig.get('entry'), sig.get('stop'),
+                                        sig.get('target'), None,
+                                        'SIGNAL', 'FVG scan generated')
                         _fvg_tid = None
                         try:
                             _fvg_tid = log_trade(sig)
                             if _fvg_tid:
-                                logger.info(f'Trade logged: id={_fvg_tid} MNQ {sig["direction"]} {sig.get("setup","FVG")}')
+                                logger.info(f'Trade logged: id={_fvg_tid} {_fvg_sym} {sig["direction"]} {_fvg_setup}')
+                                _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
+                                                sig.get('entry'), sig.get('stop'),
+                                                sig.get('target'), None,
+                                                'EXECUTED', f'trade_id={_fvg_tid}')
                             else:
-                                logger.error(f'CRITICAL: FVG log_trade() returned None — MNQ {sig["direction"]} NOT in DB')
+                                logger.error(f'CRITICAL: FVG log_trade() returned None — {_fvg_sym} {sig["direction"]} NOT in DB')
                         except Exception as _fvg_lte:
-                            logger.error(f'CRITICAL: FVG log_trade() EXCEPTION — MNQ {sig["direction"]}: {_fvg_lte}', exc_info=True)
-                        try:
-                            msg = format_fvg_alert(sig) + _risk_footer
-                            send_telegram(msg)
-                        except Exception as _fvg_te:
-                            logger.error(f'FVG send_telegram failed MNQ {sig["direction"]}: {_fvg_te}')
-                        _execute_via_tradovate(sig, _fvg_tid)
+                            logger.error(f'CRITICAL: FVG log_trade() EXCEPTION — {_fvg_sym} {sig["direction"]}: {_fvg_lte}', exc_info=True)
+                        # ── Telegram only after confirmed log_trade ───────
+                        if not _fvg_tid:
+                            logger.critical(f'CRITICAL: Skipping Telegram for FVG {_fvg_sym} — log_trade returned None')
+                        else:
+                            try:
+                                msg = format_fvg_alert(sig) + _risk_footer
+                                send_telegram(msg)
+                            except Exception as _fvg_te:
+                                logger.error(f'FVG send_telegram failed {_fvg_sym} {sig["direction"]}: {_fvg_te}')
+                            _execute_via_tradovate(sig, _fvg_tid)
                         logger.info(
-                            f'FVG signal: MNQ {sig["direction"].upper()} entry={sig["entry"]} '
+                            f'FVG signal: {_fvg_sym} {sig["direction"].upper()} entry={sig["entry"]} '
                             f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
                         )
         except Exception as e:
@@ -2231,6 +2309,8 @@ def background_scheduler():
             _heat_abc = _count_open_trades()
             if _heat_abc >= MAX_PORTFOLIO_HEAT:
                 logger.info(f'Portfolio heat: {_heat_abc} trades open — new signal blocked for Setup A/B/C/E')
+                _write_scan_log('ALL', 'A_B_C_E', None, '', None, None, None, None,
+                                'BLOCKED_HEAT', f'heat={_heat_abc}/{MAX_PORTFOLIO_HEAT}')
             elif _rg.daily.is_daily_limit_hit():
                 logger.info('APEX scanner: daily loss limit hit — signals suppressed')
             else:
@@ -2260,6 +2340,8 @@ def background_scheduler():
                         _f1_has, _f1_id = _has_open_trade_on_instrument(_sym)
                         if _f1_has:
                             logger.info(f'{_setup}: skipped — {_sym} already has open trade #{_f1_id}')
+                            _write_scan_log(_sym, _setup, None, _dirn, None, None, None, None,
+                                            'BLOCKED_CONCURRENT', f'open trade #{_f1_id}')
                             continue
 
                     # ── FILTER 2: primary session only for B and C ────────
@@ -2281,6 +2363,8 @@ def background_scheduler():
                                 f'{_setup}: skipped — 1h bias conflicts with {_dirn} direction '
                                 f'({_f3_detail})'
                             )
+                            _write_scan_log(_sym, _setup, None, _dirn, None, None, None, None,
+                                            'BLOCKED_HTF_BIAS', _f3_detail[:200])
                             continue
 
                     # ── FILTER 4: Setup E minimum ATR ────────────────────
@@ -2302,12 +2386,18 @@ def background_scheduler():
                             continue
                     # Economic calendar gate — skip if blackout active
                     if _cal_block(_sym, _setup):
+                        _write_scan_log(_sym, _setup, None, _dirn, None, None, None, None,
+                                        'BLOCKED_CALENDAR', 'calendar gate')
                         continue
                     # Unified dedup: mark fired BEFORE telegram
                     if _check_and_mark_fired(_sym, _setup, _dirn):
                         continue
                     if _is_signal_already_active(_sym, _dirn, _setup):
                         continue
+                    _write_scan_log(_sym, _setup, None, _dirn,
+                                    getattr(result, 'entry', None), getattr(result, 'stop', None),
+                                    getattr(result, 'target', None), None,
+                                    'SCANNING', f'signal found dir={_dirn}')
                     if result.entry is not None and result.stop is not None:
                         _apex_stop_pts = round(abs(result.entry - result.stop), 1)
                         _apex_risk_usd = round(_apex_stop_pts * (2 if _sym == 'MNQ' else 50), 0)
@@ -2320,8 +2410,15 @@ def background_scheduler():
                         )
                         if not _apex_cap_ok:
                             logger.warning(_apex_cap_msg)
+                            _write_scan_log(_sym, _setup, None, _dirn,
+                                            result.entry, result.stop, getattr(result, 'target', None), None,
+                                            'BLOCKED_STOP_CAP', _apex_cap_msg[:200])
                             continue
                     tracker.mark_sent(result)
+                    _write_scan_log(_sym, _setup, None, _dirn,
+                                    getattr(result, 'entry', None), getattr(result, 'stop', None),
+                                    getattr(result, 'target', None), None,
+                                    'SIGNAL', f'A/B/C/E signal ready')
                     _sig_dict = {
                         'symbol':    _sym,
                         'direction': _dirn,
@@ -2339,6 +2436,9 @@ def background_scheduler():
                         _apex_tid = log_trade(_sig_dict)
                         if _apex_tid:
                             logger.info(f'Trade logged: id={_apex_tid} {_sym} {_dirn} {_setup}')
+                            _write_scan_log(_sym, _setup, None, _dirn,
+                                            result.entry, result.stop, getattr(result, 'target', None), None,
+                                            'EXECUTED', f'trade_id={_apex_tid}')
                         else:
                             logger.error(f'CRITICAL: log_trade() returned None — {_sym} {_dirn} {_setup} NOT in DB')
                     except Exception as _apex_lte:
@@ -2409,21 +2509,31 @@ def background_scheduler():
                                 _f1f_has, _f1f_id = _has_open_trade_on_instrument(_sym)
                                 if _f1f_has:
                                     logger.info(f'Setup F: skipped — {_sym} already has open trade #{_f1f_id}')
+                                    _write_scan_log(_sym, 'F_rf_signal', None, '', None, None, None, None,
+                                                    'BLOCKED_CONCURRENT', f'open trade #{_f1f_id}')
                                     continue
                             if check_model_degradation(_sym):
                                 logger.warning(f'Setup F {_sym} model degraded — skipping')
+                                _write_scan_log(_sym, 'F_rf_signal', None, '', None, None, None, None,
+                                                'BLOCKED_REGIME', 'model degraded')
                                 continue
                             if _rg.daily.is_daily_limit_hit():
                                 logger.info(f'Setup F {_sym}: daily limit hit — suppressed')
                                 continue
+                            _write_scan_log(_sym, 'F_rf_signal', None, '', None, None, None, None,
+                                            'SCANNING', 'Setup F entering scan')
                             sig = scan_setup_f(_sym, _now_utc)
                             if sig:
-                                _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                _write_scan_log(_sym, sig.get('setup', 'F_rf_signal'),
                                                 sig.get('confidence'), sig['direction'],
                                                 sig.get('entry'), sig.get('stop'),
                                                 sig.get('target'), None, 'SIGNAL', 'scan_setup_f generated')
                                 if _has_opposite_swing_trade(_sym, sig['direction']):
                                     logger.info(f'Setup F {_sym} {sig["direction"]} suppressed — opposite swing trade open')
+                                    _write_scan_log(_sym, sig.get('setup', 'F_rf_signal'),
+                                                    sig.get('confidence'), sig['direction'],
+                                                    sig.get('entry'), sig.get('stop'),
+                                                    sig.get('target'), None, 'BLOCKED_CONCURRENT', 'opposite swing trade')
                                     continue
                                 _f_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
                                 _f_risk_usd = round(_f_stop_pts * (2 if _sym == 'MNQ' else 50), 0)
@@ -2433,7 +2543,7 @@ def background_scheduler():
                                 )
                                 # Economic calendar gate
                                 if _cal_block(_sym, sig['setup']):
-                                    _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                    _write_scan_log(_sym, sig.get('setup', 'F_rf_signal'),
                                                     sig.get('confidence'), sig['direction'],
                                                     sig.get('entry'), sig.get('stop'),
                                                     sig.get('target'), None, 'BLOCKED_CALENDAR', 'calendar gate')
@@ -2447,7 +2557,7 @@ def background_scheduler():
                                 _f_cap_ok, _f_cap_msg = _stop_cap_ok(sig)
                                 if not _f_cap_ok:
                                     logger.warning(_f_cap_msg)
-                                    _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                    _write_scan_log(_sym, sig.get('setup', 'F_rf_signal'),
                                                     sig.get('confidence'), sig['direction'],
                                                     sig.get('entry'), sig.get('stop'),
                                                     sig.get('target'), None, 'BLOCKED_STOP_CAP', _f_cap_msg[:200])
@@ -2461,7 +2571,7 @@ def background_scheduler():
                                     _f_tid = log_trade(sig)
                                     if _f_tid:
                                         logger.info(f'Setup F: trade logged id={_f_tid} {_sym} {sig["direction"]}')
-                                        _write_scan_log(_sym, sig.get('setup', 'F_ml_regime'),
+                                        _write_scan_log(_sym, sig.get('setup', 'F_rf_signal'),
                                                         sig.get('confidence'), sig['direction'],
                                                         sig.get('entry'), sig.get('stop'),
                                                         sig.get('target'), None,
@@ -2475,11 +2585,15 @@ def background_scheduler():
                                         f'CRITICAL: Setup F log_trade() EXCEPTION — {_sym} {sig["direction"]}: {_lte}',
                                         exc_info=True
                                     )
-                                try:
-                                    msg = format_f_alert(sig) + _risk_footer
-                                    send_telegram(msg)
-                                except Exception as _te:
-                                    logger.error(f'Setup F: send_telegram failed {_sym}: {_te}')
+                                # ── Telegram only after confirmed log_trade ──────
+                                if not _f_tid:
+                                    logger.critical(f'CRITICAL: Skipping Telegram for Setup F {_sym} — log_trade returned None')
+                                else:
+                                    try:
+                                        msg = format_f_alert(sig) + _risk_footer
+                                        send_telegram(msg)
+                                    except Exception as _te:
+                                        logger.error(f'Setup F: send_telegram failed {_sym}: {_te}')
                                 if _f_tid:
                                     _execute_via_tradovate(sig, _f_tid)
                                 logger.info(
@@ -3039,14 +3153,14 @@ def background_scheduler():
                             _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
                                             'BLOCKED_HEAT', f'heat={_heat_h}/{MAX_PORTFOLIO_HEAT}')
                         elif not _rg.daily.is_daily_limit_hit():
-                            _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
-                                            'SCANNING', 'Setup H ES entering scanner')
                             if not is_setup_enabled('H', 'ES'):
                                 logger.info('Setup H ES: regime gate blocked — skipping')
                                 _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
                                                 'BLOCKED_REGIME', 'Setup H ES regime gate')
                                 sig_es = None
                             else:
+                                _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
+                                                'SCANNING', 'Setup H ES entering scanner')
                                 sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
                             logger.info(
                                 f'scan_setup_h ES returned: '
@@ -3069,49 +3183,58 @@ def background_scheduler():
                                                         'BLOCKED_CONCURRENT', f'open trade #{_f1h_id}')
                                         sig_es = None
                             if sig_es:
-                                if not _has_opposite_swing_trade('ES', sig_es['direction']):
-                                    if not _cal_block('ES', sig_es['setup']):
-                                        if not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
-                                            if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
-                                                _h_es_cap_ok, _h_es_cap_msg = _stop_cap_ok(sig_es)
-                                                if not _h_es_cap_ok:
-                                                    logger.warning(_h_es_cap_msg)
+                                if _has_opposite_swing_trade('ES', sig_es['direction']):
+                                    logger.info('Setup H ES suppressed — opposite swing trade open')
+                                    _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                    sig_es.get('score'), sig_es.get('direction', ''),
+                                                    sig_es.get('entry'), sig_es.get('stop'),
+                                                    sig_es.get('target'), None,
+                                                    'BLOCKED_CONCURRENT', 'opposite swing trade open')
+                                elif _cal_block('ES', sig_es['setup']):
+                                    _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                    sig_es.get('score'), sig_es.get('direction', ''),
+                                                    sig_es.get('entry'), sig_es.get('stop'),
+                                                    sig_es.get('target'), None,
+                                                    'BLOCKED_CALENDAR', 'calendar gate')
+                                elif not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
+                                    if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
+                                        _h_es_cap_ok, _h_es_cap_msg = _stop_cap_ok(sig_es)
+                                        if not _h_es_cap_ok:
+                                            logger.warning(_h_es_cap_msg)
+                                            _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                            sig_es.get('score'), sig_es.get('direction', ''),
+                                                            sig_es.get('entry'), sig_es.get('stop'),
+                                                            sig_es.get('target'), None,
+                                                            'BLOCKED_STOP_CAP', _h_es_cap_msg[:200])
+                                        else:
+                                            _h_tid = None
+                                            try:
+                                                _h_tid = log_trade(sig_es)
+                                                if _h_tid:
+                                                    logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
                                                     _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
                                                                     sig_es.get('score'), sig_es.get('direction', ''),
                                                                     sig_es.get('entry'), sig_es.get('stop'),
                                                                     sig_es.get('target'), None,
-                                                                    'BLOCKED_STOP_CAP', _h_es_cap_msg[:200])
+                                                                    'EXECUTED', f'trade_id={_h_tid}')
                                                 else:
-                                                    _h_tid = None
-                                                    try:
-                                                        _h_tid = log_trade(sig_es)
-                                                        if _h_tid:
-                                                            logger.info(f'Trade logged: id={_h_tid} ES {sig_es["direction"]} {sig_es["setup"]}')
-                                                            _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
-                                                                            sig_es.get('score'), sig_es.get('direction', ''),
-                                                                            sig_es.get('entry'), sig_es.get('stop'),
-                                                                            sig_es.get('target'), None,
-                                                                            'EXECUTED', f'trade_id={_h_tid}')
-                                                        else:
-                                                            logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
-                                                    except Exception as _lte:
-                                                        logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
-                                                    if not _h_tid:
-                                                        logger.critical('CRITICAL: Skipping Telegram for Setup H ES — log_trade returned None')
-                                                    else:
-                                                        try:
-                                                            msg = format_h_alert(sig_es) + _risk_footer
-                                                            send_telegram(msg)
-                                                        except Exception as _h_te:
-                                                            logger.error(f'Setup H send_telegram failed ES: {_h_te}')
-                                                    if _h_tid:
-                                                        logger.info(f'Calling _execute_via_tradovate: ES {sig_es["direction"]} {sig_es["setup"]} trade_id={_h_tid}')
-                                                        _execute_via_tradovate(sig_es, _h_tid)
-                                                    else:
-                                                        logger.warning('Skipping _execute_via_tradovate — log_trade returned None for Setup H ES')
-                                                    logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
-                                else:
-                                    logger.info('Setup H ES suppressed — opposite swing trade open')
+                                                    logger.error('CRITICAL: Setup H log_trade() returned None — ES NOT in DB')
+                                            except Exception as _lte:
+                                                logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — ES {sig_es["direction"]}: {_lte}', exc_info=True)
+                                            if not _h_tid:
+                                                logger.critical('CRITICAL: Skipping Telegram for Setup H ES — log_trade returned None')
+                                            else:
+                                                try:
+                                                    msg = format_h_alert(sig_es) + _risk_footer
+                                                    send_telegram(msg)
+                                                except Exception as _h_te:
+                                                    logger.error(f'Setup H send_telegram failed ES: {_h_te}')
+                                            if _h_tid:
+                                                logger.info(f'Calling _execute_via_tradovate: ES {sig_es["direction"]} {sig_es["setup"]} trade_id={_h_tid}')
+                                                _execute_via_tradovate(sig_es, _h_tid)
+                                            else:
+                                                logger.warning('Skipping _execute_via_tradovate — log_trade returned None for Setup H ES')
+                                            logger.info(f'Setup H ES {sig_es["direction"].upper()} signal fired db_id={_h_tid}')
                         else:
                             logger.info('Setup H ES: daily limit hit — suppressed')
                     except Exception as _he:
@@ -3123,14 +3246,14 @@ def background_scheduler():
                             _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
                                             'BLOCKED_HEAT', f'heat={_heat_h_mnq}/{MAX_PORTFOLIO_HEAT}')
                         elif not _rg.daily.is_daily_limit_hit():
-                            _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
-                                            'SCANNING', 'Setup H MNQ entering scanner')
                             if not is_setup_enabled('H', 'MNQ'):
                                 logger.info('Setup H MNQ: regime gate blocked — skipping')
                                 _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
                                                 'BLOCKED_REGIME', 'Setup H MNQ regime gate')
                                 sig_mnq_h = None
                             else:
+                                _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
+                                                'SCANNING', 'Setup H MNQ entering scanner')
                                 sig_mnq_h = scan_setup_h('MNQ', _now_utc, paper_only=False)
                             logger.info(
                                 f'scan_setup_h MNQ returned: '
@@ -3153,45 +3276,54 @@ def background_scheduler():
                                                         'BLOCKED_CONCURRENT', f'open trade #{_f1hm_id}')
                                         sig_mnq_h = None
                             if sig_mnq_h:
-                                if not _has_opposite_swing_trade('MNQ', sig_mnq_h['direction']):
-                                    if not _cal_block('MNQ', sig_mnq_h['setup']):
-                                        if not _check_and_mark_fired('MNQ', sig_mnq_h['setup'], sig_mnq_h['direction']):
-                                            if not _is_signal_already_active('MNQ', sig_mnq_h['direction'], sig_mnq_h['setup']):
-                                                _hm_cap_ok, _hm_cap_msg = _stop_cap_ok(sig_mnq_h)
-                                                if not _hm_cap_ok:
-                                                    logger.warning(_hm_cap_msg)
+                                if _has_opposite_swing_trade('MNQ', sig_mnq_h['direction']):
+                                    logger.info('Setup H MNQ suppressed — opposite swing trade open')
+                                    _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                    sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                    sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                    sig_mnq_h.get('target'), None,
+                                                    'BLOCKED_CONCURRENT', 'opposite swing trade open')
+                                elif _cal_block('MNQ', sig_mnq_h['setup']):
+                                    _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                    sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                    sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                    sig_mnq_h.get('target'), None,
+                                                    'BLOCKED_CALENDAR', 'calendar gate')
+                                elif not _check_and_mark_fired('MNQ', sig_mnq_h['setup'], sig_mnq_h['direction']):
+                                    if not _is_signal_already_active('MNQ', sig_mnq_h['direction'], sig_mnq_h['setup']):
+                                        _hm_cap_ok, _hm_cap_msg = _stop_cap_ok(sig_mnq_h)
+                                        if not _hm_cap_ok:
+                                            logger.warning(_hm_cap_msg)
+                                            _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                            sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                            sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                            sig_mnq_h.get('target'), None,
+                                                            'BLOCKED_STOP_CAP', _hm_cap_msg[:200])
+                                        else:
+                                            _hm_tid = None
+                                            try:
+                                                _hm_tid = log_trade(sig_mnq_h)
+                                                if _hm_tid:
+                                                    logger.info(f'Trade logged: id={_hm_tid} MNQ {sig_mnq_h["direction"]} {sig_mnq_h["setup"]}')
                                                     _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
                                                                     sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
                                                                     sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
                                                                     sig_mnq_h.get('target'), None,
-                                                                    'BLOCKED_STOP_CAP', _hm_cap_msg[:200])
+                                                                    'EXECUTED', f'trade_id={_hm_tid}')
                                                 else:
-                                                    _hm_tid = None
-                                                    try:
-                                                        _hm_tid = log_trade(sig_mnq_h)
-                                                        if _hm_tid:
-                                                            logger.info(f'Trade logged: id={_hm_tid} MNQ {sig_mnq_h["direction"]} {sig_mnq_h["setup"]}')
-                                                            _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
-                                                                            sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
-                                                                            sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
-                                                                            sig_mnq_h.get('target'), None,
-                                                                            'EXECUTED', f'trade_id={_hm_tid}')
-                                                        else:
-                                                            logger.error('CRITICAL: Setup H log_trade() returned None — MNQ NOT in DB')
-                                                    except Exception as _lte_hm:
-                                                        logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — MNQ: {_lte_hm}', exc_info=True)
-                                                    if not _hm_tid:
-                                                        logger.critical('CRITICAL: Skipping Telegram for Setup H MNQ — log_trade returned None')
-                                                    else:
-                                                        try:
-                                                            msg = format_h_alert(sig_mnq_h) + _risk_footer
-                                                            send_telegram(msg)
-                                                        except Exception as _h_te_m:
-                                                            logger.error(f'Setup H send_telegram failed MNQ: {_h_te_m}')
-                                                        _execute_via_tradovate(sig_mnq_h, _hm_tid)
-                                                    logger.info(f'Setup H MNQ {sig_mnq_h["direction"].upper()} signal fired db_id={_hm_tid}')
-                                else:
-                                    logger.info('Setup H MNQ suppressed — opposite swing trade open')
+                                                    logger.error('CRITICAL: Setup H log_trade() returned None — MNQ NOT in DB')
+                                            except Exception as _lte_hm:
+                                                logger.error(f'CRITICAL: Setup H log_trade() EXCEPTION — MNQ: {_lte_hm}', exc_info=True)
+                                            if not _hm_tid:
+                                                logger.critical('CRITICAL: Skipping Telegram for Setup H MNQ — log_trade returned None')
+                                            else:
+                                                try:
+                                                    msg = format_h_alert(sig_mnq_h) + _risk_footer
+                                                    send_telegram(msg)
+                                                except Exception as _h_te_m:
+                                                    logger.error(f'Setup H send_telegram failed MNQ: {_h_te_m}')
+                                                _execute_via_tradovate(sig_mnq_h, _hm_tid)
+                                            logger.info(f'Setup H MNQ {sig_mnq_h["direction"].upper()} signal fired db_id={_hm_tid}')
                     except Exception as _hmnq:
                         logger.warning(f'Setup H MNQ error: {_hmnq}')
                 except Exception as e:
