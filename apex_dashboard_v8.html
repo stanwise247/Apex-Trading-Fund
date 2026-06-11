@@ -931,6 +931,7 @@ tr:hover td { background: var(--bg3); }
     <button class="nav-btn" onclick="switchTab('setups')">Setups</button>
     <button class="nav-btn" onclick="switchTab('system')">System</button>
     <button class="nav-btn" onclick="switchTab('diagnostics')">Diagnostics</button>
+    <button class="nav-btn" data-tab="marketintel" onclick="switchTab('marketintel')">Market Intel</button>
   </nav>
 
   <nav class="topnav" id="nav-research" style="display:none">
@@ -1073,6 +1074,30 @@ tr:hover td { background: var(--bg3); }
     <div class="diag-block"><div class="skeleton" style="height:120px"></div></div>
     <div class="diag-block"><div class="skeleton" style="height:120px"></div></div>
   </div>
+</div>
+
+<!-- ═══════════════════ MARKET INTEL ═══════════════════ -->
+<div class="page" id="page-marketintel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <div class="section-title" style="margin-bottom:0">Market Intelligence</div>
+    <div id="mi-refresh-time" style="font-family:var(--mono);font-size:10px;color:var(--text3)">Loading…</div>
+  </div>
+
+  <!-- MNQ + ES instrument cards -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" id="mi-instruments">
+    <div class="card"><div class="skeleton" style="height:160px"></div></div>
+    <div class="card"><div class="skeleton" style="height:160px"></div></div>
+  </div>
+
+  <!-- Session outlook + Meridian L3 row -->
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;margin-bottom:16px">
+    <div class="card" id="mi-session"><div class="skeleton" style="height:120px"></div></div>
+    <div class="card" id="mi-l3"><div class="skeleton" style="height:120px"></div></div>
+  </div>
+
+  <!-- Setup activity -->
+  <div class="section-title">Setup Activity</div>
+  <div class="tbl-wrap" id="mi-setup-activity"><div class="tbl-empty">Loading…</div></div>
 </div>
 
 <!-- ═══════════════════ RESEARCH — HEALTH ═══════════════════ -->
@@ -1358,7 +1383,8 @@ function switchTab(tab) {
   document.querySelectorAll('#nav-trading .nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + tab).classList.add('active');
   document.querySelectorAll('#nav-trading .nav-btn').forEach(b => {
-    if (b.textContent.trim().toLowerCase() === tab) b.classList.add('active');
+    const btnTab = b.dataset.tab || b.textContent.trim().toLowerCase();
+    if (btnTab === tab) b.classList.add('active');
   });
   _activeTab = tab;
   if (typeof _tradingTabSaved !== 'undefined') _tradingTabSaved = tab;
@@ -1366,6 +1392,7 @@ function switchTab(tab) {
     overview: loadOverview, tradovate: loadTradovate,
     trades: loadTrades, performance: loadPerformance,
     setups: loadSetups, system: loadSystem, diagnostics: loadDiagnostics,
+    marketintel: loadMarketIntel,
   };
   if (loaders[tab]) loaders[tab]();
 }
@@ -2521,6 +2548,358 @@ async function loadDiagnostics() {
 }
 
 // ═══════════════════════════════════════════════════════
+// MARKET INTELLIGENCE TAB
+// ═══════════════════════════════════════════════════════
+async function loadMarketIntel() {
+  const [regimeResp, meridianResp, marketResp, scanResp] = await Promise.all([
+    apiFetch('/api/apex/regime'),
+    apiFetch('/api/apex/meridian'),
+    apiFetch('/api/apex/market'),
+    apiFetch('/api/apex/scan'),
+  ]);
+
+  _renderMIInstruments(regimeResp, meridianResp, marketResp);
+  _renderMISession();
+  _renderMIL3(meridianResp);
+  _renderMISetupActivity(scanResp);
+
+  const ts = new Date().toUTCString().slice(17, 25);
+  document.getElementById('mi-refresh-time').textContent = `Updated ${ts} UTC · poll 30s`;
+}
+
+function _miRegimePill(name) {
+  const colors = {
+    TRENDING:      ['#1D4ED8','#DBEAFE'],
+    CHOPPY:        ['#92400E','#FEF3C7'],
+    MEAN_REVERTING:['#065F46','#D1FAE5'],
+    UNKNOWN:       ['var(--text3)','var(--bg3)'],
+  };
+  const [fg, bg] = colors[name] || colors.UNKNOWN;
+  return `<span style="font-family:var(--mono);font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:${bg};color:${fg};letter-spacing:.04em">${name||'—'}</span>`;
+}
+
+function _miBiasBadge(bias) {
+  const b = (bias||'').toLowerCase();
+  if (b === 'bullish') return `<span class="ticker-badge badge-bull">BULLISH</span>`;
+  if (b === 'bearish') return `<span class="ticker-badge badge-bear">BEARISH</span>`;
+  return `<span class="ticker-badge badge-neut">NEUTRAL</span>`;
+}
+
+function _miConfBar(conf) {
+  const pct = Math.round((conf || 0) * 100);
+  const col = pct >= 65 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
+  return `<div style="display:flex;align-items:center;gap:6px">
+    <div style="flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden">
+      <div style="width:${pct}%;height:100%;background:${col};border-radius:2px"></div>
+    </div>
+    <span style="font-family:var(--mono);font-size:10px;color:var(--text2);min-width:28px">${pct}%</span>
+  </div>`;
+}
+
+function _renderMIInstruments(regimeResp, meridianResp, marketResp) {
+  const el = document.getElementById('mi-instruments');
+  const syms = ['MNQ', 'ES'];
+  el.innerHTML = syms.map(sym => {
+    const reg  = regimeResp?.regime?.[sym] || {};
+    const l3   = meridianResp?.meridian_l3?.[sym] || {};
+    const mkt  = marketResp?.market?.[sym] || {};
+
+    const regime = reg.regime || 'UNKNOWN';
+    const conf   = reg.confidence || 0;
+    const hurst  = reg.hurst != null ? Number(reg.hurst).toFixed(3) : '—';
+    const autocorr = reg.autocorr != null ? Number(reg.autocorr).toFixed(3) : '—';
+
+    const price  = mkt.close != null ? fmtNum(mkt.close, 2) : '—';
+    const chg    = mkt.change != null ? mkt.change : null;
+    const pct    = mkt.pct != null ? mkt.pct : null;
+    const chgCls = chg == null ? '' : chg >= 0 ? 'pos' : 'neg';
+    const chgStr = chg == null ? '' : `${chg >= 0 ? '+' : ''}${fmtNum(chg,2)}  (${pct >= 0 ? '+' : ''}${fmtNum(pct,2)}%)`;
+
+    const bias   = mkt.bias || 'neutral';
+    const l3prob = l3.l3_prob_pct != null ? `${fmtNum(l3.l3_prob_pct,1)}%` : '—';
+    const mult   = l3.multiplier != null ? `${l3.multiplier}x` : '—';
+    const multColor = l3.multiplier >= 1.5 ? 'var(--green)' : l3.multiplier >= 1.25 ? 'var(--amber)' : l3.multiplier <= 0.75 ? 'var(--red)' : 'var(--text)';
+
+    return `<div class="card">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--text3);letter-spacing:.06em;margin-bottom:2px">${sym}</div>
+          <div style="font-family:var(--mono);font-size:24px;font-weight:600;color:var(--text);letter-spacing:-.02em">${price}</div>
+          <div class="ticker-change ${chgCls}" style="font-size:11px">${chgStr}</div>
+        </div>
+        <div style="text-align:right">
+          ${_miBiasBadge(bias)}
+          <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-top:4px">4h EMA20 bias</div>
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Regime</span>
+          ${_miRegimePill(regime)}
+        </div>
+        <div style="margin-bottom:8px">${_miConfBar(conf)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div>
+            <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Conf</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--text)">${fmtNum(conf,3)}</div>
+          </div>
+          <div>
+            <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Hurst</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--text)">${hurst}</div>
+          </div>
+          <div>
+            <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Autocorr</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--text)">${autocorr}</div>
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Meridian L3 Prob</div>
+            <div style="font-family:var(--mono);font-size:16px;font-weight:600;color:var(--text)">${l3prob}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Position Mult</div>
+            <div style="font-family:var(--mono);font-size:16px;font-weight:600;color:${multColor}">${mult}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _renderMISession() {
+  const el = document.getElementById('mi-session');
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  const utcStr = `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')} UTC`;
+
+  // CME Globex active: 13:00-21:00 UTC roughly (08:00-16:00 ET RTH + pre/post)
+  // Apex active trading: roughly 13:00-20:00 UTC (09:00-16:00 ET) for ES/MNQ
+  const dayOfWeek = now.getUTCDay(); // 0=Sun, 6=Sat
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const sessionActive = !isWeekend && utcH >= 13 && utcH < 20;
+  const premarketActive = !isWeekend && utcH >= 9 && utcH < 13;
+  const afternoonActive = !isWeekend && utcH >= 20 && utcH < 22;
+
+  let sessionLabel, sessionColor, sessionDetail;
+  if (isWeekend) {
+    sessionLabel = 'WEEKEND'; sessionColor = 'var(--text3)';
+    sessionDetail = 'Markets closed';
+  } else if (premarketActive) {
+    sessionLabel = 'PRE-MARKET'; sessionColor = 'var(--amber)';
+    const minToOpen = (13 - utcH) * 60 - utcM;
+    sessionDetail = `Opens in ${Math.floor(minToOpen/60)}h ${minToOpen%60}m`;
+  } else if (sessionActive) {
+    sessionLabel = 'ACTIVE'; sessionColor = 'var(--green)';
+    const minToClose = (20 - utcH) * 60 - utcM;
+    sessionDetail = `Closes in ${Math.floor(minToClose/60)}h ${minToClose%60}m`;
+  } else if (afternoonActive) {
+    sessionLabel = 'POST-MARKET'; sessionColor = 'var(--text3)';
+    sessionDetail = 'Afternoon session';
+  } else {
+    sessionLabel = 'OVERNIGHT'; sessionColor = 'var(--text3)';
+    const hoursToOpen = utcH < 9 ? 9 - utcH : 33 - utcH;
+    sessionDetail = `Opens ~${hoursToOpen}h`;
+  }
+
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  el.innerHTML = `
+    <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Session</div>
+    <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${sessionColor};margin-bottom:4px">${sessionLabel}</div>
+    <div style="font-family:var(--mono);font-size:11px;color:var(--text2);margin-bottom:10px">${sessionDetail}</div>
+    <div style="border-top:1px solid var(--border);padding-top:8px">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${dayNames[dayOfWeek]}  ${utcStr}</div>
+      <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-top:4px">Active window: 13:00–20:00 UTC</div>
+    </div>`;
+}
+
+function _renderMIL3(meridianResp) {
+  const el = document.getElementById('mi-l3');
+  if (!meridianResp?.ok) {
+    el.innerHTML = `<div class="card-label">Meridian L3</div><div style="color:var(--text3);font-family:var(--mono);font-size:11px">Unavailable</div>`;
+    return;
+  }
+  const syms = ['MNQ', 'ES'];
+  el.innerHTML = `
+    <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Meridian L3 — Trending Probability</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${syms.map(sym => {
+        const l3 = meridianResp.meridian_l3?.[sym] || {};
+        const prob = l3.l3_prob != null ? l3.l3_prob : null;
+        const pct  = prob != null ? Math.round(prob * 100) : null;
+        const mult = l3.multiplier != null ? l3.multiplier : null;
+        const auc  = l3.model_auc != null ? fmtNum(l3.model_auc, 4) : '—';
+        const mode = l3.deploy_mode || '—';
+        const loaded = l3.model_loaded;
+
+        const barColor = pct == null ? 'var(--text3)' : pct >= 65 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
+        const multColor = mult == null ? 'var(--text)' : mult >= 1.5 ? 'var(--green)' : mult >= 1.25 ? 'var(--amber)' : mult <= 0.75 ? 'var(--red)' : 'var(--text)';
+        const probStr = pct != null ? `${pct}%` : '—';
+        const multStr = mult != null ? `${mult}×` : '—';
+
+        return `<div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--text3);margin-bottom:6px">${sym} ${loaded ? '' : '<span style="color:var(--red)">⚠ model not loaded</span>'}</div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+            <span style="font-family:var(--mono);font-size:26px;font-weight:700;color:${barColor}">${probStr}</span>
+            <span style="font-family:var(--mono);font-size:13px;color:${multColor}">→ ${multStr}</span>
+          </div>
+          <div style="height:5px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:8px">
+            ${pct != null ? `<div style="width:${pct}%;height:100%;background:${barColor};border-radius:3px"></div>` : ''}
+          </div>
+          <div style="display:flex;gap:12px">
+            <div><span style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">AUC </span><span style="font-family:var(--mono);font-size:10px;color:var(--text2)">${auc}</span></div>
+            <div><span style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">Mode </span><span style="font-family:var(--mono);font-size:10px;color:var(--text2)">${mode}</span></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function _renderMISetupActivity(scanResp) {
+  const el = document.getElementById('mi-setup-activity');
+  if (!scanResp?.ok) {
+    el.innerHTML = `<div class="tbl-empty">Scan data unavailable</div>`;
+    return;
+  }
+
+  // Flatten all signal sources
+  const rows = [];
+
+  // A/B/C/E — results[]
+  for (const r of (scanResp.results || [])) {
+    rows.push({
+      setup:    r.setup,
+      symbol:   r.symbol,
+      direction:r.direction,
+      state:    r.valid ? 'SIGNAL READY' : (r.readiness_score >= 60 ? 'SCANNING' : 'DEVELOPING'),
+      score:    r.readiness_score || 0,
+      failed:   r.failed_at || (r.valid ? '—' : ''),
+      next:     r.next_gate_description || '',
+    });
+  }
+
+  // D — fvg_signals[]
+  for (const r of (scanResp.fvg_signals || [])) {
+    rows.push({
+      setup:    r.setup || 'D',
+      symbol:   r.symbol,
+      direction:r.direction,
+      state:    r.signal_state || (r.valid ? 'SIGNAL READY' : 'DEVELOPING'),
+      score:    r.readiness_score || 0,
+      failed:   r.failed_at || (r.valid ? '—' : ''),
+      next:     r.next_gate_description || '',
+    });
+  }
+
+  // F — setup_f_predictions[]
+  for (const r of (scanResp.setup_f_predictions || [])) {
+    const prob = r.probability || 0;
+    const lt   = r.long_threshold || 0.65;
+    const st   = r.short_threshold || 0.35;
+    const dir  = prob > lt ? 'long' : prob < st ? 'short' : 'neutral';
+    rows.push({
+      setup:    'F_ml_prob',
+      symbol:   r.symbol || '—',
+      direction:dir,
+      state:    prob > lt || prob < st ? 'SIGNAL READY' : 'SCANNING',
+      score:    r.readiness_score || 0,
+      failed:   '—',
+      next:     r.next_gate_description || '',
+    });
+  }
+
+  // H — setup_h_data[]
+  for (const r of (scanResp.setup_h_data || [])) {
+    const label = r.signal_state_label || (r.valid ? 'SIGNAL READY' : 'DEVELOPING');
+    rows.push({
+      setup:    'H_vwap_rev',
+      symbol:   r.symbol || '—',
+      direction:r.signal_state === 'ABOVE_UPPER' ? 'short' : r.signal_state === 'BELOW_LOWER' ? 'long' : '—',
+      state:    label,
+      score:    r.readiness_score || 0,
+      failed:   r.failed_at || '—',
+      next:     r.next_gate_description || '',
+    });
+  }
+
+  // I — setup_i_data[]
+  for (const r of (scanResp.setup_i_data || [])) {
+    rows.push({
+      setup:    'I_math_alpha',
+      symbol:   r.symbol || '—',
+      direction:r.direction || '—',
+      state:    r.signal_state_label || 'DEVELOPING',
+      score:    r.readiness_score || 0,
+      failed:   r.failed_at || '—',
+      next:     r.next_gate_description || '',
+    });
+  }
+
+  // J — setup_j_data[]
+  for (const r of (scanResp.setup_j_data || [])) {
+    rows.push({
+      setup:    'J_value_area',
+      symbol:   r.symbol || '—',
+      direction:r.direction || '—',
+      state:    r.signal_state_label || r.status || 'DEVELOPING',
+      score:    r.readiness_score || 0,
+      failed:   r.failed_at || '—',
+      next:     r.next_gate_description || '',
+    });
+  }
+
+  // Sort: signal ready first, then by score desc
+  rows.sort((a, b) => {
+    const aReady = a.state.includes('READY') ? 1 : 0;
+    const bReady = b.state.includes('READY') ? 1 : 0;
+    if (aReady !== bReady) return bReady - aReady;
+    return b.score - a.score;
+  });
+
+  if (!rows.length) {
+    el.innerHTML = `<div class="tbl-empty">No setup data</div>`;
+    return;
+  }
+
+  const stateColor = s => {
+    const l = (s||'').toUpperCase();
+    if (l.includes('READY'))      return 'var(--green)';
+    if (l.includes('SCAN'))       return 'var(--amber)';
+    if (l.includes('DEVELOP'))    return 'var(--text2)';
+    if (l.includes('OFF'))        return 'var(--text3)';
+    return 'var(--text3)';
+  };
+
+  const scoreBar = score => {
+    const col = score >= 100 ? 'var(--green)' : score >= 60 ? 'var(--amber)' : 'var(--text3)';
+    return `<div style="display:flex;align-items:center;gap:5px">
+      <div style="width:50px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden">
+        <div style="width:${Math.min(score,100)}%;height:100%;background:${col};border-radius:2px"></div>
+      </div>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text2)">${score}%</span>
+    </div>`;
+  };
+
+  el.innerHTML = `<table style="width:100%">
+    <thead><tr>
+      <th>Setup</th><th>Symbol</th><th>Dir</th><th>State</th><th>Readiness</th><th>Blocked At</th><th>Next Gate</th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(r => `<tr>
+        <td><span style="font-family:var(--mono);font-size:11px">${r.setup}</span></td>
+        <td><span style="font-family:var(--mono);font-size:11px">${r.symbol}</span></td>
+        <td>${dirPill(r.direction)}</td>
+        <td><span style="font-family:var(--mono);font-size:10px;font-weight:600;color:${stateColor(r.state)}">${r.state}</span></td>
+        <td>${scoreBar(r.score)}</td>
+        <td style="font-family:var(--mono);font-size:10px;color:var(--text3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.failed||'—'}</td>
+        <td style="font-family:var(--mono);font-size:10px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.next}">${r.next||'—'}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+// ═══════════════════════════════════════════════════════
 // AUTO-REFRESH INTERVALS
 // ═══════════════════════════════════════════════════════
 function startRefreshLoop() {
@@ -2540,6 +2919,8 @@ function startRefreshLoop() {
   setInterval(() => { if (_activeTab === 'diagnostics') loadDiagnostics(); }, 60000);
   // Meridian L3: 30s (background, always)
   setInterval(() => fetchMeridian(), 30000);
+  // Market Intel: 30s
+  setInterval(() => { if (_activeTab === 'marketintel') loadMarketIntel(); }, 30000);
 }
 
 // ═══════════════════════════════════════════════════════
