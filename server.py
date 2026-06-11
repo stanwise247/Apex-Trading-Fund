@@ -6103,6 +6103,62 @@ def apex_meridian():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+@app.route('/api/apex/mtf', methods=['GET'])
+def apex_mtf():
+    """Multi-timeframe EMA20 bias for MNQ and ES.
+    Returns BULLISH/BEARISH for 1min/5min/15min/30min/1hr/4hr per symbol.
+    30min is resampled from 5min bars; all others queried directly.
+    """
+    try:
+        import pandas as _pd_mtf
+        from market_structure import load_bars as _lb_mtf
+
+        # (label, db_timeframe, resample_rule_or_None, bars_to_load)
+        _TFS = [
+            ('1min',  '1min',   None,    120),
+            ('5min',  '5min',   None,    100),
+            ('15min', '15min',  None,     80),
+            ('30min', '5min',   '30min', 400),   # resample 5min → 30min
+            ('1hr',   '1hour',  None,     60),
+            ('4hr',   '4hour',  None,     50),
+        ]
+
+        def _ema20_bias(df: '_pd_mtf.DataFrame') -> str:
+            closes = df['close'].astype(float)
+            ema20  = closes.ewm(span=20, adjust=False).iloc[-1]
+            return 'BULLISH' if float(closes.iloc[-1]) > float(ema20) else 'BEARISH'
+
+        result = {}
+        for sym in ('MNQ', 'ES'):
+            sym_data = {}
+            for label, db_tf, resample, n in _TFS:
+                try:
+                    df = _lb_mtf(sym, db_tf, limit=n)
+                    if resample:
+                        df = df[['open', 'high', 'low', 'close', 'volume']].resample(resample).agg(
+                            {'open': 'first', 'high': 'max', 'low': 'min',
+                             'close': 'last', 'volume': 'sum'}
+                        ).dropna(subset=['close'])
+                    if len(df) < 5:
+                        sym_data[label] = {'bias': 'UNKNOWN', 'error': 'insufficient bars'}
+                        continue
+                    bias = _ema20_bias(df)
+                    closes = df['close'].astype(float)
+                    ema20_val = float(closes.ewm(span=20, adjust=False).iloc[-1])
+                    sym_data[label] = {
+                        'bias':  bias,
+                        'close': round(float(closes.iloc[-1]), 2),
+                        'ema20': round(ema20_val, 2),
+                    }
+                except Exception as _tf_e:
+                    sym_data[label] = {'bias': 'UNKNOWN', 'error': str(_tf_e)}
+            result[sym] = sym_data
+
+        return jsonify({'ok': True, 'mtf': result, 'timeframes': [t[0] for t in _TFS]})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/apex/test_log', methods=['POST'])
 def apex_test_log():
     """
