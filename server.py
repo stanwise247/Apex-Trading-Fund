@@ -2855,8 +2855,18 @@ def background_scheduler():
                                                 'BLOCKED_REGIME', 'Setup J regime gate')
                                 continue
                             logger.info(f'[J-pre] Setup J {_sym_j}: regime gate — OK')
+                            try:
+                                from setup_j_value_area import get_setup_j_state as _gjs
+                                _js = _gjs(_sym_j)
+                                _j_scan_note = (
+                                    f'vah={_js.get("vah")} val={_js.get("val")} '
+                                    f'bias={_js.get("htf_bias")} '
+                                    f'session={_js.get("in_session")}'
+                                )
+                            except Exception:
+                                _j_scan_note = 'Setup J entering scan'
                             _write_scan_log(_sym_j, 'J_value_area', None, '', None, None, None, None,
-                                            'SCANNING', 'Setup J entering scan')
+                                            'SCANNING', _j_scan_note)
 
                             # ── [J-1/6] Scan ─────────────────────────────────────
                             logger.info(f'[J-1/6] Setup J {_sym_j}: scanning...')
@@ -3024,11 +3034,12 @@ def background_scheduler():
                             sig_d = scan_setup_d(_sym_d, _now_utc_d)
                             if not sig_d:
                                 continue
+                            # CANDIDATE = FVG found, downstream gates (calendar/concurrent/stop_cap) still pending
                             _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
                                             sig_d.get('fvg_score'), sig_d.get('direction', ''),
                                             sig_d.get('entry'), sig_d.get('stop'),
                                             sig_d.get('target'), sig_d.get('target2'),
-                                            'SIGNAL', 'scan_setup_d generated')
+                                            'CANDIDATE', 'scan_setup_d generated')
                             if SIGNAL_FILTERS['max_concurrent_per_instrument']:
                                 _f1d_has, _f1d_id = _has_open_trade_on_instrument(_sym_d)
                                 if _f1d_has:
@@ -3080,6 +3091,12 @@ def background_scheduler():
                                                 sig_d.get('target'), sig_d.get('target2'),
                                                 'BLOCKED_STOP_CAP', _d_cap_msg[:200])
                                 continue
+                            # All gates passed — log SIGNAL now
+                            _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
+                                            sig_d.get('fvg_score'), sig_d.get('direction', ''),
+                                            sig_d.get('entry'), sig_d.get('stop'),
+                                            sig_d.get('target'), sig_d.get('target2'),
+                                            'SIGNAL', 'all gates passed — entering')
                             _d_tid = None
                             try:
                                 _d_tid = _log_trade(sig_d)
@@ -3159,8 +3176,21 @@ def background_scheduler():
                                                 'BLOCKED_REGIME', 'Setup H ES regime gate')
                                 sig_es = None
                             else:
+                                try:
+                                    from setup_h_vwap import get_h_state as _gh_es
+                                    _hs_es = _gh_es('ES')
+                                    _h_scan_note_es = (
+                                        f'state={_hs_es.get("signal_state","?")} '
+                                        f'price={_hs_es.get("price")} '
+                                        f'upper={_hs_es.get("upper_band")} '
+                                        f'lower={_hs_es.get("lower_band")} '
+                                        f'vwap={_hs_es.get("vwap")} '
+                                        f'bias={_hs_es.get("htf_bias")}'
+                                    )
+                                except Exception:
+                                    _h_scan_note_es = 'Setup H ES entering scanner'
                                 _write_scan_log('ES', 'H_vwap_reversal', None, '', None, None, None, None,
-                                                'SCANNING', 'Setup H ES entering scanner')
+                                                'SCANNING', _h_scan_note_es)
                                 sig_es = scan_setup_h('ES', _now_utc, paper_only=False)
                             logger.info(
                                 f'scan_setup_h ES returned: '
@@ -3252,8 +3282,21 @@ def background_scheduler():
                                                 'BLOCKED_REGIME', 'Setup H MNQ regime gate')
                                 sig_mnq_h = None
                             else:
+                                try:
+                                    from setup_h_vwap import get_h_state as _gh_mnq
+                                    _hs_mnq = _gh_mnq('MNQ')
+                                    _h_scan_note_mnq = (
+                                        f'state={_hs_mnq.get("signal_state","?")} '
+                                        f'price={_hs_mnq.get("price")} '
+                                        f'upper={_hs_mnq.get("upper_band")} '
+                                        f'lower={_hs_mnq.get("lower_band")} '
+                                        f'vwap={_hs_mnq.get("vwap")} '
+                                        f'bias={_hs_mnq.get("htf_bias")}'
+                                    )
+                                except Exception:
+                                    _h_scan_note_mnq = 'Setup H MNQ entering scanner'
                                 _write_scan_log('MNQ', 'H_vwap_reversal', None, '', None, None, None, None,
-                                                'SCANNING', 'Setup H MNQ entering scanner')
+                                                'SCANNING', _h_scan_note_mnq)
                                 sig_mnq_h = scan_setup_h('MNQ', _now_utc, paper_only=False)
                             logger.info(
                                 f'scan_setup_h MNQ returned: '
@@ -6123,10 +6166,8 @@ def apex_mtf():
             ('4hr',   '4hour',  None,     50),
         ]
 
-        def _ema20_bias(df: '_pd_mtf.DataFrame') -> str:
-            closes = df['close'].astype(float)
-            ema20  = closes.ewm(span=20, adjust=False).iloc[-1]
-            return 'BULLISH' if float(closes.iloc[-1]) > float(ema20) else 'BEARISH'
+        def _ema20(closes):
+            return closes.ewm(span=20, adjust=False).mean()
 
         result = {}
         for sym in ('MNQ', 'ES'):
@@ -6142,12 +6183,14 @@ def apex_mtf():
                     if len(df) < 5:
                         sym_data[label] = {'bias': 'UNKNOWN', 'error': 'insufficient bars'}
                         continue
-                    bias = _ema20_bias(df)
-                    closes = df['close'].astype(float)
-                    ema20_val = float(closes.ewm(span=20, adjust=False).iloc[-1])
+                    closes    = df['close'].astype(float)
+                    ema_series = _ema20(closes)
+                    ema20_val  = float(ema_series.iloc[-1])
+                    last_close = float(closes.iloc[-1])
+                    bias = 'BULLISH' if last_close > ema20_val else 'BEARISH'
                     sym_data[label] = {
                         'bias':  bias,
-                        'close': round(float(closes.iloc[-1]), 2),
+                        'close': round(last_close, 2),
                         'ema20': round(ema20_val, 2),
                     }
                 except Exception as _tf_e:
