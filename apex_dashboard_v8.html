@@ -1083,23 +1083,35 @@ tr:hover td { background: var(--bg3); }
     <div id="mi-refresh-time" style="font-family:var(--mono);font-size:10px;color:var(--text3)">Loading…</div>
   </div>
 
-  <!-- MNQ + ES instrument cards -->
+  <!-- ① BIG PICTURE REGIME — MNQ + ES instrument cards -->
+  <div class="section-title" style="margin-top:0">Regime</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" id="mi-instruments">
     <div class="card"><div class="skeleton" style="height:160px"></div></div>
     <div class="card"><div class="skeleton" style="height:160px"></div></div>
   </div>
 
-  <!-- Session outlook + Meridian L3 row -->
+  <!-- ② MTF BIAS — all six timeframes -->
+  <div class="section-title">Multi-Timeframe Bias <span style="font-family:var(--mono);font-size:9px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">EMA20</span></div>
+  <div class="card" id="mi-mtf" style="padding:14px 16px;margin-bottom:16px"><div class="skeleton" style="height:60px"></div></div>
+
+  <!-- ③ HEADLINE FORECAST — directional predictions per horizon -->
+  <div class="section-title">Directional Forecast <span style="font-family:var(--mono);font-size:9px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">Meridian Direction Model · calibrated probability</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" id="mi-forecast">
+    <div class="card"><div class="skeleton" style="height:160px"></div></div>
+    <div class="card"><div class="skeleton" style="height:160px"></div></div>
+  </div>
+
+  <!-- ④ LIVE ACCURACY TRACKER -->
+  <div class="section-title">Live Forecast Accuracy <span style="font-family:var(--mono);font-size:9px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">last 50 resolved predictions per horizon</span></div>
+  <div class="card" id="mi-accuracy" style="padding:14px 16px;margin-bottom:16px"><div class="skeleton" style="height:50px"></div></div>
+
+  <!-- ⑤ MERIDIAN L3 + SESSION -->
   <div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;margin-bottom:16px">
     <div class="card" id="mi-session"><div class="skeleton" style="height:120px"></div></div>
     <div class="card" id="mi-l3"><div class="skeleton" style="height:120px"></div></div>
   </div>
 
-  <!-- Multi-timeframe bias -->
-  <div class="section-title" style="margin-top:4px">Multi-Timeframe Bias  <span style="font-family:var(--mono);font-size:9px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">EMA20 · close vs EMA20</span></div>
-  <div class="card" id="mi-mtf" style="padding:14px 16px;margin-bottom:16px"><div class="skeleton" style="height:60px"></div></div>
-
-  <!-- Setup activity -->
+  <!-- ⑥ SETUP ACTIVITY -->
   <div class="section-title">Setup Activity</div>
   <div class="tbl-wrap" id="mi-setup-activity"><div class="tbl-empty">Loading…</div></div>
 </div>
@@ -2555,18 +2567,21 @@ async function loadDiagnostics() {
 // MARKET INTELLIGENCE TAB
 // ═══════════════════════════════════════════════════════
 async function loadMarketIntel() {
-  const [regimeResp, meridianResp, marketResp, scanResp, mtfResp] = await Promise.all([
+  const [regimeResp, meridianResp, marketResp, scanResp, mtfResp, forecastResp] = await Promise.all([
     apiFetch('/api/apex/regime'),
     apiFetch('/api/apex/meridian'),
     apiFetch('/api/apex/market'),
     apiFetch('/api/apex/scan'),
     apiFetch('/api/apex/mtf'),
+    apiFetch('/api/apex/forecast'),
   ]);
 
   _renderMIInstruments(regimeResp, meridianResp, marketResp);
+  _renderMIMTF(mtfResp);
+  _renderMIForecast(forecastResp);
+  _renderMIAccuracy(forecastResp);
   _renderMISession();
   _renderMIL3(meridianResp);
-  _renderMIMTF(mtfResp);
   _renderMISetupActivity(scanResp);
 
   const ts = new Date().toUTCString().slice(17, 25);
@@ -2796,6 +2811,141 @@ function _renderMIMTF(mtfResp) {
       <div style="display:flex;gap:6px;flex-wrap:wrap">${badges}</div>
     </div>`;
   }).join('');
+}
+
+// ── Directional Forecast Cards ──────────────────────────────────────────────
+function _renderMIForecast(forecastResp) {
+  const el = document.getElementById('mi-forecast');
+  const syms = ['MNQ', 'ES'];
+  const HORIZONS = ['30min', '1hr', '4hr'];
+
+  function _forecastBg(prob, direction) {
+    const edge = Math.abs((prob || 0.5) - 0.5) * 2;   // 0 = near 50%, 1 = max
+    const alpha = Math.round((0.08 + edge * 0.72) * 100) / 100;
+    if (edge < 0.05) return ['var(--bg3)', 'var(--text3)', 'var(--text3)'];
+    return direction === 'UP'
+      ? [`rgba(52,199,89,${alpha})`, 'var(--green)', `rgba(52,199,89,0.3)`]
+      : [`rgba(255,59,48,${alpha})`, 'var(--red)',   `rgba(255,59,48,0.3)`];
+  }
+
+  function _leanArrow(leans) {
+    if (leans === 'UP')      return `<span style="color:var(--green)">▲</span>`;
+    if (leans === 'DOWN')    return `<span style="color:var(--red)">▼</span>`;
+    return `<span style="color:var(--text3)">—</span>`;
+  }
+
+  function _horizonCard(hData, horizon) {
+    if (!hData || !hData.deployed) {
+      const reason = (hData?.reason || 'no_model').replace(/_/g, ' ');
+      return `<div style="background:var(--bg3);border-radius:8px;padding:10px 12px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${horizon}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3);font-style:italic">Insufficient edge</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-top:2px">${reason}</div>
+      </div>`;
+    }
+    const prob = hData.probability || 0.5;
+    const pct  = Math.round(prob * 100);
+    const dir  = hData.direction || 'UP';
+    const auc  = hData.auc ? hData.auc.toFixed(3) : '—';
+    const [bg, fg, border] = _forecastBg(prob, dir);
+    const breakdownHtml = _buildBreakdownHtml(hData.breakdown || {});
+    return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:10px 12px">
+      <div style="font-family:var(--mono);font-size:9px;color:${fg};text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;opacity:0.8">${horizon}</div>
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">
+        <span style="font-family:var(--mono);font-size:20px;font-weight:700;color:${fg}">${dir === 'UP' ? '▲' : '▼'} ${pct}%</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:9px;color:${fg};opacity:0.7;margin-bottom:8px">AUC ${auc}</div>
+      ${breakdownHtml}
+    </div>`;
+  }
+
+  function _buildBreakdownHtml(bd) {
+    if (!bd || !Object.keys(bd).length) return '';
+    const items = [
+      { key: 'regime',        label: 'Regime',    val: bd.regime?.label,       leans: bd.regime?.leans },
+      { key: 'htf_bias',      label: 'HTF bias',  val: bd.htf_bias?.label,     leans: bd.htf_bias?.leans },
+      { key: 'mtf_alignment', label: 'MTF',       val: bd.mtf_alignment?.label, leans: bd.mtf_alignment?.leans },
+      { key: 'vwap_pos',      label: 'VWAP',      val: bd.vwap_pos?.label,     leans: bd.vwap_pos?.leans },
+      { key: 'momentum',      label: 'Momentum',  val: bd.momentum?.label,     leans: bd.momentum?.leans },
+    ].filter(x => x.val);
+    if (!items.length) return '';
+    return `<div style="border-top:1px solid rgba(128,128,128,0.15);padding-top:6px;margin-top:2px">
+      ${items.map(it => `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+        <span style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">${it.label}</span>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text2);display:flex;align-items:center;gap:3px">${_leanArrow(it.leans)}&nbsp;${it.val}</span>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  if (!forecastResp?.ok) {
+    el.innerHTML = syms.map(sym => `
+      <div class="card">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);margin-bottom:12px">${sym}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3);font-style:italic">Forecast unavailable — model training in progress</div>
+      </div>`).join('');
+    return;
+  }
+
+  el.innerHTML = syms.map(sym => {
+    const symFc = forecastResp.forecast?.[sym] || {};
+    return `<div class="card">
+      <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);margin-bottom:12px">${sym} — Directional Outlook</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${HORIZONS.map(h => _horizonCard(symFc[h], h)).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Live Accuracy Tracker ────────────────────────────────────────────────────
+function _renderMIAccuracy(forecastResp) {
+  const el = document.getElementById('mi-accuracy');
+  if (!forecastResp?.ok || !forecastResp?.accuracy) {
+    el.innerHTML = `<span style="font-family:var(--mono);font-size:11px;color:var(--text3)">Accuracy data unavailable — requires resolved predictions</span>`;
+    return;
+  }
+  const HORIZONS = ['30min', '1hr', '4hr'];
+  const syms     = ['MNQ', 'ES'];
+  const accData  = forecastResp.accuracy || {};
+
+  const rows = syms.flatMap(sym =>
+    HORIZONS.map(h => {
+      const a = accData[sym]?.[h];
+      return { sym, h, acc: a };
+    })
+  );
+
+  const hasAny = rows.some(r => r.acc !== null && r.acc !== undefined);
+  if (!hasAny) {
+    el.innerHTML = `<span style="font-family:var(--mono);font-size:11px;color:var(--text3)">No resolved predictions yet — accuracy builds after first 30min cycle</span>`;
+    return;
+  }
+
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+    ${HORIZONS.map(h => `
+      <div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">${h}</div>
+        ${syms.map(sym => {
+          const a = accData[sym]?.[h];
+          if (!a) return `<div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:4px">${sym} — no data</div>`;
+          const pct    = a.pct || 0;
+          const col    = pct >= 55 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
+          const n      = a.total || 0;
+          return `<div style="margin-bottom:6px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--text2)">${sym}</span>
+              <span style="font-family:var(--mono);font-size:10px;font-weight:600;color:${col}">${pct}%</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <div style="flex:1;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden">
+                <div style="width:${pct}%;height:100%;background:${col};border-radius:2px"></div>
+              </div>
+              <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">n=${n}</span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`).join('')}
+  </div>`;
 }
 
 function _renderMISetupActivity(scanResp) {

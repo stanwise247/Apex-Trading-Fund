@@ -1963,6 +1963,59 @@ def background_scheduler():
                 except Exception as _hye:
                     logger.error(f'Research Division hypothesis engine failed: {_hye}')
 
+        # ── Meridian Direction — resolve predictions every 5 min ──────
+        try:
+            import meridian_direction as _mdir_res
+            _mdir_res.resolve_predictions()
+        except Exception as _mdir_res_e:
+            logger.debug(f'meridian_direction resolve_predictions: {_mdir_res_e}')
+
+        # ── Meridian Direction — log predictions every 30 min ──────
+        if not hasattr(background_scheduler, '_last_mdir_log') or \
+                now - background_scheduler._last_mdir_log >= 1800:
+            background_scheduler._last_mdir_log = now
+            try:
+                import meridian_direction as _mdir_log
+                for _mdir_sym in ('MNQ', 'ES'):
+                    _mdir_preds = _mdir_log.predict_all(_mdir_sym)
+                    # Get current price for logging
+                    try:
+                        _mdir_conn = _db.connect()
+                        _mdir_pr = _mdir_conn.execute(
+                            'SELECT close FROM ohlcv WHERE symbol=? AND timeframe=? ORDER BY ts DESC LIMIT 1',
+                            (_mdir_sym, '5min')
+                        ).fetchone()
+                        _mdir_conn.close()
+                        _mdir_price = float(_mdir_pr[0]) if _mdir_pr else 0.0
+                    except Exception:
+                        _mdir_price = 0.0
+                    for _mdir_h, _mdir_hr in _mdir_preds.items():
+                        if _mdir_hr.get('deployed') and _mdir_price > 0:
+                            _mdir_log.log_prediction(
+                                _mdir_sym, _mdir_h,
+                                _mdir_hr['direction'], _mdir_hr['probability'], _mdir_price
+                            )
+            except Exception as _mdir_log_e:
+                logger.debug(f'meridian_direction log_prediction: {_mdir_log_e}')
+
+        # ── Meridian Direction — weekly retrain (Sunday 03:00 UTC) ──
+        _now_mdir = datetime.now(timezone.utc)
+        if _now_mdir.weekday() == 6 and _now_mdir.hour == 3:
+            if not hasattr(background_scheduler, '_last_mdir_retrain_day') or \
+                    background_scheduler._last_mdir_retrain_day != _today_utc:
+                background_scheduler._last_mdir_retrain_day = _today_utc
+                try:
+                    import meridian_direction as _mdir_rt
+                    _mdir_report = _mdir_rt.retrain_all()
+                    deployed = [f'{s}/{h}' for s, hrs in _mdir_report.items()
+                                for h, r in hrs.items() if r.get('deployed')]
+                    send_telegram(
+                        f'[MERIDIAN DIR] Weekly retrain complete\n'
+                        f'Deployed: {", ".join(deployed) or "none"}'
+                    )
+                except Exception as _mdir_rt_e:
+                    logger.error(f'Meridian Direction retrain failed: {_mdir_rt_e}')
+
         # ── Meridian L3 — weekly retrain (Sunday 02:00 UTC) ──
         _now_l3 = datetime.now(timezone.utc)
         if _now_l3.weekday() == 6 and _now_l3.hour == 2:
@@ -4170,6 +4223,20 @@ def _startup():
 
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
+
+    def _mdir_startup_load():
+        """Load (or trigger first-time train) of Meridian Direction models at startup."""
+        try:
+            import meridian_direction as _mdir_su
+            for _su_sym in ('MNQ', 'ES'):
+                if not _mdir_su.load_models(_su_sym):
+                    logger.info(f'Meridian Direction: no model for {_su_sym} — triggering first-time train')
+                    _mdir_su.train(_su_sym)
+        except Exception as _mdir_su_e:
+            logger.warning(f'Meridian Direction startup load: {_mdir_su_e}')
+
+    if _db.IS_POSTGRES:
+        threading.Thread(target=_mdir_startup_load, daemon=True).start()
     logger.info(f'  Daily loss limit:  ${DAILY_LOSS_LIMIT}')
     logger.info(f'  Portfolio heat limit: max {MAX_PORTFOLIO_HEAT} concurrent trades')
     logger.info(f'  Paper-only setups (no Tradovate execution): '
@@ -6199,6 +6266,35 @@ def apex_mtf():
 
         return jsonify({'ok': True, 'mtf': result, 'timeframes': [t[0] for t in _TFS]})
     except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/apex/forecast', methods=['GET'])
+def apex_forecast():
+    """
+    Meridian Direction Model — directional price forecast.
+    Returns per symbol, per validated horizon: direction, calibrated probability,
+    contributing signal breakdown, and live accuracy stats.
+    Horizons that did not pass AUC gate return deployed=false, reason='insufficient_edge'.
+    """
+    try:
+        import meridian_direction as _mdir
+        result   = {}
+        accuracy = {}
+        for sym in ('MNQ', 'ES'):
+            result[sym]   = _mdir.predict_all(sym)
+            accuracy[sym] = {}
+            for horizon in _mdir.HORIZONS:
+                acc = _mdir.get_accuracy_stats(sym, horizon, n=50)
+                accuracy[sym][horizon] = acc
+        return jsonify({
+            'ok':       True,
+            'ts':       time.time(),
+            'forecast': result,
+            'accuracy': accuracy,
+        })
+    except Exception as e:
+        logger.warning(f'apex_forecast error: {e}')
         return jsonify({'ok': False, 'error': str(e)})
 
 

@@ -535,6 +535,21 @@ _PG_MIGRATIONS = [
     'ALTER TABLE research_decisions ADD COLUMN IF NOT EXISTS reason TEXT',
     # Add contracts column to apex_trades if missing (added for Tradovate close sizing)
     'ALTER TABLE apex_trades ADD COLUMN IF NOT EXISTS contracts INTEGER DEFAULT 1',
+    # Meridian Direction — live accuracy tracker
+    """CREATE TABLE IF NOT EXISTS direction_forecast_log (
+        id           SERIAL PRIMARY KEY,
+        symbol       TEXT NOT NULL,
+        horizon      TEXT NOT NULL,
+        direction    TEXT NOT NULL,
+        probability  REAL NOT NULL,
+        price_at_log REAL NOT NULL,
+        predicted_at TIMESTAMPTZ NOT NULL,
+        resolves_at  TIMESTAMPTZ NOT NULL,
+        resolved     BOOLEAN DEFAULT FALSE,
+        correct      BOOLEAN,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+    )""",
+    'CREATE INDEX IF NOT EXISTS idx_dfl_sym_hor ON direction_forecast_log (symbol, horizon, resolved)',
 ]
 
 
