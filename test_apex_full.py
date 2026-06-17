@@ -568,10 +568,10 @@ def test_8_setup_f_disabled():
             _fail('TEST 8  Setup F flag', 'setup_f_enabled declaration not found in server.py')
             return
 
-        if 'False' in found_flag:
-            _pass('TEST 8  Setup F disabled', f'Flag confirmed: {found_flag}')
+        if 'True' in found_flag:
+            _pass('TEST 8  Setup F enabled', f'Flag confirmed: {found_flag}')
         else:
-            _fail('TEST 8  Setup F enabled', f'Flag is: {found_flag} — expected False')
+            _fail('TEST 8  Setup F disabled', f'Flag is: {found_flag} — expected True')
 
         # Verify scan_setup_f itself works (model may be missing — that's OK)
         try:
@@ -1691,18 +1691,18 @@ def test_g20_setup_i_dashboard_gate8_heat():
 
 
 def test_g21_setup_i_dashboard_has_8_gates():
-    """Setup I dashboard block in server.py defines exactly 8 gate dicts."""
-    _section('TEST G21 — Setup I dashboard has 8 gates (source)')
+    """Setup I dashboard block in server.py defines exactly 9 gate dicts."""
+    _section('TEST G21 — Setup I dashboard has 9 gates (source)')
     try:
         import re
         snippet   = _setup_i_dashboard_src()
         gate_nums = re.findall(r"'gate':\s*(\d+)", snippet)
         count     = len(gate_nums)
-        if count == 8:
-            _pass('TEST G21  8 gate definitions', f'gates: {gate_nums}')
+        if count == 9:
+            _pass('TEST G21  9 gate definitions', f'gates: {gate_nums}')
         else:
-            _fail('TEST G21  8 gate definitions',
-                  f'Found {count} gate defs in Setup I dashboard (expected 8): {gate_nums}')
+            _fail('TEST G21  9 gate definitions',
+                  f'Found {count} gate defs in Setup I dashboard (expected 9): {gate_nums}')
     except Exception as e:
         _fail('TEST G21', f'{type(e).__name__}: {e}')
 
