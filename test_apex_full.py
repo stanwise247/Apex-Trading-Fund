@@ -2315,6 +2315,143 @@ def test_d5_insufficient_edge_not_deployed():
 
 
 # ─────────────────────────────────────────────────────────────
+#  Market Context tests (CTX1–CTX5)
+# ─────────────────────────────────────────────────────────────
+
+def test_ctx1_context_endpoint_returns_ok():
+    """GET /api/apex/context returns ok:true with all five top-level section keys."""
+    _section('TEST CTX1 — /api/apex/context returns ok and five section keys')
+    try:
+        resp = _api('/api/apex/context')
+        if resp is None:
+            _fail('TEST CTX1  endpoint reachable', 'No response from Railway')
+            return
+        if not resp.get('ok'):
+            _fail('TEST CTX1  ok:true', f'ok={resp.get("ok")} error={resp.get("error")}')
+            return
+        _pass('TEST CTX1  ok:true', 'endpoint reachable')
+        for key in ('volatility', 'session_structure', 'momentum', 'correlation', 'calendar'):
+            if key in resp:
+                _pass(f'TEST CTX1  key present: {key}', 'ok')
+            else:
+                _fail(f'TEST CTX1  key present: {key}', 'missing from response')
+    except Exception as e:
+        _fail('TEST CTX1', f'{type(e).__name__}: {e}')
+
+
+def test_ctx2_volatility_section_structure():
+    """volatility section has MNQ/ES with 5min+1hr sub-keys and vix."""
+    _section('TEST CTX2 — volatility section has expected structure')
+    try:
+        resp = _api('/api/apex/context')
+        if resp is None:
+            _fail('TEST CTX2  endpoint reachable', 'No response'); return
+        vol = resp.get('volatility', {})
+        for sym in ('MNQ', 'ES'):
+            sym_data = vol.get(sym, {})
+            for tf in ('5min', '1hr'):
+                tf_data = sym_data.get(tf)
+                if tf_data is None:
+                    _fail(f'TEST CTX2  {sym}/{tf} present', 'null — check DB has bars')
+                elif 'ratio' in tf_data and 'label' in tf_data:
+                    _pass(f'TEST CTX2  {sym}/{tf} has ratio+label',
+                          f'ratio={tf_data["ratio"]} label={tf_data["label"]}')
+                else:
+                    _fail(f'TEST CTX2  {sym}/{tf} has ratio+label',
+                          f'keys present: {list(tf_data.keys())}')
+        vix = vol.get('vix', {})
+        if 'current' in vix:
+            _pass('TEST CTX2  vix.current present', f'vix={vix["current"]}')
+        else:
+            _fail('TEST CTX2  vix.current present', 'missing')
+    except Exception as e:
+        _fail('TEST CTX2', f'{type(e).__name__}: {e}')
+
+
+def test_ctx3_session_structure_keys():
+    """session_structure has or_high/or_low, pdh/pdl/pdc, poc/vah/val per symbol."""
+    _section('TEST CTX3 — session_structure keys present')
+    try:
+        resp = _api('/api/apex/context')
+        if resp is None:
+            _fail('TEST CTX3  endpoint reachable', 'No response'); return
+        ss = resp.get('session_structure', {})
+        required = ('or_high', 'or_low', 'pdh', 'pdl', 'pdc', 'poc', 'vah', 'val',
+                    'position', 'current_price')
+        for sym in ('MNQ', 'ES'):
+            sym_data = ss.get(sym) or {}
+            missing = [k for k in required if k not in sym_data]
+            if missing:
+                _fail(f'TEST CTX3  {sym} required keys', f'missing: {missing}')
+            else:
+                pos = sym_data.get('position', [])
+                _pass(f'TEST CTX3  {sym} all keys present',
+                      f'current={sym_data.get("current_price")} position={pos}')
+    except Exception as e:
+        _fail('TEST CTX3', f'{type(e).__name__}: {e}')
+
+
+def test_ctx4_momentum_rsi_values():
+    """momentum section has RSI values in 0–100 range across 4 timeframes."""
+    _section('TEST CTX4 — momentum RSI values are numeric and in 0–100')
+    try:
+        resp = _api('/api/apex/context')
+        if resp is None:
+            _fail('TEST CTX4  endpoint reachable', 'No response'); return
+        mom = resp.get('momentum', {})
+        for sym in ('MNQ', 'ES'):
+            sym_data = mom.get(sym, {})
+            found_any = False
+            for tf in ('5min', '15min', '1hr', '4hr'):
+                tf_data = sym_data.get(tf)
+                if tf_data is None:
+                    continue
+                rsi = tf_data.get('rsi')
+                band = tf_data.get('band', '')
+                if rsi is None:
+                    _fail(f'TEST CTX4  {sym}/{tf} rsi present', 'rsi is null')
+                elif not (0 <= rsi <= 100):
+                    _fail(f'TEST CTX4  {sym}/{tf} rsi in range', f'rsi={rsi}')
+                elif band not in ('oversold', 'below midpoint', 'neutral',
+                                  'above midpoint', 'overbought'):
+                    _fail(f'TEST CTX4  {sym}/{tf} band label', f'band={band!r}')
+                else:
+                    _pass(f'TEST CTX4  {sym}/{tf}', f'RSI {rsi} — {band}')
+                    found_any = True
+            if not found_any:
+                _fail(f'TEST CTX4  {sym} has at least one timeframe', 'all null')
+    except Exception as e:
+        _fail('TEST CTX4', f'{type(e).__name__}: {e}')
+
+
+def test_ctx5_calendar_has_events_list():
+    """calendar section returns an events list; blocked key is a boolean."""
+    _section('TEST CTX5 — calendar section has events list and blocked boolean')
+    try:
+        resp = _api('/api/apex/context')
+        if resp is None:
+            _fail('TEST CTX5  endpoint reachable', 'No response'); return
+        cal = resp.get('calendar', {})
+        if 'events' not in cal:
+            _fail('TEST CTX5  events key present', 'missing')
+            return
+        if not isinstance(cal['events'], list):
+            _fail('TEST CTX5  events is list', f'type={type(cal["events"]).__name__}')
+            return
+        _pass('TEST CTX5  events is list', f'{len(cal["events"])} event(s)')
+        if 'blocked' not in cal:
+            _fail('TEST CTX5  blocked key present', 'missing')
+        elif not isinstance(cal['blocked'], bool):
+            _fail('TEST CTX5  blocked is bool', f'type={type(cal["blocked"]).__name__}')
+        else:
+            _pass('TEST CTX5  blocked is bool', f'blocked={cal["blocked"]}')
+        src = cal.get('source', '')
+        _pass('TEST CTX5  source field', f'source={src!r}')
+    except Exception as e:
+        _fail('TEST CTX5', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
 
@@ -2398,6 +2535,13 @@ if __name__ == '__main__':
     test_d3_calibration_table_sanity()
     test_d4_forecast_endpoint_structure()
     test_d5_insufficient_edge_not_deployed()
+
+    # Market Context tests (CTX1–CTX5)
+    test_ctx1_context_endpoint_returns_ok()
+    test_ctx2_volatility_section_structure()
+    test_ctx3_session_structure_keys()
+    test_ctx4_momentum_rsi_values()
+    test_ctx5_calendar_has_events_list()
 
     _cleanup()
     _print_results()

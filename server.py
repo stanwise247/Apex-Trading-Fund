@@ -6298,6 +6298,284 @@ def apex_forecast():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  MARKET CONTEXT — helpers for /api/apex/context
+#  Pure informational reads: no signals, no buy/sell framing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ctx_atr_series(highs, lows, closes, period=14):
+    """Return list of ATR(period) values, one per bar from index `period` onward."""
+    if len(closes) < period + 1:
+        return []
+    trs = [max(highs[i] - lows[i],
+               abs(highs[i] - closes[i-1]),
+               abs(lows[i]  - closes[i-1]))
+           for i in range(1, len(closes))]
+    return [sum(trs[i-period:i]) / period for i in range(period, len(trs) + 1)]
+
+
+def _ctx_volume_profile(bars):
+    """
+    Simple volume-at-price profile for a list of OHLCV bars.
+    Returns (poc, vah, val): point of control, value-area high/low.
+    Value area = 70 % of total volume, expanded outward from POC.
+    """
+    if len(bars) < 3:
+        return None, None, None
+    tick = 0.25  # MNQ and ES both have 0.25 min tick
+    price_vol: dict = {}
+    for b in bars:
+        mid = round(round((b['h'] + b['l']) / 2 / tick) * tick, 2)
+        price_vol[mid] = price_vol.get(mid, 0) + (b['v'] or 0)
+    if not price_vol or sum(price_vol.values()) == 0:
+        return None, None, None
+    sorted_p = sorted(price_vol)
+    poc = max(price_vol, key=lambda p: price_vol[p])
+    total_vol = sum(price_vol.values())
+    va_vol = price_vol[poc]
+    va_set = {poc}
+    lo = hi = sorted_p.index(poc)
+    while va_vol < total_vol * 0.70:
+        nlo = price_vol.get(sorted_p[lo - 1], 0) if lo > 0 else 0
+        nhi = price_vol.get(sorted_p[hi + 1], 0) if hi < len(sorted_p) - 1 else 0
+        if nlo == 0 and nhi == 0:
+            break
+        if nhi >= nlo:
+            hi += 1; va_set.add(sorted_p[hi]); va_vol += nhi
+        else:
+            lo -= 1; va_set.add(sorted_p[lo]); va_vol += nlo
+        if lo == 0 and hi == len(sorted_p) - 1:
+            break
+    return round(poc, 2), round(max(va_set), 2), round(min(va_set), 2)
+
+
+def _ctx_volatility():
+    """ATR(14) vs 20-bar rolling average for MNQ/ES on 5min and 1hr, plus VIX."""
+    result: dict = {}
+    for sym in ('MNQ', 'ES'):
+        sym_data: dict = {}
+        for tf_label, tf_db, n in [('5min', '5min', 120), ('1hr', '1hour', 80)]:
+            bars = get_ohlcv(sym, tf_db, limit=n)
+            if len(bars) < 20:
+                sym_data[tf_label] = None
+                continue
+            highs  = [b['h'] for b in bars]
+            lows   = [b['l'] for b in bars]
+            closes = [b['c'] for b in bars]
+            atrs   = _ctx_atr_series(highs, lows, closes, 14)
+            if not atrs:
+                sym_data[tf_label] = None
+                continue
+            current = atrs[-1]
+            avg20   = sum(atrs[-20:]) / min(20, len(atrs))
+            ratio   = round(current / avg20, 2) if avg20 else None
+            label   = ('elevated'      if ratio and ratio >= 1.5  else
+                       'above average' if ratio and ratio >= 1.2  else
+                       'compressed'    if ratio and ratio <= 0.70 else
+                       'below average' if ratio and ratio <= 0.85 else
+                       'average')
+            sym_data[tf_label] = {
+                'atr':       round(current, 4),
+                'atr_avg20': round(avg20, 4),
+                'ratio':     ratio,
+                'label':     label,
+            }
+        result[sym] = sym_data
+    # VIX level + 5-day change (from daily OHLCV stored in DB)
+    macro = fetch_macro_live()
+    vix_bars = get_ohlcv('VIX', '1day', limit=10)
+    vix_5d = (round(float(vix_bars[-1]['c']) - float(vix_bars[-6]['c']), 2)
+              if len(vix_bars) >= 6 else None)
+    result['vix'] = {
+        'current':   macro.get('vix'),
+        'change_5d': vix_5d,
+        'live':      macro.get('live', False),
+        'source':    macro.get('source', 'reference'),
+    }
+    return result
+
+
+def _ctx_session_structure():
+    """Opening range (first 30 min), prior-day H/L/C, and volume profile for today."""
+    result: dict = {}
+    now_utc    = datetime.now(timezone.utc)
+    today_date = now_utc.date()
+    for sym in ('MNQ', 'ES'):
+        bars = get_ohlcv(sym, '5min', limit=600)
+        if not bars:
+            result[sym] = None
+            continue
+        parsed = []
+        for b in bars:
+            dt_b = datetime.fromtimestamp(b['t'], tz=timezone.utc)
+            parsed.append({**b, '_date': dt_b.date(), '_hour': dt_b.hour})
+        today   = [b for b in parsed if b['_date'] == today_date and 13 <= b['_hour'] < 20]
+        or_bars = today[:6]
+        or_high = round(max(b['h'] for b in or_bars), 2) if or_bars else None
+        or_low  = round(min(b['l'] for b in or_bars), 2) if or_bars else None
+        pdh = pdl = pdc = None
+        prior_dates = sorted({b['_date'] for b in parsed if b['_date'] < today_date}, reverse=True)
+        if prior_dates:
+            pb = [b for b in parsed if b['_date'] == prior_dates[0] and 13 <= b['_hour'] < 20]
+            if pb:
+                pdh = round(max(b['h'] for b in pb), 2)
+                pdl = round(min(b['l'] for b in pb), 2)
+                pdc = round(pb[-1]['c'], 2)
+        poc, vah, val = (_ctx_volume_profile(today) if len(today) >= 6 else (None, None, None))
+        current = round(today[-1]['c'], 2) if today else (round(parsed[-1]['c'], 2) if parsed else None)
+        position = []
+        if current and pdh and pdl:
+            position.append('above prior day high' if current > pdh else
+                            'below prior day low'  if current < pdl else
+                            'inside prior day range')
+        if current and or_high and or_low:
+            position.append('above opening range'  if current > or_high else
+                            'below opening range'  if current < or_low  else
+                            'inside opening range')
+        if current and vah and val:
+            position.append('above value area' if current > vah else
+                            'below value area'  if current < val  else
+                            'inside value area')
+        result[sym] = {
+            'current_price': current,
+            'or_high': or_high, 'or_low': or_low, 'or_complete': len(or_bars) >= 6,
+            'pdh': pdh, 'pdl': pdl, 'pdc': pdc,
+            'poc': poc, 'vah': vah, 'val': val,
+            'position': position,
+        }
+    return result
+
+
+def _ctx_momentum():
+    """RSI(14) on 5min, 15min, 1hr, 4hr for MNQ and ES — descriptive bands only."""
+    import pandas as _pd_ctx
+    RSI_TFS = [
+        ('5min',  '5min',  None,  100),
+        ('15min', '15min', None,   80),
+        ('1hr',   '1hour', None,   60),
+        ('4hr',   '5min',  '4h', 600),
+    ]
+    result: dict = {}
+    for sym in ('MNQ', 'ES'):
+        sym_data: dict = {}
+        for label, db_tf, resample, n in RSI_TFS:
+            bars = get_ohlcv(sym, db_tf, limit=n)
+            if not bars:
+                sym_data[label] = None
+                continue
+            if resample:
+                df = _pd_ctx.DataFrame(bars)
+                df['dt'] = _pd_ctx.to_datetime(df['t'], unit='s', utc=True)
+                closes = (df.set_index('dt')['c']
+                           .resample(resample).last().dropna()
+                           .astype(float).tolist())
+            else:
+                closes = [float(b['c']) for b in bars]
+            if len(closes) < 16:
+                sym_data[label] = None
+                continue
+            rsi = calc_rsi(closes)
+            if rsi is None:
+                sym_data[label] = None
+                continue
+            band = ('oversold'       if rsi < 30 else
+                    'overbought'     if rsi > 70 else
+                    'below midpoint' if rsi < 45 else
+                    'above midpoint' if rsi > 55 else
+                    'neutral')
+            sym_data[label] = {'rsi': rsi, 'band': band}
+        result[sym] = sym_data
+    return result
+
+
+def _ctx_correlation():
+    """Rolling 20-bar Pearson correlation between MNQ and ES 5min returns."""
+    mnq_bars = get_ohlcv('MNQ', '5min', limit=25)
+    es_bars  = get_ohlcv('ES',  '5min', limit=25)
+    mnq_map  = {b['t']: float(b['c']) for b in mnq_bars}
+    es_map   = {b['t']: float(b['c']) for b in es_bars}
+    common   = sorted(mnq_map.keys() & es_map.keys())
+    corr = None
+    note = 'Insufficient data'
+    if len(common) >= 10:
+        m_px = [mnq_map[t] for t in common]
+        e_px = [es_map[t]  for t in common]
+        m_r  = [m_px[i]/m_px[i-1]-1 for i in range(1, len(m_px))]
+        e_r  = [e_px[i]/e_px[i-1]-1 for i in range(1, len(e_px))]
+        n2 = len(m_r)
+        mm, me = sum(m_r)/n2, sum(e_r)/n2
+        cov = sum((m_r[i]-mm)*(e_r[i]-me) for i in range(n2)) / n2
+        sm  = (sum((x-mm)**2 for x in m_r)/n2) ** 0.5
+        se  = (sum((x-me)**2 for x in e_r)/n2) ** 0.5
+        if sm > 0 and se > 0:
+            corr = round(cov / (sm * se), 3)
+            note = ('Diverging — well below typical 0.9+ range' if corr < 0.70 else
+                    'Below typical range'                        if corr < 0.85 else
+                    'Near-perfect correlation'                   if corr > 0.99 else
+                    'Normal range')
+    macro = fetch_macro_live()
+    return {
+        'mnq_es_corr': corr,
+        'corr_note':   note,
+        'n_bars':      max(0, len(common) - 1),
+        'vix': {'level': macro.get('vix'), 'live': macro.get('live', False),
+                'source': macro.get('source', 'reference')},
+        'dxy': {'level': macro.get('dxy'), 'live': macro.get('live', False),
+                'source': macro.get('source', 'reference')},
+    }
+
+
+def _ctx_calendar():
+    """Today's HIGH-impact economic events via the existing CalendarFilter singleton."""
+    from calendar_filter import get_filter
+    cf     = get_filter()
+    status = cf.get_current_status()
+    now    = datetime.now(timezone.utc)
+    events = cf.get_upcoming_events(hours=32)   # 2h lookback + 32h forward
+    for ev in events:
+        dt       = datetime.fromisoformat(ev['utc_time'].replace('Z', '+00:00'))
+        diff_min = int((now - dt).total_seconds() / 60)
+        ev['has_passed'] = (dt < now)
+        ev['relative']   = (f'+{abs(diff_min)} min ago' if dt < now
+                             else f'in {abs(diff_min)} min')
+    return {
+        'blocked': status.get('status') == 'BLACKOUT',
+        'reason':  status.get('reason') if status.get('status') == 'BLACKOUT' else None,
+        'events':  events,
+        'source':  'fmp_api' if not status.get('using_fallback') else 'hardcoded_fallback',
+        'last_refresh': status.get('last_refresh'),
+    }
+
+
+@app.route('/api/apex/context', methods=['GET'])
+def apex_context():
+    """
+    Market Context block — five purely informational sections for the Market Intel page.
+    No signals, no buy/sell recommendations. Framing is descriptive throughout.
+
+    Sections:
+      volatility      — ATR(14) vs 20-bar average on 5min and 1hr; VIX level + 5d change
+      session_structure — opening range, prior-day H/L/C, value area (POC/VAH/VAL)
+      momentum        — RSI(14) on 5min/15min/1hr/4hr; descriptive bands only
+      correlation     — rolling 20-bar MNQ–ES return correlation; DXY/VIX reference
+      calendar        — upcoming HIGH-impact US economic events; reuses CalendarFilter
+    """
+    out = {'ok': True, 'ts': time.time()}
+    for key, fn in [
+        ('volatility',        _ctx_volatility),
+        ('session_structure', _ctx_session_structure),
+        ('momentum',          _ctx_momentum),
+        ('correlation',       _ctx_correlation),
+        ('calendar',          _ctx_calendar),
+    ]:
+        try:
+            out[key] = fn()
+        except Exception as _e:
+            logger.warning(f'apex_context {key}: {_e}')
+            out[key] = {'error': str(_e)}
+    return jsonify(out)
+
+
 @app.route('/api/apex/test_log', methods=['POST'])
 def apex_test_log():
     """

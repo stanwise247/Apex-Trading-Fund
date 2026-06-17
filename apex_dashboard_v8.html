@@ -1111,8 +1111,14 @@ tr:hover td { background: var(--bg3); }
     <div class="card" id="mi-l3"><div class="skeleton" style="height:120px"></div></div>
   </div>
 
-  <!-- ⑥ SETUP ACTIVITY -->
-  <div class="section-title">Setup Activity</div>
+  <!-- ⑥ MARKET CONTEXT — five informational reads, no signals -->
+  <div class="section-title" style="margin-top:8px">Market Context
+    <span style="font-family:var(--mono);font-size:9px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">informational only · no signals · volatility · session · momentum · correlation · calendar</span>
+  </div>
+  <div id="mi-context"><div class="skeleton" style="height:240px;border-radius:var(--r)"></div></div>
+
+  <!-- ⑦ SETUP ACTIVITY -->
+  <div class="section-title" style="margin-top:8px">Setup Activity</div>
   <div class="tbl-wrap" id="mi-setup-activity"><div class="tbl-empty">Loading…</div></div>
 </div>
 
@@ -2567,13 +2573,14 @@ async function loadDiagnostics() {
 // MARKET INTELLIGENCE TAB
 // ═══════════════════════════════════════════════════════
 async function loadMarketIntel() {
-  const [regimeResp, meridianResp, marketResp, scanResp, mtfResp, forecastResp] = await Promise.all([
+  const [regimeResp, meridianResp, marketResp, scanResp, mtfResp, forecastResp, contextResp] = await Promise.all([
     apiFetch('/api/apex/regime'),
     apiFetch('/api/apex/meridian'),
     apiFetch('/api/apex/market'),
     apiFetch('/api/apex/scan'),
     apiFetch('/api/apex/mtf'),
     apiFetch('/api/apex/forecast'),
+    apiFetch('/api/apex/context'),
   ]);
 
   _renderMIInstruments(regimeResp, meridianResp, marketResp);
@@ -2582,6 +2589,7 @@ async function loadMarketIntel() {
   _renderMIAccuracy(forecastResp);
   _renderMISession();
   _renderMIL3(meridianResp);
+  _renderMIContext(contextResp);
   _renderMISetupActivity(scanResp);
 
   const ts = new Date().toUTCString().slice(17, 25);
@@ -2946,6 +2954,165 @@ function _renderMIAccuracy(forecastResp) {
         }).join('')}
       </div>`).join('')}
   </div>`;
+}
+
+function _renderMIContext(ctx) {
+  const el = document.getElementById('mi-context');
+  if (!ctx?.ok) {
+    el.innerHTML = `<div class="card" style="padding:14px 16px;color:var(--text3);font-family:var(--mono);font-size:11px">Market context unavailable</div>`;
+    return;
+  }
+  const fN = (v, d=2) => (v == null ? '—' : Number(v).toFixed(d));
+  const syms = ['MNQ','ES'];
+
+  /* ── 1. Volatility ── */
+  const vol = ctx.volatility || {};
+  const vix = vol.vix || {};
+  const vixChg = vix.change_5d != null ? (vix.change_5d >= 0 ? `+${fN(vix.change_5d,2)}` : fN(vix.change_5d,2)) : '—';
+  const volHtml = `
+    <div style="font-family:var(--sans);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Volatility · ATR(14) vs 20-bar average</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      ${syms.map(sym => {
+        const sd = vol[sym] || {};
+        const rows = [['5min', sd['5min']], ['1hr', sd['1hr']]].map(([tf, d]) => {
+          if (!d) return `<div style="font-family:var(--mono);font-size:10px;color:var(--text3)">${tf} — no data</div>`;
+          return `<div style="display:flex;justify-content:space-between;margin-bottom:2px">
+            <span style="font-family:var(--mono);font-size:10px;color:var(--text3)">${tf}</span>
+            <span style="font-family:var(--mono);font-size:10px;color:var(--text2)">${fN(d.atr,1)} · <b>${d.ratio}×</b> avg — ${d.label}</span>
+          </div>`;
+        }).join('');
+        return `<div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">${sym}</div>
+          ${rows}
+        </div>`;
+      }).join('')}
+      <div>
+        <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">VIX</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text2)">Level: <b>${fN(vix.current,2)}</b></div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text2)">5-day change: ${vixChg}</div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-top:3px">Source: ${vix.source||'—'} ${vix.live?'(live)':'(delayed)'}</div>
+      </div>
+    </div>`;
+
+  /* ── 2. Session Structure ── */
+  const ss = ctx.session_structure || {};
+  const ssHtml = `
+    <div style="font-family:var(--sans);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Session Structure · opening range · prior day · value area</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${syms.map(sym => {
+        const d = ss[sym] || {};
+        const pos = (d.position||[]).join(' · ') || '—';
+        const rows = [
+          ['Current', fN(d.current_price,2)],
+          ['OR', d.or_high!=null ? `${fN(d.or_high,2)} H / ${fN(d.or_low,2)} L${d.or_complete?'':' (forming)'}` : '—'],
+          ['PDH / PDL / PDC', d.pdh!=null ? `${fN(d.pdh,2)} / ${fN(d.pdl,2)} / ${fN(d.pdc,2)}` : '—'],
+          ['POC', fN(d.poc,2)],
+          ['VAH / VAL', d.vah!=null ? `${fN(d.vah,2)} / ${fN(d.val,2)}` : '—'],
+        ];
+        return `<div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">${sym}</div>
+          ${rows.map(([lbl,val]) => `
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+            <span style="font-family:var(--sans);font-size:10px;color:var(--text3)">${lbl}</span>
+            <span style="font-family:var(--mono);font-size:10px;color:var(--text)">${val}</span>
+          </div>`).join('')}
+          <div style="margin-top:6px;font-family:var(--mono);font-size:9px;color:var(--text3);border-top:1px solid var(--border);padding-top:5px">${pos}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  /* ── 3. Momentum / RSI ── */
+  const mom = ctx.momentum || {};
+  const TF_LABELS = ['5min','15min','1hr','4hr'];
+  const momHtml = `
+    <div style="font-family:var(--sans);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Momentum · RSI(14)</div>
+    <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-bottom:8px;font-style:italic">Descriptive read only — not used by any live trading setup</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${syms.map(sym => {
+        const sd = mom[sym] || {};
+        const tfRows = TF_LABELS.map(tf => {
+          const d = sd[tf];
+          if (!d) return `<tr><td style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:2px 8px 2px 0">${tf}</td><td style="font-family:var(--mono);font-size:10px;color:var(--text3)">—</td><td></td></tr>`;
+          return `<tr>
+            <td style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:2px 8px 2px 0">${tf}</td>
+            <td style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text);padding-right:8px">${fN(d.rsi,1)}</td>
+            <td style="font-family:var(--sans);font-size:10px;color:var(--text2)">${d.band}</td>
+          </tr>`;
+        }).join('');
+        return `<div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">${sym}</div>
+          <table style="border-collapse:collapse;width:100%">${tfRows}</table>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  /* ── 4. Correlation ── */
+  const corr = ctx.correlation || {};
+  const corrVal = corr.mnq_es_corr != null ? fN(corr.mnq_es_corr,3) : '—';
+  const vixRef  = corr.vix || {};
+  const dxyRef  = corr.dxy || {};
+  const corrHtml = `
+    <div style="font-family:var(--sans);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Correlation · MNQ–ES · external reference</div>
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:16px;align-items:start">
+      <div>
+        <div style="font-family:var(--mono);font-size:22px;font-weight:600;color:var(--text);margin-bottom:2px">${corrVal}</div>
+        <div style="font-family:var(--sans);font-size:10px;color:var(--text2);margin-bottom:2px">${corr.corr_note||'—'}</div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3)">rolling ${corr.n_bars||0}-bar 5min returns</div>
+      </div>
+      <div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-bottom:3px">VIX</div>
+        <div style="font-family:var(--mono);font-size:15px;font-weight:600;color:var(--text)">${fN(vixRef.level,2)}</div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3)">${vixRef.live?'live':'delayed'}</div>
+      </div>
+      <div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-bottom:3px">DXY</div>
+        <div style="font-family:var(--mono);font-size:15px;font-weight:600;color:var(--text)">${fN(dxyRef.level,2)}</div>
+        <div style="font-family:var(--sans);font-size:9px;color:var(--text3)">${dxyRef.live?'live':'delayed'}</div>
+      </div>
+    </div>
+    <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-top:6px">VIX and DXY sourced via yfinance — may be delayed up to 15 min</div>`;
+
+  /* ── 5. Economic Calendar ── */
+  const cal = ctx.calendar || {};
+  const events = cal.events || [];
+  const calBody = events.length === 0
+    ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text3)">No HIGH-impact events in the next 24 h</div>`
+    : events.map(ev => {
+        const passed = ev.has_passed;
+        const nameStyle = `font-family:var(--sans);font-size:11px;color:${passed?'var(--text3)':'var(--text)'};font-weight:${passed?400:500}`;
+        const timeStyle = `font-family:var(--mono);font-size:10px;color:var(--text3)`;
+        const relStyle  = `font-family:var(--mono);font-size:9px;color:var(--text3)`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">
+          <div>
+            <div style="${nameStyle}">${ev.name}</div>
+            <div style="${relStyle}">${ev.relative}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="${timeStyle}">${ev.utc_display||ev.utc_time||''}</div>
+            <div style="${relStyle}">Block: ${ev.blocked_window_start||''}–${ev.blocked_window_end||''}</div>
+          </div>
+        </div>`;
+      }).join('');
+  const blockedBanner = cal.blocked
+    ? `<div style="font-family:var(--mono);font-size:10px;color:var(--amber);margin-bottom:8px">BLACKOUT ACTIVE — ${cal.reason||''}</div>`
+    : '';
+  const calHtml = `
+    <div style="font-family:var(--sans);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Economic Calendar · HIGH-impact US events · UTC</div>
+    ${blockedBanner}${calBody}
+    <div style="font-family:var(--sans);font-size:9px;color:var(--text3);margin-top:6px">Source: ${cal.source||'—'} · last refresh ${cal.last_refresh||'—'}</div>`;
+
+  /* ── Assemble ── */
+  const card = (inner) =>
+    `<div class="card" style="padding:14px 16px;margin-bottom:12px">${inner}</div>`;
+
+  el.innerHTML =
+    card(volHtml) +
+    card(ssHtml) +
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">` +
+      `<div class="card" style="padding:14px 16px">${momHtml}</div>` +
+      `<div class="card" style="padding:14px 16px">${corrHtml}</div>` +
+    `</div>` +
+    card(calHtml);
 }
 
 function _renderMISetupActivity(scanResp) {
