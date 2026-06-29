@@ -57,7 +57,7 @@ if TELEGRAM_TOKEN and not cfg.get('telegram_token'):
 # ─────────────────────────────────────────────────────────────
 SIGNAL_FILTERS = {
     'max_concurrent_per_instrument': True,   # block if same instrument already has open trade
-    'primary_session_only_bcd':      True,   # B/C/D: require quality=='primary' session
+    'primary_session_only_bcd':      False,  # B/C/D: NY session (13-19:30 UTC) is 'secondary' but valid — gate disabled
     'dual_htf_bias':                 True,   # A/B/C/D/E: 1h EMA20 must align with 4h direction
     'setup_e_min_atr':               True,   # E: skip if 5min ATR14 < minimum (slow markets)
     'economic_calendar':             True,   # block signals in ±30/60 min window around HIGH-impact events
@@ -6860,6 +6860,59 @@ def check_session_alerts():
                 logger.info('Session close alert: ' + sess['name'])
     except Exception as e:
         logger.warning('Session alert error: ' + str(e))
+
+@app.route('/api/apex/retrain_setup_f', methods=['POST'])
+def retrain_setup_f_endpoint():
+    """
+    Trigger Setup F RF model retrain on the running server (uses server's sklearn version).
+    Runs in background thread — returns immediately.
+    POST /api/apex/retrain_setup_f?symbol=MNQ  (or ES, or both if omitted)
+    """
+    import threading
+
+    symbols_param = request.args.get('symbol', '')
+    symbols = [symbols_param.upper()] if symbols_param else ['MNQ', 'ES']
+    invalid = [s for s in symbols if s not in ('MNQ', 'ES')]
+    if invalid:
+        return jsonify({'ok': False, 'error': f'Unknown symbol(s): {invalid}'}), 400
+
+    _retrain_status = getattr(retrain_setup_f_endpoint, '_status', {})
+    running = [s for s in symbols if _retrain_status.get(s) == 'running']
+    if running:
+        return jsonify({'ok': False, 'error': f'Retrain already running for: {running}'}), 409
+
+    def _run(syms):
+        import retrain_setup_f as _rsf
+        status = getattr(retrain_setup_f_endpoint, '_status', {})
+        for sym in syms:
+            status[sym] = 'running'
+            retrain_setup_f_endpoint._status = status
+            try:
+                logger.info(f'[RETRAIN] Starting Setup F retrain for {sym}')
+                auc, verdict = _rsf.retrain(sym)
+                logger.info(f'[RETRAIN] {sym} complete — AUC={auc:.3f} verdict={verdict}')
+                status[sym] = f'done:{verdict}:{auc:.3f}'
+            except Exception as _e:
+                logger.error(f'[RETRAIN] {sym} failed: {_e}')
+                status[sym] = f'error:{_e}'
+            retrain_setup_f_endpoint._status = status
+
+    thread = threading.Thread(target=_run, args=(symbols,), daemon=True)
+    thread.start()
+    return jsonify({
+        'ok': True,
+        'status': 'retrain started',
+        'symbols': symbols,
+        'check_logs': 'Railway logs for [RETRAIN] prefix',
+    })
+
+
+@app.route('/api/apex/retrain_setup_f', methods=['GET'])
+def retrain_setup_f_status():
+    """Return current retrain status."""
+    status = getattr(retrain_setup_f_endpoint, '_status', {})
+    return jsonify({'ok': True, 'status': status})
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
