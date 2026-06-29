@@ -2238,115 +2238,6 @@ def background_scheduler():
         except Exception as e:
             logger.warning(f'Daily summary error: {e}')
 
-        # ── APEX FVG Scanner — runs every minute ─────────────────
-        try:
-            from fvg_engine import scan_fvg, format_fvg_alert, FVG_PARAMS
-            from live_scanner import send_telegram
-            from trade_tracker import log_trade
-            now_utc = datetime.now(timezone.utc)
-            _fvg_windows = FVG_PARAMS.get('session_windows', {}).get('MNQ', [{'start': 13, 'end': 19}])
-            _in_fvg_session = any(w['start'] <= now_utc.hour < w['end'] for w in _fvg_windows)
-            if _in_fvg_session:
-                if not hasattr(background_scheduler, '_risk_gate'):
-                    from risk_manager import RiskGate
-                    background_scheduler._risk_gate = RiskGate()
-                _rg = background_scheduler._risk_gate
-                if _rg.daily.is_daily_limit_hit():
-                    logger.info('FVG scanner: daily loss limit hit — signals suppressed')
-                else:
-                    _regime  = _rg.regime.get_regime()
-                    _dd_mult = _rg.dd.get_risk_multiplier()
-                    _risk_footer = (
-                        f'\n⚙️ <i>Regime: {_regime.label} | '
-                        f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
-                    )
-                    logger.info('Scanning FVG for MNQ')
-                    fvg_signals = scan_fvg('MNQ', now_utc)
-                    for sig in fvg_signals:
-                        _fvg_setup = sig.get('setup', 'D_fvg_fill')
-                        _fvg_sym   = sig.get('symbol', 'MNQ')
-                        # ── Regime gate (mirrors Setup D) ─────────────────
-                        if not is_setup_enabled('D', _fvg_sym):
-                            logger.info(f'FVG: regime gate blocked — skipping {_fvg_sym}')
-                            _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
-                                            sig.get('entry'), sig.get('stop'),
-                                            sig.get('target'), None,
-                                            'BLOCKED_REGIME', 'FVG regime gate')
-                            continue
-                        # ── FILTER 1: max 1 concurrent per instrument ─────
-                        if SIGNAL_FILTERS['max_concurrent_per_instrument']:
-                            _f1fvg_has, _f1fvg_id = _has_open_trade_on_instrument(_fvg_sym)
-                            if _f1fvg_has:
-                                logger.info(f'FVG: skipped — {_fvg_sym} already has open trade #{_f1fvg_id}')
-                                _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
-                                                sig.get('entry'), sig.get('stop'),
-                                                sig.get('target'), None,
-                                                'BLOCKED_CONCURRENT', f'open trade #{_f1fvg_id}')
-                                continue
-                        if _has_opposite_swing_trade(_fvg_sym, sig['direction']):
-                            logger.info(
-                                f'FVG {sig["direction"]} suppressed — '
-                                f'opposite swing trade open on {_fvg_sym}'
-                            )
-                            continue
-                        if _cal_block(_fvg_sym, _fvg_setup):
-                            _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
-                                            sig.get('entry'), sig.get('stop'),
-                                            sig.get('target'), None,
-                                            'BLOCKED_CALENDAR', 'calendar gate')
-                            continue
-                        if _check_and_mark_fired(_fvg_sym, _fvg_setup, sig['direction']):
-                            continue
-                        if _is_signal_already_active(_fvg_sym, sig['direction'], _fvg_setup):
-                            continue
-                        _fvg_stop_pts = round(abs(sig['entry'] - sig['stop']), 1)
-                        _fvg_risk_usd = round(_fvg_stop_pts * 2, 0)
-                        logger.info(
-                            f'Signal: {_fvg_sym} {sig["direction"]} {_fvg_setup} | '
-                            f'stop={_fvg_stop_pts} pts | risk=${_fvg_risk_usd:.0f} | contracts=1'
-                        )
-                        _fvg_cap_ok, _fvg_cap_msg = _stop_cap_ok(sig)
-                        if not _fvg_cap_ok:
-                            logger.warning(_fvg_cap_msg)
-                            _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
-                                            sig.get('entry'), sig.get('stop'),
-                                            sig.get('target'), None,
-                                            'BLOCKED_STOP_CAP', _fvg_cap_msg[:200])
-                            continue
-                        _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
-                                        sig.get('entry'), sig.get('stop'),
-                                        sig.get('target'), None,
-                                        'SIGNAL', 'FVG scan generated')
-                        _fvg_tid = None
-                        try:
-                            _fvg_tid = log_trade(sig)
-                            if _fvg_tid:
-                                logger.info(f'Trade logged: id={_fvg_tid} {_fvg_sym} {sig["direction"]} {_fvg_setup}')
-                                _write_scan_log(_fvg_sym, _fvg_setup, None, sig.get('direction', ''),
-                                                sig.get('entry'), sig.get('stop'),
-                                                sig.get('target'), None,
-                                                'EXECUTED', f'trade_id={_fvg_tid}')
-                            else:
-                                logger.error(f'CRITICAL: FVG log_trade() returned None — {_fvg_sym} {sig["direction"]} NOT in DB')
-                        except Exception as _fvg_lte:
-                            logger.error(f'CRITICAL: FVG log_trade() EXCEPTION — {_fvg_sym} {sig["direction"]}: {_fvg_lte}', exc_info=True)
-                        # ── Telegram only after confirmed log_trade ───────
-                        if not _fvg_tid:
-                            logger.critical(f'CRITICAL: Skipping Telegram for FVG {_fvg_sym} — log_trade returned None')
-                        else:
-                            try:
-                                msg = format_fvg_alert(sig) + _risk_footer
-                                send_telegram(msg)
-                            except Exception as _fvg_te:
-                                logger.error(f'FVG send_telegram failed {_fvg_sym} {sig["direction"]}: {_fvg_te}')
-                            _execute_via_tradovate(sig, _fvg_tid)
-                        logger.info(
-                            f'FVG signal: {_fvg_sym} {sig["direction"].upper()} entry={sig["entry"]} '
-                            f'regime={_regime.label} dd_mult={_dd_mult:.2f}×'
-                        )
-        except Exception as e:
-            logger.warning(f'FVG scanner error: {e}')
-
         # ── APEX Engine v2 — Setup A/B/C/E Scanner ──────────────────────
         try:
             from live_scanner import run_scan, send_telegram, format_alert, SignalTracker
@@ -3084,6 +2975,8 @@ def background_scheduler():
                                                 'BLOCKED_REGIME', 'Setup D regime gate')
                                 continue
                             logger.info(f'Scanning Setup D for {_sym_d}')
+                            _write_scan_log(_sym_d, 'D_fvg_fill', None, '', None, None, None, None,
+                                            'SCANNING', f'Setup D entering scan {_now_utc_d.strftime("%H:%M")}')
                             sig_d = scan_setup_d(_sym_d, _now_utc_d)
                             if not sig_d:
                                 continue
