@@ -256,19 +256,28 @@ def send_exit_alert(trade: dict):
 
     pnl_str = f'+{pnl:.2f}R' if pnl >= 0 else f'{pnl:.2f}R'
 
-    msg = (
-        f'{emoji} <b>APEX EXIT — {sym}</b>\n'
-        f'━━━━━━━━━━━━━━━━━━━━\n'
-        f'<b>{title}</b>\n'
-        f'<b>Direction:</b> {dir_}\n'
-        f'<b>Setup:</b>     {setup}\n'
-        f'━━━━━━━━━━━━━━━━━━━━\n'
-        f'<b>Entry:</b>     {entry:.2f}\n'
-        f'<b>Exit:</b>      {exit_:.2f}\n'
-        f'<b>P&L:</b>       {pnl_str}\n'
-        f'━━━━━━━━━━━━━━━━━━━━\n'
-        f'<i>{now_ny} ET</i>'
-    )
+    if trade.get('quality') == 'shadow_lab':
+        msg = (
+            f'[SHADOW LAB] {setup}\n'
+            f'{sym} {dir_} — {title}\n'
+            f'Entry: {entry:.2f} | Exit: {exit_:.2f} | P&L: {pnl_str}\n'
+            f'Paper trade — no real money moved\n'
+            f'<i>{now_ny} ET</i>'
+        )
+    else:
+        msg = (
+            f'{emoji} <b>APEX EXIT — {sym}</b>\n'
+            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'<b>{title}</b>\n'
+            f'<b>Direction:</b> {dir_}\n'
+            f'<b>Setup:</b>     {setup}\n'
+            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'<b>Entry:</b>     {entry:.2f}\n'
+            f'<b>Exit:</b>      {exit_:.2f}\n'
+            f'<b>P&L:</b>       {pnl_str}\n'
+            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'<i>{now_ny} ET</i>'
+        )
     send_telegram(msg)
     logger.info(f'Exit alert sent: {sym} {dir_} {pnl_str} [{reason}]')
 

@@ -111,7 +111,7 @@ def _get_today_dollar_pnl() -> float:
         rows = conn.execute(
             "SELECT symbol, direction, entry_price, exit_price, pnl_r FROM apex_trades "
             "WHERE status='closed' AND DATE(entry_time)=? "
-            "AND quality NOT IN ('test') "
+            "AND quality NOT IN ('test', 'shadow_lab') "
             "AND exit_reason NOT IN ('test_endpoint', 'test_cleanup', 'test_simulation')",
             (today,)
         ).fetchall()
