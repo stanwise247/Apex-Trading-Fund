@@ -1393,7 +1393,7 @@ const SETUP_META = {
   C: { name:'BOS + OB', type:'Gate-Based · Swing', badge:'sc-badge-c', syms:['MNQ','ES','GC'] },
   D: { name:'FVG Fill', type:'Gate-Based · Intraday', badge:'sc-badge-d', syms:['MNQ','ES'] },
   E: { name:'EMA50 Pullback', type:'Gate-Based · Intraday', badge:'sc-badge-e', syms:['MNQ'] },
-  F: { name:'ML Probability', type:'ML · XGB + LR', badge:'sc-badge-f', syms:['MNQ','ES','GC'], wide:true },
+  F: { name:'ML Probability', type:'RF + LR · Live', badge:'sc-badge-f', syms:['MNQ','ES','GC'], wide:true },
   H: { name:'VWAP Reversion', type:'Gate-Based · Intraday', badge:'sc-badge-h', syms:['ES','MNQ'] },
   I: { name:'Mathematical Alpha', type:'ML Ensemble · XGB + LR', badge:'sc-badge-i', syms:['MNQ','ES'], wide:true },
   J: { name:'Value Area Continuation', type:'Structure · Intraday', badge:'sc-badge-j', syms:['ES','MNQ'], wide:true },
@@ -1977,7 +1977,7 @@ function gateInstBlock(sym, score, passed, total, state, disabled, dimmed) {
   </div>`;
 }
 
-function mlInstBlock(sym, xgbProb, lrProb, xgbThresh, lrThresh, stateLabel, disabled) {
+function mlInstBlock(sym, xgbProb, lrProb, xgbThresh, lrThresh, stateLabel, disabled, mlLabel = 'RF') {
   const opacity = disabled ? 'opacity:0.4' : '';
   const xgbPct = Math.min((xgbProb||0)*100, 100);
   const lrPct  = Math.min((lrProb||0)*100, 100);
@@ -1986,7 +1986,7 @@ function mlInstBlock(sym, xgbProb, lrProb, xgbThresh, lrThresh, stateLabel, disa
   return `<div class="ml-inst-block" style="${opacity}">
     <div class="ml-inst-sym">${sym}${disabled ? ' · PAPER' : ''}</div>
     <div class="ml-bar-row">
-      <span class="ml-bar-name">XGB</span>
+      <span class="ml-bar-name">${mlLabel}</span>
       <div class="ml-bar-track">
         <div class="ml-threshold" style="left:${xgbThPct}%"></div>
         <div class="ml-bar-fill xgb" style="width:${xgbPct.toFixed(1)}%"></div>
@@ -2287,7 +2287,7 @@ function renderSetupsGrid(scanData, trades) {
       const xgb = Math.max(xgb_long, xgb_short);
       const lr  = i.lr_prob || 0;
       const state = i.signal_state_label || '—';
-      mlHtml += mlInstBlock(sym, xgb, lr, 0.58, 0.58, state, false);
+      mlHtml += mlInstBlock(sym, xgb, lr, 0.58, 0.58, state, false, 'XGB');
       const score = i.readiness_score || 0;
       if (score > bestSig) {
         bestSig = score;
@@ -2451,8 +2451,8 @@ async function loadSystem() {
     </div>
     <div class="health-card">
       <div class="health-card-title">Setup F · ML</div>
-      ${hRow('Status', 'Disabled (investigation)', 'warn')}
-      ${hRow('Dashboard', 'Display only', 'ok')}
+      ${hRow('Status', 'LIVE (RF · AUC 0.60)', 'ok')}
+      ${hRow('Signals', 'MNQ + ES active', 'ok')}
     </div>`;
 
   // Calendar card needs separate fetch
@@ -3518,7 +3518,7 @@ async function loadResearchBacktest() {
       return;
     }
 
-    const allSetups = ['A','B','C','D','E','H','I'];
+    const allSetups = ['A','B','C','D','E','F','H','I','J'];
     const bySetup = {};
     for (const r2 of data.results) bySetup[r2.setup_id] = r2;
     const trends = data.trends || {};
@@ -3825,7 +3825,7 @@ const CMD_COMPONENTS = [
   { name: 'Paper Trader',       desc: 'Virtual account, positions, P&L tracking',           status: 'green' },
   { name: 'Telegram Alerts',    desc: 'Signal, session, and research notifications',         status: 'green' },
   { name: 'Research Division',  desc: 'Weekly health checks, Shadow Lab, decisions',        status: 'green' },
-  { name: 'Setup F (ML)',       desc: 'XGBoost probability model — disabled (dedup gap)',   status: 'amber' },
+  { name: 'Setup F (ML)',       desc: 'Random Forest probability model — LIVE (AUC 0.60)', status: 'green' },
 ];
 
 const CMD_STRAT_META = [
@@ -3833,9 +3833,11 @@ const CMD_STRAT_META = [
   { id:'B', name:'ChoCh + OB',       detail:'Gate · Swing · MNQ/ES/GC · London+NY' },
   { id:'C', name:'BOS + OB',         detail:'Gate · Swing · MNQ/ES/GC · London+NY' },
   { id:'D', name:'FVG Fill',         detail:'Gate · Intraday · MNQ/ES · NY Primary' },
-  { id:'E', name:'EMA50 Pullback',   detail:'Gate · Intraday · MNQ · NY Primary' },
-  { id:'H', name:'VWAP Reversion',   detail:'Gate · Intraday · ES live / MNQ paper' },
+  { id:'E', name:'EMA50 Pullback',    detail:'Gate · Intraday · MNQ · NY Primary' },
+  { id:'F', name:'ML Probability',    detail:'RF · MNQ/ES · NY Primary' },
+  { id:'H', name:'VWAP Reversion',    detail:'Gate · Intraday · ES live / MNQ paper' },
   { id:'I', name:'Mathematical Alpha',detail:'ML Ensemble XGB+LR · MNQ/ES · NY Primary' },
+  { id:'J', name:'Value Area Cont.',  detail:'Gate · Intraday · ES live / MNQ paper · NY' },
 ];
 
 const CMD_ROADMAP = [
@@ -3855,7 +3857,7 @@ const CMD_ROADMAP = [
       { done: false, text: 'Shadow Lab paper trading integration' },
       { done: false, text: 'Automated promotion/demotion decisions' },
       { done: false, text: 'Pattern Discovery engine' },
-      { done: false, text: 'Setup F dedup fix + reactivation' },
+      { done: true,  text: 'Setup F retrained (RF · AUC 0.60) — LIVE' },
     ],
   },
   {
@@ -3870,14 +3872,13 @@ const CMD_ROADMAP = [
 ];
 
 const CMD_ACTIONS = [
-  { pri:1, level:'high',   title:'Resolve Setup F dedup gap', desc:'log_trade() gap under investigation — setup currently disabled, blocking live ML signals', tag:'HIGH' },
-  { pri:2, level:'high',   title:'Shadow Lab paper trading',  desc:'Wire up Phase 2 paper trading integration for shadow candidates', tag:'HIGH' },
-  { pri:3, level:'medium', title:'Setup I — ES short AUC',    desc:'Review short direction AUC on ES; currently enabled but marginal at some periods', tag:'MEDIUM' },
-  { pri:4, level:'medium', title:'Expand GC to Setup D/H',    desc:'FVG Fill and VWAP Reversion show promise on Gold futures in backtests', tag:'MEDIUM' },
-  { pri:5, level:'low',    title:'Phase 3 planning',          desc:'Define timeline and requirements for funded account integration', tag:'LOW' },
+  { pri:1, level:'high',   title:'Shadow Lab paper trading',  desc:'Wire up Phase 2 paper trading integration for shadow candidates', tag:'HIGH' },
+  { pri:2, level:'medium', title:'Setup I — ES short AUC',    desc:'Review short direction AUC on ES; currently enabled but marginal at some periods', tag:'MEDIUM' },
+  { pri:3, level:'medium', title:'Expand GC to Setup D/H',    desc:'FVG Fill and VWAP Reversion show promise on Gold futures in backtests', tag:'MEDIUM' },
+  { pri:4, level:'low',    title:'Phase 3 planning',          desc:'Define timeline and requirements for funded account integration', tag:'LOW' },
 ];
 
-const STRAT_BADGE_COLORS = { A:'#34c759',B:'#0071e3',C:'#ff9f0a',D:'#af52de',E:'#ff3b30',H:'#ff9f0a',I:'#5e5ce6' };
+const STRAT_BADGE_COLORS = { A:'#34c759',B:'#0071e3',C:'#ff9f0a',D:'#af52de',E:'#ff3b30',F:'#34aadc',H:'#ff9f0a',I:'#5e5ce6',J:'#FF9500' };
 
 function _renderComponents(el, showDesc) {
   el.innerHTML = CMD_COMPONENTS.map(c => {
@@ -4020,7 +4021,7 @@ const CC_META = {
   C: { name:'BOS + OB',          type:'Gate · Swing',        color:'#ff9f0a' },
   D: { name:'FVG Fill',          type:'Gate · Intraday',     color:'#af52de' },
   E: { name:'EMA50 Pullback',    type:'Gate · Intraday',     color:'#ff3b30' },
-  F: { name:'ML Probability',    type:'ML · Suspended',      color:'#8e8e93' },
+  F: { name:'ML Probability',    type:'RF · LIVE',            color:'#34aadc' },
   H: { name:'VWAP Reversion',    type:'Gate · Intraday',     color:'#ff9f0a' },
   I: { name:'Mathematical Alpha',type:'ML Ensemble',         color:'#5e5ce6' },
 };
