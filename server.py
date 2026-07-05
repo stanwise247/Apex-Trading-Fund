@@ -3796,7 +3796,8 @@ def _startup_reconcile_trades():
     try:
         # ── Fetch Tradovate open positions ───────────────────────
         try:
-            tv_positions = _rc_get_positions() or []
+            _rc_tv_result = _rc_get_positions()
+            tv_positions = _rc_tv_result.get('positions', []) if isinstance(_rc_tv_result, dict) else (_rc_tv_result or [])
         except Exception as _rc_tv_e:
             logger.warning(f'Reconciliation: Tradovate unavailable — {_rc_tv_e}')
             return
@@ -3808,7 +3809,7 @@ def _startup_reconcile_trades():
             # Map Tradovate contract names to our symbols
             for _apex_sym in ('MNQ', 'ES', 'GC', 'NQ'):
                 if _apex_sym in str(sym).upper():
-                    tv_open[_apex_sym] = tv_open.get(_apex_sym, 0) + abs(pos.get('netPos', 0))
+                    tv_open[_apex_sym] = tv_open.get(_apex_sym, 0) + abs(pos.get('contracts', 0))
                     break
 
         # ── Fetch DB open trades ─────────────────────────────────
@@ -3894,7 +3895,8 @@ def reconcile_trades():
     """Manually trigger trade reconciliation. Returns reconciliation report."""
     try:
         from tradovate import get_positions as _api_rc_pos
-        tv_positions = _api_rc_pos() or []
+        _api_tv_result = _api_rc_pos()
+        tv_positions = _api_tv_result.get('positions', []) if isinstance(_api_tv_result, dict) else (_api_tv_result or [])
         tv_open_syms = set()
         for pos in tv_positions:
             sym = pos.get('symbol') or pos.get('contractId', '')
