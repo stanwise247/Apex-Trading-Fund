@@ -165,46 +165,51 @@ def _vol_ratio(log_returns: np.ndarray) -> float:
 #  CLASSIFICATION
 # ─────────────────────────────────────────────────────────────
 
-def classify(hurst: float, autocorr: float, vr: float) -> tuple[str, float, str]:
+def classify(hurst: float, autocorr: float, vr: float,
+             net_dir: float = 0.0) -> tuple[str, float, str]:
     """
     Returns (regime, confidence, reason).
 
-    Classification logic:
+    Four-vote classification:
       if vol_ratio > 1.5 → CHOPPY (hard override — erratic price action)
-      trending_score     = +1 if H > 0.55, +1 if autocorr > 0.05
-      mean_rev_score     = +1 if H < 0.45, +1 if autocorr < -0.05
-      if trending_score >= 2 → TRENDING
+      trending_score = +1 H>0.55, +1 autocorr>0.05, +1 net_dir>0.60
+      mean_rev_score = +1 H<0.45, +1 autocorr<-0.05
+      if trending_score >= 2 → TRENDING   (any 2-of-3 directional measures)
       if mean_rev_score >= 2 → MEAN_REVERTING
       else → CHOPPY
 
-    Confidence (fraction of three measures agreeing with final regime):
-      Each measure casts a vote toward a regime class.
-      confidence = agreeing_votes / 3
+    net_dir = |net_move| / session_range over last 100 bars.
+    Catches staircase-down/up moves that fool lag-1 autocorr (alternating bars
+    suppress autocorr even when price moves strongly in one direction).
     """
     # Hard override
     if vr > 1.5:
-        # Confidence based on how strongly each measure backs CHOPPY
-        h_choppy    = 1 if 0.45 <= hurst  <= 0.55 else 0
-        ac_choppy   = 1 if -0.05 <= autocorr <= 0.05 else 0
-        vr_choppy   = 1  # vr > 1.5 → definitive choppy
+        h_choppy  = 1 if 0.45 <= hurst   <= 0.55 else 0
+        ac_choppy = 1 if -0.05 <= autocorr <= 0.05 else 0
+        vr_choppy = 1
         conf = (h_choppy + ac_choppy + vr_choppy) / 3
         return 'CHOPPY', round(conf, 2), f'vol_override(vr={vr:.2f}>1.5)'
 
-    trending_score = (1 if hurst > 0.55 else 0) + (1 if autocorr > 0.05 else 0)
+    nd_vote = 1 if net_dir > 0.60 else 0
+    trending_score = (1 if hurst > 0.55 else 0) + (1 if autocorr > 0.05 else 0) + nd_vote
     mean_rev_score = (1 if hurst < 0.45 else 0) + (1 if autocorr < -0.05 else 0)
 
     if trending_score >= 2:
         regime = 'TRENDING'
         h_vote  = 1 if hurst > 0.55 else 0
         ac_vote = 1 if autocorr > 0.05 else 0
-        vr_vote = 1 if 0.7 <= vr <= 1.3 else 0  # normal vol supports trending
-        conf    = (h_vote + ac_vote + vr_vote) / 3
-        reason  = f'H={hurst:.3f}>0.55,autocorr={autocorr:.3f}>0.05'
+        vr_vote = 1 if 0.7 <= vr <= 1.3 else 0
+        conf    = (h_vote + ac_vote + nd_vote + vr_vote) / 4
+        reason  = (
+            f'H={hurst:.3f}>0.55,autocorr={autocorr:.3f}>0.05,net={net_dir:.2f}'
+            if not nd_vote
+            else f'H={hurst:.3f},autocorr={autocorr:.3f},net_dir={net_dir:.2f}>0.60'
+        )
     elif mean_rev_score >= 2:
         regime = 'MEAN_REVERTING'
         h_vote  = 1 if hurst < 0.45 else 0
         ac_vote = 1 if autocorr < -0.05 else 0
-        vr_vote = 1 if vr < 0.7 else 0  # compressed vol supports MR
+        vr_vote = 1 if vr < 0.7 else 0
         conf    = (h_vote + ac_vote + vr_vote) / 3
         reason  = f'H={hurst:.3f}<0.45,autocorr={autocorr:.3f}<-0.05'
     else:
@@ -213,7 +218,7 @@ def classify(hurst: float, autocorr: float, vr: float) -> tuple[str, float, str]
         ac_vote = 1 if -0.05 <= autocorr <= 0.05 else 0
         vr_vote = 1 if vr > 1.0 else 0
         conf    = (h_vote + ac_vote + vr_vote) / 3
-        reason  = f'mixed:H={hurst:.3f},autocorr={autocorr:.3f},vr={vr:.2f}'
+        reason  = f'mixed:H={hurst:.3f},autocorr={autocorr:.3f},vr={vr:.2f},net={net_dir:.2f}'
 
     return regime, round(conf, 2), reason
 
@@ -306,11 +311,19 @@ def calculate_and_store(symbol: str, df_5m: pd.DataFrame = None) :
         if len(log_ret) < 20:
             return None
 
-        hurst  = _hurst_rs(log_ret[-100:] if len(log_ret) >= 100 else log_ret)
+        hurst    = _hurst_rs(log_ret[-100:] if len(log_ret) >= 100 else log_ret)
         autocorr = _autocorr_lag1(log_ret)
-        vr     = _vol_ratio(log_ret)
+        vr       = _vol_ratio(log_ret)
 
-        regime, confidence, reason = classify(hurst, autocorr, vr)
+        # Net directional move: |close[-1] - close[-100]| / session high-low range
+        # Detects staircase moves that suppress lag-1 autocorr (alternating bar pattern)
+        n_nd = min(len(closes), 100)
+        nd_slice  = closes[-n_nd:]
+        nd_range  = float(nd_slice.max() - nd_slice.min())
+        nd_net    = float(abs(closes[-1] - closes[-n_nd]))
+        net_dir   = nd_net / nd_range if nd_range > 1e-6 else 0.0
+
+        regime, confidence, reason = classify(hurst, autocorr, vr, net_dir)
         now_utc = datetime.now(timezone.utc)
 
         state = RegimeState(
@@ -323,7 +336,7 @@ def calculate_and_store(symbol: str, df_5m: pd.DataFrame = None) :
         logger.info(
             f'Regime {symbol}: {regime} | '
             f'H={hurst:.2f} | autocorr={autocorr:.2f} | '
-            f'vol={vr:.2f} | conf={confidence:.2f}'
+            f'vol={vr:.2f} | net_dir={net_dir:.2f} | conf={confidence:.2f}'
         )
 
         # Log WARNING on regime change

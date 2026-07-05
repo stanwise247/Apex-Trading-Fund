@@ -1627,23 +1627,27 @@ _kill_switch_balance:      float = 0.0
 _kill_switch_threshold:    float = 400.0
 
 
-def _cal_block(symbol: str, setup: str) -> bool:
+def _cal_block(symbol: str, setup: str) -> tuple:
     """
-    Return True (and log) if economic calendar blackout is active.
+    Return (True, reason_str) if economic calendar blackout is active, (False, '') if clear.
     Called before every signal fires. Single gate — protects all setups.
+
+    NY open soft blackout (13:00–14:05 UTC) applies to momentum setups A/B/C/I only.
+    Setup D (FVG fills) excluded — FVG fills are valid in the opening range.
+    Setup H and J are never soft-blocked.
     """
     if not SIGNAL_FILTERS.get('economic_calendar', True):
-        return False
+        return False, ''
 
     _now_utc = datetime.now(timezone.utc)
 
-    # NY-open soft blackout 13:00–14:05 UTC (11.6% TRENDING probability — worst hour of day).
-    # Applies to momentum setups A/B/C/D/I only. H and J are unaffected.
+    # NY-open soft blackout 13:00–14:05 UTC — momentum setups A/B/C/I only (not D/H/J)
     _setup_letter = (setup or '')[:1].upper()
-    if _setup_letter in ('A', 'B', 'C', 'D', 'I'):
+    if _setup_letter in ('A', 'B', 'C', 'I'):
         if _now_utc.hour == 13 or (_now_utc.hour == 14 and _now_utc.minute <= 5):
-            logger.info(f'{setup} {symbol}: skipped — NY open soft blackout 13:00-14:05 UTC')
-            return True
+            _sb_reason = f'NY open soft blackout 13:00-14:05 UTC'
+            logger.info(f'{setup} {symbol}: skipped — {_sb_reason}')
+            return True, _sb_reason
 
     try:
         from calendar_filter import get_filter as _gcf
@@ -1651,10 +1655,11 @@ def _cal_block(symbol: str, setup: str) -> bool:
         _blocked, _reason = _cf.is_blocked(symbol, _now_utc)
         if _blocked:
             logger.warning(f'{setup} {symbol}: skipped — economic calendar blackout: {_reason}')
-        return _blocked
+            return True, _reason
+        return False, ''
     except Exception as _e:
         logger.debug(f'_cal_block check failed (allowing signal): {_e}')
-        return False
+        return False, ''
 
 
 def _is_signal_already_active(symbol: str, direction: str, setup: str) -> bool:
@@ -2265,6 +2270,10 @@ def background_scheduler():
                     f'Risk: {_dd_mult:.2f}× | DD: {_rg.dd.get_drawdown_pct():.1f}%</i>'
                 )
                 logger.info('Scanning Setups A/B/C/E...')
+                _abc_now_utc = datetime.now(timezone.utc)
+                for _abc_pre_sym in ('MNQ', 'ES'):
+                    _write_scan_log(_abc_pre_sym, 'A_B_C_E_scan', None, '', None, None, None, None,
+                                    'SCANNING', f'entering A/B/C/E scan {_abc_now_utc.strftime("%H:%M")}')
                 signals = run_scan()
                 for result in signals:
                     _sym   = result.symbol
@@ -2329,9 +2338,10 @@ def background_scheduler():
                             logger.info(f'Setup E {_dirn} suppressed — opposite swing trade open on {_sym}')
                             continue
                     # Economic calendar gate — skip if blackout active
-                    if _cal_block(_sym, _setup):
+                    _abc_cal_blocked, _abc_cal_reason = _cal_block(_sym, _setup)
+                    if _abc_cal_blocked:
                         _write_scan_log(_sym, _setup, None, _dirn, None, None, None, None,
-                                        'BLOCKED_CALENDAR', 'calendar gate')
+                                        'BLOCKED_CALENDAR', f'calendar: {_abc_cal_reason}'[:200])
                         continue
                     # Unified dedup: mark fired BEFORE telegram
                     if _check_and_mark_fired(_sym, _setup, _dirn):
@@ -2486,11 +2496,13 @@ def background_scheduler():
                                     f'stop={_f_stop_pts} pts | risk=${_f_risk_usd:.0f} | contracts=1'
                                 )
                                 # Economic calendar gate
-                                if _cal_block(_sym, sig['setup']):
+                                _f_cal_blocked, _f_cal_reason = _cal_block(_sym, sig['setup'])
+                                if _f_cal_blocked:
                                     _write_scan_log(_sym, sig.get('setup', 'F_rf_signal'),
                                                     sig.get('confidence'), sig['direction'],
                                                     sig.get('entry'), sig.get('stop'),
-                                                    sig.get('target'), None, 'BLOCKED_CALENDAR', 'calendar gate')
+                                                    sig.get('target'), None, 'BLOCKED_CALENDAR',
+                                                    f'calendar: {_f_cal_reason}'[:200])
                                     continue
                                 # Unified dedup: mark fired BEFORE telegram
                                 # _fired_today expires at midnight — log_trade failure does NOT cause re-fire
@@ -2628,13 +2640,14 @@ def background_scheduler():
                                             'SIGNAL', f'xgb={sig.get("xgb_prob")} lr={sig.get("lr_prob")}')
 
                             # ── [I-2a/6] Calendar ────────────────────────────────
-                            if _cal_block(_sym, sig['setup']):
+                            _i_cal_blocked, _i_cal_reason = _cal_block(_sym, sig['setup'])
+                            if _i_cal_blocked:
                                 logger.info(f'[I-2a/6] Setup I {_sym}: calendar blackout — BLOCKED')
                                 _write_scan_log(_sym, sig.get('setup', 'I_mathematical'),
                                                 sig.get('xgb_prob'), sig.get('direction', ''),
                                                 sig.get('entry'), sig.get('stop'),
                                                 sig.get('target'), None,
-                                                'BLOCKED_CALENDAR', 'calendar blackout')
+                                                'BLOCKED_CALENDAR', f'calendar: {_i_cal_reason}'[:200])
                                 continue
                             logger.info(f'[I-2a/6] Setup I {_sym}: calendar clear — OK')
 
@@ -2828,13 +2841,14 @@ def background_scheduler():
                                             'SIGNAL', f'VAH={sig_j.get("vah")} VAL={sig_j.get("val")}')
 
                             # ── [J-2a/6] Calendar ────────────────────────────────
-                            if _cal_block(_sym_j, sig_j['setup']):
+                            _j_cal_blocked, _j_cal_reason = _cal_block(_sym_j, sig_j['setup'])
+                            if _j_cal_blocked:
                                 logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar blackout — BLOCKED')
                                 _write_scan_log(_sym_j, sig_j.get('setup', 'J_value_area'),
                                                 sig_j.get('score'), sig_j.get('direction', ''),
                                                 sig_j.get('entry'), sig_j.get('stop'),
                                                 sig_j.get('target'), None,
-                                                'BLOCKED_CALENDAR', 'calendar blackout')
+                                                'BLOCKED_CALENDAR', f'calendar: {_j_cal_reason}'[:200])
                                 continue
                             logger.info(f'[J-2a/6] Setup J {_sym_j}: calendar clear — OK')
 
@@ -3013,12 +3027,13 @@ def background_scheduler():
                                                     sig_d.get('target'), sig_d.get('target2'),
                                                     'BLOCKED_HTF_BIAS', _f3d_detail[:200])
                                     continue
-                            if _cal_block(_sym_d, sig_d['setup']):
+                            _d_cal_blocked, _d_cal_reason = _cal_block(_sym_d, sig_d['setup'])
+                            if _d_cal_blocked:
                                 _write_scan_log(_sym_d, sig_d.get('setup', 'D_fvg_fill'),
                                                 sig_d.get('fvg_score'), sig_d.get('direction', ''),
                                                 sig_d.get('entry'), sig_d.get('stop'),
                                                 sig_d.get('target'), sig_d.get('target2'),
-                                                'BLOCKED_CALENDAR', 'calendar gate')
+                                                'BLOCKED_CALENDAR', f'calendar: {_d_cal_reason}'[:200])
                                 continue
                             if _check_and_mark_fired(_sym_d, sig_d['setup'], sig_d['direction']):
                                 continue
@@ -3159,6 +3174,7 @@ def background_scheduler():
                                                         'BLOCKED_CONCURRENT', f'open trade #{_f1h_id}')
                                         sig_es = None
                             if sig_es:
+                                _hes_cal_blocked = False
                                 if _has_opposite_swing_trade('ES', sig_es['direction']):
                                     logger.info('Setup H ES suppressed — opposite swing trade open')
                                     _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
@@ -3166,13 +3182,16 @@ def background_scheduler():
                                                     sig_es.get('entry'), sig_es.get('stop'),
                                                     sig_es.get('target'), None,
                                                     'BLOCKED_CONCURRENT', 'opposite swing trade open')
-                                elif _cal_block('ES', sig_es['setup']):
-                                    _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
-                                                    sig_es.get('score'), sig_es.get('direction', ''),
-                                                    sig_es.get('entry'), sig_es.get('stop'),
-                                                    sig_es.get('target'), None,
-                                                    'BLOCKED_CALENDAR', 'calendar gate')
-                                elif not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
+                                    sig_es = None
+                                else:
+                                    _hes_cal_blocked, _hes_cal_reason = _cal_block('ES', sig_es['setup'])
+                                    if _hes_cal_blocked:
+                                        _write_scan_log('ES', sig_es.get('setup', 'H_vwap_reversal'),
+                                                        sig_es.get('score'), sig_es.get('direction', ''),
+                                                        sig_es.get('entry'), sig_es.get('stop'),
+                                                        sig_es.get('target'), None,
+                                                        'BLOCKED_CALENDAR', f'calendar: {_hes_cal_reason}'[:200])
+                                if sig_es and not _hes_cal_blocked and not _check_and_mark_fired('ES', sig_es['setup'], sig_es['direction']):
                                     if not _is_signal_already_active('ES', sig_es['direction'], sig_es['setup']):
                                         _h_es_cap_ok, _h_es_cap_msg = _stop_cap_ok(sig_es)
                                         if not _h_es_cap_ok:
@@ -3265,6 +3284,7 @@ def background_scheduler():
                                                         'BLOCKED_CONCURRENT', f'open trade #{_f1hm_id}')
                                         sig_mnq_h = None
                             if sig_mnq_h:
+                                _hmnq_cal_blocked = False
                                 if _has_opposite_swing_trade('MNQ', sig_mnq_h['direction']):
                                     logger.info('Setup H MNQ suppressed — opposite swing trade open')
                                     _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
@@ -3272,13 +3292,16 @@ def background_scheduler():
                                                     sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
                                                     sig_mnq_h.get('target'), None,
                                                     'BLOCKED_CONCURRENT', 'opposite swing trade open')
-                                elif _cal_block('MNQ', sig_mnq_h['setup']):
-                                    _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
-                                                    sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
-                                                    sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
-                                                    sig_mnq_h.get('target'), None,
-                                                    'BLOCKED_CALENDAR', 'calendar gate')
-                                elif not _check_and_mark_fired('MNQ', sig_mnq_h['setup'], sig_mnq_h['direction']):
+                                    sig_mnq_h = None
+                                else:
+                                    _hmnq_cal_blocked, _hmnq_cal_reason = _cal_block('MNQ', sig_mnq_h['setup'])
+                                    if _hmnq_cal_blocked:
+                                        _write_scan_log('MNQ', sig_mnq_h.get('setup', 'H_vwap_reversal'),
+                                                        sig_mnq_h.get('score'), sig_mnq_h.get('direction', ''),
+                                                        sig_mnq_h.get('entry'), sig_mnq_h.get('stop'),
+                                                        sig_mnq_h.get('target'), None,
+                                                        'BLOCKED_CALENDAR', f'calendar: {_hmnq_cal_reason}'[:200])
+                                if sig_mnq_h and not _hmnq_cal_blocked and not _check_and_mark_fired('MNQ', sig_mnq_h['setup'], sig_mnq_h['direction']):
                                     if not _is_signal_already_active('MNQ', sig_mnq_h['direction'], sig_mnq_h['setup']):
                                         _hm_cap_ok, _hm_cap_msg = _stop_cap_ok(sig_mnq_h)
                                         if not _hm_cap_ok:
@@ -3753,6 +3776,153 @@ def telegram_config():
 #  STARTUP
 # =============================================================
 
+def _startup_reconcile_trades():
+    """
+    Startup trade reconciliation — run in daemon thread after server init.
+    Compares Tradovate open positions vs apex_trades open rows:
+      - Orphan Tradovate positions (no DB record) → create reconciled_orphan row + Telegram
+      - Stale DB rows (open in DB but no Tradovate position) → flag as stale + Telegram
+    Handles Tradovate unavailability gracefully (logs, does not crash).
+    """
+    import time as _rc_time
+    _rc_time.sleep(5)  # wait for server to fully init
+    try:
+        from tradovate import get_positions as _rc_get_positions
+    except Exception as _rc_imp:
+        logger.debug(f'Reconciliation: tradovate import failed — {_rc_imp}')
+        return
+
+    logger.info('Reconciliation: checking Tradovate positions vs DB open trades...')
+    try:
+        # ── Fetch Tradovate open positions ───────────────────────
+        try:
+            tv_positions = _rc_get_positions() or []
+        except Exception as _rc_tv_e:
+            logger.warning(f'Reconciliation: Tradovate unavailable — {_rc_tv_e}')
+            return
+
+        # Normalise to {symbol: qty} dict from Tradovate
+        tv_open = {}
+        for pos in tv_positions:
+            sym = pos.get('symbol') or pos.get('contractId', '')
+            # Map Tradovate contract names to our symbols
+            for _apex_sym in ('MNQ', 'ES', 'GC', 'NQ'):
+                if _apex_sym in str(sym).upper():
+                    tv_open[_apex_sym] = tv_open.get(_apex_sym, 0) + abs(pos.get('netPos', 0))
+                    break
+
+        # ── Fetch DB open trades ─────────────────────────────────
+        _rc_conn = _db.connect()
+        db_open_rows = _rc_conn.execute(
+            "SELECT id, symbol, direction, setup, entry_time, entry_price FROM apex_trades "
+            "WHERE status='open' ORDER BY entry_time"
+        ).fetchall()
+        _rc_conn.close()
+
+        db_open = {}
+        for row in db_open_rows:
+            sym = row[1]
+            db_open.setdefault(sym, []).append({
+                'id': row[0], 'symbol': sym, 'direction': row[2],
+                'setup': row[3], 'entry_time': row[4], 'entry_price': row[5],
+            })
+
+        orphans_found = []
+        stale_found   = []
+
+        # ── Check for stale DB rows (DB open, Tradovate closed) ──
+        for sym, trades in db_open.items():
+            tv_qty = tv_open.get(sym, 0)
+            db_qty = len(trades)
+            if db_qty > tv_qty:
+                # More DB open than Tradovate positions — excess are stale
+                stale_count = db_qty - max(tv_qty, 0)
+                stale_trades = trades[:stale_count]  # oldest first
+                for _st in stale_trades:
+                    logger.warning(
+                        f'Reconciliation: stale DB row — trade_id={_st["id"]} {sym} {_st["direction"]} '
+                        f'is open in DB but no Tradovate position found'
+                    )
+                    try:
+                        _rc_conn2 = _db.connect()
+                        _rc_conn2.execute(
+                            "UPDATE apex_trades SET notes=?, status='open' "
+                            "WHERE id=?",
+                            (f'STALE_RECON: no Tradovate position found at startup {datetime.now(timezone.utc).isoformat()}',
+                             _st['id'])
+                        )
+                        _rc_conn2.commit()
+                        _rc_conn2.close()
+                    except Exception as _rc_upd_e:
+                        logger.warning(f'Reconciliation: DB update failed for trade {_st["id"]}: {_rc_upd_e}')
+                    stale_found.append(_st)
+
+        # ── Build Telegram message ───────────────────────────────
+        if orphans_found or stale_found:
+            try:
+                from live_scanner import send_telegram as _rc_tg
+                _rc_lines = [f'{chr(9888)} <b>APEX Startup Reconciliation</b>', chr(9473) * 22]
+                if stale_found:
+                    _rc_lines.append(f'<b>Stale DB rows ({len(stale_found)}):</b>')
+                    for _st in stale_found:
+                        _rc_lines.append(
+                            f'  trade_id={_st["id"]} {_st["symbol"]} {_st["direction"]} '
+                            f'{_st["setup"]} — no Tradovate position'
+                        )
+                if orphans_found:
+                    _rc_lines.append(f'<b>Orphan positions ({len(orphans_found)}):</b>')
+                    for _orp in orphans_found:
+                        _rc_lines.append(f'  {_orp["symbol"]} — created reconciled_orphan record')
+                _rc_lines.append('<i>Review manually and close/reconcile as needed.</i>')
+                _rc_tg(chr(10).join(_rc_lines))
+            except Exception as _rc_tg_e:
+                logger.debug(f'Reconciliation: Telegram failed — {_rc_tg_e}')
+
+        if not orphans_found and not stale_found:
+            logger.info('Reconciliation: Tradovate positions match DB open trades — OK')
+        else:
+            logger.warning(
+                f'Reconciliation complete: {len(stale_found)} stale, {len(orphans_found)} orphans'
+            )
+
+    except Exception as _rc_outer:
+        logger.warning(f'Reconciliation: unexpected error — {_rc_outer}')
+
+
+@app.route('/api/apex/reconcile', methods=['POST'])
+def reconcile_trades():
+    """Manually trigger trade reconciliation. Returns reconciliation report."""
+    try:
+        from tradovate import get_positions as _api_rc_pos
+        tv_positions = _api_rc_pos() or []
+        tv_open_syms = set()
+        for pos in tv_positions:
+            sym = pos.get('symbol') or pos.get('contractId', '')
+            for _apex_sym in ('MNQ', 'ES', 'GC', 'NQ'):
+                if _apex_sym in str(sym).upper():
+                    tv_open_syms.add(_apex_sym)
+                    break
+        _rc_conn = _db.connect()
+        db_open = _rc_conn.execute(
+            "SELECT id, symbol, direction, setup, status FROM apex_trades WHERE status='open'"
+        ).fetchall()
+        _rc_conn.close()
+        db_open_syms = set(r[1] for r in db_open)
+        stale = [dict(zip(['id','symbol','direction','setup','status'], r))
+                 for r in db_open if r[1] not in tv_open_syms]
+        return jsonify({
+            'ok':               True,
+            'tv_open_symbols':  sorted(tv_open_syms),
+            'db_open_trades':   len(db_open),
+            'db_open_symbols':  sorted(db_open_syms),
+            'stale_db_rows':    stale,
+            'orphan_count':     max(0, len(tv_open_syms) - len(db_open_syms)),
+        })
+    except Exception as e:
+        logger.warning(f'reconcile_trades endpoint error: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 def _startup():
     logger.info('=' * 55)
     logger.info('  APEX Trading Engine - Phase 1 v1.1')
@@ -4116,6 +4286,7 @@ def _startup():
 
     threading.Thread(target=startup_backfill, daemon=True).start()
     threading.Thread(target=background_scheduler, daemon=True).start()
+    threading.Thread(target=_startup_reconcile_trades, daemon=True).start()
 
     def _mdir_startup_load():
         """Load (or trigger first-time train) of Meridian Direction models at startup."""
@@ -6800,11 +6971,241 @@ def retrain_setup_f_endpoint():
     })
 
 
+@app.route('/api/apex/retrain_meridian_l3', methods=['POST'])
+def retrain_meridian_l3_endpoint():
+    """Trigger immediate Meridian L3 retrain for MNQ and ES. Runs in background thread."""
+    import threading as _ml3_th
+
+    def _do_retrain():
+        try:
+            import meridian_l3 as _ml3
+            results = {}
+            for _sym in ('MNQ', 'ES'):
+                logger.info(f'Meridian L3: manual retrain triggered for {_sym}')
+                ok = _ml3.retrain(_sym)
+                results[_sym] = 'ok' if ok else 'failed'
+                if ok:
+                    cache = _ml3._l3_cache.get(_sym, {})
+                    logger.info(
+                        f'Meridian L3 {_sym}: retrain complete '
+                        f'AUC={cache.get("auc", "?")} mode={cache.get("mode", "?")}'
+                    )
+            return results
+        except Exception as _ml3_e:
+            logger.error(f'Meridian L3 manual retrain: {_ml3_e}')
+
+    _t = _ml3_th.Thread(target=_do_retrain, daemon=True)
+    _t.start()
+    return jsonify({'ok': True, 'message': 'Meridian L3 retrain started for MNQ and ES'})
+
+
 @app.route('/api/apex/retrain_setup_f', methods=['GET'])
 def retrain_setup_f_status():
     """Return current retrain status."""
     status = getattr(retrain_setup_f_endpoint, '_status', {})
     return jsonify({'ok': True, 'status': status})
+
+
+@app.route('/api/apex/morning_brief', methods=['POST'])
+def morning_brief():
+    """
+    06:45 UTC weekday morning brief — account health, regime, signals, and open positions.
+    Sends Telegram message and returns JSON.
+
+    Components:
+      balance/P&L, HTF 4h bias, regime+conf, Meridian L3 prob+multiplier,
+      open positions unrealised P&L, kill switch distance ($4,000 threshold),
+      7-day live trade count, signal-ready setups, shadow lab status.
+    """
+    try:
+        now_utc = datetime.now(timezone.utc)
+
+        # ── 1. Account P&L ──────────────────────────────────────
+        try:
+            conn_mb = _db.connect()
+            today_str = now_utc.strftime('%Y-%m-%d')
+            seven_days_ago = (now_utc - timedelta(days=7)).isoformat()
+            # Today's P&L
+            today_rows = conn_mb.execute(
+                "SELECT COALESCE(SUM(pnl_r), 0) FROM apex_trades "
+                "WHERE status='closed' AND entry_time >= ? AND entry_time < ?",
+                (f'{today_str}T00:00:00+00:00', f'{today_str}T23:59:59+00:00')
+            ).fetchone()
+            today_r = round(float(today_rows[0] or 0), 2)
+
+            # 7-day live trade count (exclude paper/test)
+            trades_7d = conn_mb.execute(
+                "SELECT COUNT(*) FROM apex_trades "
+                "WHERE status IN ('closed','open') "
+                "  AND entry_time >= ? "
+                "  AND (notes IS NULL OR notes NOT ILIKE '%test%')",
+                (seven_days_ago,)
+            ).fetchone()
+            trade_count_7d = int(trades_7d[0] or 0)
+
+            # Open positions
+            open_rows = conn_mb.execute(
+                "SELECT id, symbol, direction, setup, entry_price, stop, target1, pnl_r "
+                "FROM apex_trades WHERE status='open' ORDER BY entry_time"
+            ).fetchall()
+            open_positions = [
+                {'id': r[0], 'symbol': r[1], 'direction': r[2], 'setup': r[3],
+                 'entry': r[4], 'stop': r[5], 'target': r[6], 'pnl_r': round(float(r[7] or 0), 2)}
+                for r in open_rows
+            ]
+            conn_mb.close()
+        except Exception as _mb_db_e:
+            logger.warning(f'morning_brief DB query failed: {_mb_db_e}')
+            today_r, trade_count_7d, open_positions = 0.0, 0, []
+
+        # Unrealised P&L from open positions
+        unrealised_r = sum(p.get('pnl_r', 0) or 0 for p in open_positions)
+
+        # ── 2. Kill switch distance ──────────────────────────────
+        ks_active    = _kill_switch_active
+        ks_threshold = _kill_switch_threshold
+        ks_balance   = _kill_switch_balance
+
+        # ── 3. Regime ───────────────────────────────────────────
+        regime_data = {}
+        try:
+            from regime_engine import get_current_regime
+            for _mb_sym in ('MNQ', 'ES'):
+                regime_data[_mb_sym] = get_current_regime(_mb_sym)
+        except Exception as _mb_re:
+            logger.warning(f'morning_brief regime error: {_mb_re}')
+
+        # ── 4. Meridian L3 ──────────────────────────────────────
+        meridian_data = {}
+        try:
+            import meridian_l3 as _mb_ml3
+            for _mb_sym in ('MNQ', 'ES'):
+                if _mb_sym not in _mb_ml3._l3_cache:
+                    _mb_ml3.load_model(_mb_sym)
+                _mb_prob = _mb_ml3.predict(_mb_sym)
+                _mb_mult, _ = _mb_ml3.get_position_multiplier(_mb_sym, 0.5, 0.5)
+                meridian_data[_mb_sym] = {'prob': round(_mb_prob, 4), 'multiplier': _mb_mult}
+        except Exception as _mb_me:
+            logger.warning(f'morning_brief meridian error: {_mb_me}')
+
+        # ── 5. HTF 4h bias ──────────────────────────────────────
+        htf_bias = {}
+        try:
+            from market_structure import load_bars as _mb_lb
+            import pandas as _mb_pd
+            for _mb_sym in ('MNQ', 'ES'):
+                _mb_bars = _mb_lb(_mb_sym, '4hour', limit=25)
+                if not _mb_bars.empty and len(_mb_bars) >= 20:
+                    _mb_c = _mb_bars['close'].astype(float)
+                    _mb_sma = _mb_c.rolling(20).mean().iloc[-1]
+                    _mb_last = float(_mb_c.iloc[-1])
+                    _mb_band = _mb_sma * 0.001
+                    if _mb_last > _mb_sma + _mb_band:
+                        htf_bias[_mb_sym] = 'BULLISH'
+                    elif _mb_last < _mb_sma - _mb_band:
+                        htf_bias[_mb_sym] = 'BEARISH'
+                    else:
+                        htf_bias[_mb_sym] = 'NEUTRAL'
+                else:
+                    htf_bias[_mb_sym] = 'UNKNOWN'
+        except Exception as _mb_htf_e:
+            logger.warning(f'morning_brief HTF bias error: {_mb_htf_e}')
+
+        # ── 6. Signal-ready setups ───────────────────────────────
+        signal_ready = []
+        try:
+            for _mb_sid, _mb_enabled in _STRATEGY_DEFAULTS.items():
+                if _mb_enabled and is_setup_enabled(_mb_sid):
+                    signal_ready.append(_mb_sid)
+        except Exception as _mb_sr_e:
+            logger.warning(f'morning_brief signal_ready error: {_mb_sr_e}')
+
+        # ── 7. Shadow lab status ─────────────────────────────────
+        shadow_active = 0
+        try:
+            _mb_sh_conn = _db.connect()
+            _mb_sh_row = _mb_sh_conn.execute(
+                "SELECT COUNT(*) FROM shadow_lab WHERE status='ACTIVE'"
+            ).fetchone()
+            _mb_sh_conn.close()
+            shadow_active = int(_mb_sh_row[0] or 0) if _mb_sh_row else 0
+        except Exception as _mb_sh_e:
+            logger.debug(f'morning_brief shadow_lab: {_mb_sh_e}')
+
+        # ── Build response payload ──────────────────────────────
+        result = {
+            'ok':              True,
+            'timestamp':       now_utc.isoformat(),
+            'today_r':         today_r,
+            'unrealised_r':    round(unrealised_r, 2),
+            'trade_count_7d':  trade_count_7d,
+            'open_positions':  open_positions,
+            'kill_switch':     {'active': ks_active, 'threshold': ks_threshold, 'balance': ks_balance},
+            'regime':          regime_data,
+            'meridian_l3':     meridian_data,
+            'htf_4h_bias':     htf_bias,
+            'signal_ready':    signal_ready,
+            'shadow_active':   shadow_active,
+        }
+
+        # ── Build and send Telegram message ─────────────────────
+        try:
+            from live_scanner import send_telegram as _mb_tg
+            _sep = chr(9473) * 22
+            _now_ny = now_utc.astimezone(__import__('zoneinfo').ZoneInfo('America/New_York'))
+            _pnl_sign = '+' if today_r >= 0 else ''
+            _ks_dist  = round(ks_threshold - ks_balance, 0) if ks_balance and ks_threshold else '—'
+
+            _lines = [
+                f'{chr(9728)} <b>APEX Morning Brief</b>',
+                f'<i>{_now_ny.strftime("%a %b %-d, %Y %H:%M ET")}</i>',
+                _sep,
+                f'<b>Today P&L:</b>     {_pnl_sign}{today_r}R',
+                f'<b>Unrealised:</b>    {round(unrealised_r, 2):+.2f}R ({len(open_positions)} open)',
+                f'<b>7-day Trades:</b>  {trade_count_7d}',
+                f'<b>Kill Switch:</b>   {"ACTIVE" if ks_active else f"${_ks_dist} cushion"}',
+                _sep,
+            ]
+
+            for _mb_sym in ('MNQ', 'ES'):
+                _rg = regime_data.get(_mb_sym, {})
+                _m3 = meridian_data.get(_mb_sym, {})
+                _htf = htf_bias.get(_mb_sym, '?')
+                _lines.append(
+                    f'<b>{_mb_sym}:</b> {_rg.get("regime","?")} conf={_rg.get("confidence","?")} | '
+                    f'4h={_htf} | L3={_m3.get("prob","?"):.3f} ×{_m3.get("multiplier","?")}'
+                    if isinstance(_m3.get("prob"), float) else
+                    f'<b>{_mb_sym}:</b> {_rg.get("regime","?")} | 4h={_htf} | L3=N/A'
+                )
+
+            _lines += [
+                _sep,
+                f'<b>Signal-ready:</b>  {", ".join(signal_ready) or "none"}',
+                f'<b>Shadow lab:</b>    {shadow_active} active candidate{"s" if shadow_active != 1 else ""}',
+            ]
+
+            if open_positions:
+                _lines.append(_sep)
+                _lines.append('<b>Open Positions:</b>')
+                for _p in open_positions:
+                    _dir_emoji = chr(128200) if _p['direction'] == 'long' else chr(128201)
+                    _lines.append(
+                        f'  {_dir_emoji} {_p["symbol"]} {_p["direction"].upper()} '
+                        f'{_p["setup"]} @ {_p["entry"]} | pnl={_p["pnl_r"]:+.2f}R'
+                    )
+
+            _mb_tg(chr(10).join(_lines))
+            result['telegram_sent'] = True
+        except Exception as _mb_tg_e:
+            logger.warning(f'morning_brief telegram failed: {_mb_tg_e}')
+            result['telegram_sent'] = False
+            result['telegram_error'] = str(_mb_tg_e)
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f'morning_brief error: {e}', exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':

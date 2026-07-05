@@ -26,9 +26,9 @@ SESSION_WINDOWS = {
     'GC':  (12, 17),
 }
 
-# Signal thresholds — raised from 0.58/0.42 to reduce false positives
-LONG_THRESHOLD  = 0.65
-SHORT_THRESHOLD = 0.35
+# Signal thresholds — lowered from 0.65/0.35: model AUC 0.607 insufficient for tight bands
+LONG_THRESHOLD  = 0.60
+SHORT_THRESHOLD = 0.40
 
 # Max Setup F signals per instrument per session-day
 MAX_SIGNALS_PER_SESSION = 2
