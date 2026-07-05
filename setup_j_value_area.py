@@ -188,8 +188,8 @@ def scan_setup_j(symbol: str, dt: datetime = None) -> Optional[dict]:
         logger.info(f'Setup J {symbol}: session dedup — already fired today ({today_str})')
         return None
 
-    # ── Load 5min bars — need ~200 bars for prev session + ATR ──
-    df5 = _load_bars(symbol, '5min', limit=200)
+    # ── Load 5min bars — need ~300+ bars: ~216 overnight + 78 prev session ──
+    df5 = _load_bars(symbol, '5min', limit=500)
     if df5.empty or len(df5) < 50:
         logger.info(f'Setup J {symbol}: insufficient 5min bars ({len(df5)}) — skip')
         return None
@@ -215,7 +215,10 @@ def scan_setup_j(symbol: str, dt: datetime = None) -> Optional[dict]:
 
     vah, val = _calc_value_area(prev_bars, VA_PCT)
     if vah is None:
-        logger.info(f'Setup J {symbol}: could not compute value area — skip')
+        logger.warning(
+            f'Setup J {symbol}: VAH/VAL failed — '
+            f'prev_bars={len(prev_bars)} (need ≥10), today={today_date}'
+        )
         return None
 
     # ── HTF bias ────────────────────────────────────────────
@@ -332,8 +335,8 @@ def get_setup_j_state(symbol: str) -> dict:
         }
         result['in_session'] = in_session
 
-        # Load 5min bars
-        df5 = _load_bars(symbol, '5min', limit=200)
+        # Load 5min bars — 500 bars covers ~41h (overnight + full prev session)
+        df5 = _load_bars(symbol, '5min', limit=500)
         if df5.empty or len(df5) < 50:
             result['gates'] = [g_session]
             result['next_gate_description'] = 'Session: ' + g_session['detail']
@@ -350,6 +353,12 @@ def get_setup_j_state(symbol: str) -> dict:
         ].tail(78)
         vah, val = _calc_value_area(prev_bars, VA_PCT) if len(prev_bars) >= 10 else (None, None)
         va_ok = vah is not None and val is not None
+        if not va_ok and in_session:
+            logger.warning(
+                f'Setup J {symbol}: VAH/VAL None during session — '
+                f'prev_bars={len(prev_bars)}, today={now.date()}, '
+                f'df5_rows={len(df5)}'
+            )
         g_va = {
             'gate': 2, 'name': 'Previous Session VA Computed',
             'passed': va_ok,
