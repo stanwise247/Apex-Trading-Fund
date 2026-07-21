@@ -6,3 +6,5 @@ __pycache__/
 .env
 backtest_B_*.json
 apex_market.db
+apex_rf_*.pkl
+apex_xi_*.pkl

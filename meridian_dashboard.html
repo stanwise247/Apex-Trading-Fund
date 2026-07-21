@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meridian — Market Intelligence</title>
+<style>
+  :root {
+    --bg: #F0F2F5;
+    --card: rgba(255,255,255,0.72);
+    --card-blur: 20px;
+    --card-border: rgba(255,255,255,0.5);
+    --text-primary: #0A1628;
+    --text-secondary: #6B7A8D;
+    --bullish: #1B7F4F;
+    --bearish: #B03A2E;
+    --neutral: #8E9BAE;
+    --highlight: #1A56DB;
+    --border: rgba(0,0,0,0.06);
+    --blue: #1A56DB;
+    --amber: #B7791F;
+    --purple: #6B46A8;
+    --green: #1B7F4F;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-width: 1024px;
+  }
+
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  .eyebrow {
+    letter-spacing: 0.08em;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  /* ── Layout ─────────────────────────────────────────── */
+
+  .app { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 200px; flex: 0 0 200px;
+    position: sticky; top: 0; height: 100vh;
+    background: var(--card);
+    backdrop-filter: blur(var(--card-blur));
+    -webkit-backdrop-filter: blur(var(--card-blur));
+    border-right: 1px solid var(--card-border);
+    display: flex; flex-direction: column;
+    padding: 24px 16px;
+  }
+
+  .wordmark {
+    font-size: 1.15rem; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-primary); margin-bottom: 4px;
+  }
+  .wordmark-sub { font-size: 0.65rem; color: var(--text-secondary); margin-bottom: 28px; }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 10px; margin-bottom: 2px;
+    border-radius: 8px; font-size: 0.82rem; font-weight: 500;
+    color: var(--text-secondary);
+    transition: background 0.15s, color 0.15s;
+  }
+  .nav-item:hover { background: rgba(26,86,219,0.08); color: var(--text-primary); }
+  .nav-icon { width: 16px; text-align: center; opacity: 0.8; }
+
+  .sidebar-spacer { flex: 1; }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-radius: 10px;
+    background: rgba(255,255,255,0.6);
+    border: 1px solid var(--border);
+    font-size: 0.72rem; color: var(--text-secondary);
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--neutral); flex: 0 0 8px;
+  }
+  .status-dot.online { background: var(--bullish); }
+
+  .main {
+    flex: 1; min-width: 0;
+    padding: 28px 32px 60px;
+    max-width: 1500px;
+  }
+
+  .grid { display: grid; gap: 20px; margin-bottom: 20px; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+
+  .card {
+    background: var(--card);
+    backdrop-filter: blur(var(--card-blur));
+    -webkit-backdrop-filter: blur(var(--card-blur));
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    padding: 24px;
+  }
+
+  .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .card-title { font-size: 0.95rem; font-weight: 650; color: var(--text-primary); }
+
+  /* ── Live pulse badge (signature element) ────────────── */
+  .live-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.65rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-secondary); font-weight: 600;
+  }
+  .live-badge .ring {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--neutral);
+    opacity: 0.4; transform: scale(0.95);
+  }
+  .live-badge.pulsing .ring {
+    background: var(--bullish);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(0.95); }
+    50%      { opacity: 1.0; transform: scale(1.0); }
+  }
+
+  /* ── Section 1: MRI Hero ──────────────────────────────── */
+  .hero-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+  .hero-label { font-size: 2rem; font-weight: 750; letter-spacing: -0.01em; }
+  .hero-scores { display: flex; gap: 32px; }
+  .hero-score-block { text-align: right; }
+  .hero-score-value { font-size: 1.8rem; font-weight: 700; }
+  .hero-narrative {
+    margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);
+    font-size: 0.92rem; line-height: 1.55; color: var(--text-primary);
+  }
+  .hero-bars { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .bar-row { display: grid; grid-template-columns: 140px 1fr 56px; align-items: center; gap: 12px; }
+  .bar-track {
+    position: relative; height: 8px; border-radius: 4px;
+    background: rgba(142,155,174,0.18); overflow: hidden;
+  }
+  .bar-track::before {
+    content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px;
+    background: rgba(0,0,0,0.12);
+  }
+  .bar-fill { position: absolute; top: 0; bottom: 0; background: var(--neutral); border-radius: 4px; }
+  .bar-value { text-align: right; font-size: 0.8rem; font-weight: 600; }
+
+  /* ── Section 2: Instrument cards ──────────────────────── */
+  .instr-price-row { display: flex; align-items: baseline; gap: 12px; }
+  .instr-price { font-size: 2rem; font-weight: 700; }
+  .instr-change { font-size: 0.9rem; font-weight: 600; }
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 6px;
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em;
+  }
+  .badge.bullish { background: rgba(27,127,79,0.12); color: var(--bullish); }
+  .badge.bearish { background: rgba(176,58,46,0.12); color: var(--bearish); }
+  .badge.neutral { background: rgba(142,155,174,0.15); color: var(--neutral); }
+  .instr-row { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+  .instr-row .eyebrow { margin: 0; }
+  .conf-track {
+    margin-top: 6px; height: 6px; border-radius: 3px;
+    background: rgba(142,155,174,0.18); overflow: hidden;
+  }
+  .conf-fill { height: 100%; background: var(--highlight); border-radius: 3px; }
+  .pill-grid { display: flex; gap: 4px; margin-top: 6px; }
+  .tf-pill {
+    flex: 1; text-align: center; padding: 4px 0; border-radius: 5px;
+    font-size: 0.6rem; font-weight: 700; color: #fff;
+  }
+  .tf-pill.b { background: var(--bullish); }
+  .tf-pill.r { background: var(--bearish); }
+  .tf-pill.u { background: var(--neutral); }
+  .level-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .level-item { display: flex; justify-content: space-between; font-size: 0.78rem; }
+  .level-item .lt { color: var(--text-secondary); }
+  .level-item .lv { font-weight: 600; }
+
+  /* ── Section 3: ICT Ladder ─────────────────────────────── */
+  .ladder-cols { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 24px; }
+  .ladder-col-title { font-size: 0.85rem; font-weight: 700; margin-bottom: 10px; }
+  .ladder-rung {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 10px; border-radius: 8px; margin-bottom: 4px;
+    font-size: 0.78rem; border-left: 3px solid var(--neutral);
+    background: rgba(255,255,255,0.4);
+  }
+  .ladder-rung.blue   { border-left-color: var(--blue); }
+  .ladder-rung.amber  { border-left-color: var(--amber); }
+  .ladder-rung.purple { border-left-color: var(--purple); }
+  .ladder-rung.green  { border-left-color: var(--green); }
+  .ladder-rung .lr-type { color: var(--text-secondary); }
+  .ladder-rung .lr-price { font-weight: 700; }
+  .ladder-rung .lr-dist { color: var(--text-secondary); font-size: 0.72rem; }
+  .ladder-current {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 12px; border-radius: 8px; margin: 8px 0;
+    background: rgba(26,86,219,0.08); border: 1px solid rgba(26,86,219,0.25);
+    font-weight: 700;
+  }
+
+  /* ── Section 4: Macro grid ─────────────────────────────── */
+  .macro-value { font-size: 1.5rem; font-weight: 700; }
+  .macro-sub { font-size: 0.78rem; color: var(--text-secondary); margin-top: 8px; line-height: 1.4; }
+  .macro-arrow { font-size: 0.85rem; margin-left: 6px; }
+
+  /* ── Section 5: News ───────────────────────────────────── */
+  .news-item {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 12px 14px; border-radius: 10px; margin-bottom: 8px;
+    background: rgba(255,255,255,0.4);
+    border-left: 3px solid var(--neutral);
+  }
+  .news-item.high.bullish { border-left-color: var(--bullish); }
+  .news-item.high.bearish { border-left-color: var(--bearish); }
+  .news-item.high.neutral { border-left-color: var(--neutral); }
+  .news-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .news-headline { font-size: 0.85rem; font-weight: 650; }
+  .news-time { font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; }
+  .news-badges { display: flex; gap: 6px; margin-top: 2px; }
+  .news-explain { font-size: 0.78rem; color: var(--text-secondary); }
+
+  /* ── Section 6: MTF table ──────────────────────────────── */
+  table.mtf-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.mtf-table th {
+    text-align: left; padding: 8px 10px; font-size: 0.65rem;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+  table.mtf-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.mtf-table tr:last-child td { border-bottom: none; }
+  .cell-bullish { background: rgba(27,127,79,0.10); color: var(--bullish); font-weight: 700; }
+  .cell-bearish { background: rgba(176,58,46,0.10); color: var(--bearish); font-weight: 700; }
+  .cell-insufficient { color: var(--neutral); font-style: italic; }
+  .alignment-footer {
+    display: flex; gap: 32px; margin-top: 14px; padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .empty-state { color: var(--text-secondary); font-size: 0.82rem; padding: 8px 0; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="sidebar">
+    <div class="wordmark">MERIDIAN</div>
+    <div class="wordmark-sub">Market Intelligence</div>
+
+    <a class="nav-item" href="#sec-hero"><span class="nav-icon">&#9673;</span> Composite</a>
+    <a class="nav-item" href="#sec-instruments"><span class="nav-icon">&#9636;</span> Instruments</a>
+    <a class="nav-item" href="#sec-ladder"><span class="nav-icon">&#9776;</span> ICT Structure</a>
+    <a class="nav-item" href="#sec-macro"><span class="nav-icon">&#9729;</span> Macro</a>
+    <a class="nav-item" href="#sec-news"><span class="nav-icon">&#9993;</span> News</a>
+    <a class="nav-item" href="#sec-mtf"><span class="nav-icon">&#9638;</span> MTF Trend</a>
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="status-pill">
+      <span class="status-dot" id="market-status-dot"></span>
+      <span id="market-status-text">Connecting…</span>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- SECTION 1 — MRI COMPOSITE -->
+    <div class="grid" id="sec-hero">
+      <div class="card" id="hero-card">
+        <div class="hero-top">
+          <div>
+            <div class="eyebrow">Meridian Resonance Index</div>
+            <div class="hero-label tabular" id="hero-label">—</div>
+          </div>
+          <div class="hero-scores">
+            <div class="hero-score-block">
+              <div class="eyebrow">Short-term (4–24h)</div>
+              <div class="hero-score-value tabular" id="hero-short">—</div>
+            </div>
+            <div class="hero-score-block">
+              <div class="eyebrow">Medium-term (1–5d)</div>
+              <div class="hero-score-value tabular" id="hero-medium">—</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-narrative" id="hero-narrative">Loading market picture…</div>
+
+        <div class="hero-bars" id="hero-bars"></div>
+
+        <div class="card-header" style="margin-top:20px; margin-bottom:0;">
+          <span class="eyebrow" id="hero-updated">—</span>
+          <span class="live-badge" id="hero-live"><span class="ring"></span>LIVE</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 2 — INSTRUMENT CARDS -->
+    <div class="grid grid-2" id="sec-instruments">
+      <div class="card" id="instr-card-ES"><div class="empty-state">Loading ES…</div></div>
+      <div class="card" id="instr-card-MNQ"><div class="empty-state">Loading MNQ…</div></div>
+    </div>
+
+    <!-- SECTION 3 — ICT PRICE STRUCTURE -->
+    <div class="grid" id="sec-ladder">
+      <div class="card" id="ladder-card">
+        <div class="card-header">
+          <span class="card-title">ICT Price Structure</span>
+          <span class="live-badge" id="ladder-live"><span class="ring"></span>LIVE</span>
+        </div>
+        <div class="ladder-cols" id="ladder-body">
+          <div class="empty-state">Loading price structure…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 4 — MACRO CONDITIONS -->
+    <div class="grid grid-3" id="sec-macro">
+      <div class="card" id="macro-card-vix"><div class="empty-state">Loading…</div></div>
+      <div class="card" id="macro-card-dxy"><div class="empty-state">Loading…</div></div>
+      <div class="card" id="macro-card-yield_10y"><div class="empty-state">Loading…</div></div>
+      <div class="card" id="macro-card-oil"><div class="empty-state">Loading…</div></div>
+      <div class="card" id="macro-card-put_call"><div class="empty-state">Loading…</div></div>
+    </div>
+
+    <!-- SECTION 5 — LIVE NEWS FEED -->
+    <div class="grid" id="sec-news">
+      <div class="card" id="news-card">
+        <div class="card-header">
+          <span class="card-title">Live News Feed</span>
+          <span class="live-badge" id="news-live"><span class="ring"></span>LIVE</span>
+        </div>
+        <div id="news-body"><div class="empty-state">Loading news…</div></div>
+      </div>
+    </div>
+
+    <!-- SECTION 6 — MTF TREND PICTURE -->
+    <div class="grid" id="sec-mtf">
+      <div class="card" id="mtf-card">
+        <div class="card-header">
+          <span class="card-title">Multi-Timeframe Trend Picture</span>
+          <span class="live-badge" id="mtf-live"><span class="ring"></span>LIVE</span>
+        </div>
+        <div id="mtf-body"><div class="empty-state">Loading MTF table…</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ── Fetch wrapper (matches apex_dashboard_v8.html convention) ────────── */
+async function apiFetch(url) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    console.error('Meridian fetch failed', url, e);
+    return null;
+  }
+}
+
+/* ── Pulse badge — one shared "last updated" pointer, moves between cards ── */
+let _lastPulsed = null;
+function markUpdated(badgeId) {
+  if (_lastPulsed && _lastPulsed !== badgeId) {
+    const prev = document.getElementById(_lastPulsed);
+    if (prev) prev.classList.remove('pulsing');
+  }
+  const el = document.getElementById(badgeId);
+  if (el) el.classList.add('pulsing');
+  _lastPulsed = badgeId;
+}
+
+function fmtScore(v) {
+  if (v === null || v === undefined) return '—';
+  const s = v > 0 ? '+' : '';
+  return s + v.toFixed(1);
+}
+function fmtNum(v, d) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return Number(v).toFixed(d === undefined ? 2 : d);
+}
+function scoreColor(v) {
+  if (v === null || v === undefined) return 'var(--neutral)';
+  if (v >= 2) return 'var(--bullish)';
+  if (v <= -2) return 'var(--bearish)';
+  return 'var(--neutral)';
+}
+function labelColor(label) {
+  if (!label) return 'var(--neutral)';
+  if (label.indexOf('BULLISH') !== -1) return 'var(--bullish)';
+  if (label.indexOf('BEARISH') !== -1) return 'var(--bearish)';
+  return 'var(--neutral)';
+}
+function biasBadgeClass(bias) {
+  if (bias === 'BULLISH') return 'bullish';
+  if (bias === 'BEARISH') return 'bearish';
+  return 'neutral';
+}
+function timeAgo(ts) {
+  if (!ts) return '';
+  const secs = Math.max(0, (Date.now() / 1000) - ts);
+  if (secs < 60) return Math.floor(secs) + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  return Math.floor(secs / 3600) + 'h ago';
+}
+
+/* ── Section 1: Composite ──────────────────────────────────────────── */
+async function refreshComposite() {
+  const d = await apiFetch('/api/mri/composite');
+  if (!d || !d.ok) return;
+
+  const labelEl = document.getElementById('hero-label');
+  labelEl.textContent = d.label || 'NEUTRAL';
+  labelEl.style.color = labelColor(d.label);
+
+  document.getElementById('hero-short').textContent = fmtScore(d.short_term);
+  document.getElementById('hero-short').style.color = scoreColor(d.short_term);
+  document.getElementById('hero-medium').textContent = fmtScore(d.medium_term);
+  document.getElementById('hero-medium').style.color = scoreColor(d.medium_term);
+
+  document.getElementById('hero-narrative').textContent = d.narrative || 'Narrative unavailable.';
+
+  const barLabels = {macro: 'Macro', regime: 'Regime / Momentum', ict: 'ICT Structure', mtf: 'MTF Trend Alignment', news: 'News Sentiment'};
+  const barsEl = document.getElementById('hero-bars');
+  barsEl.innerHTML = '';
+  Object.keys(barLabels).forEach(key => {
+    const val = (d.layers || {})[key];
+    const pct = val === null || val === undefined ? 50 : Math.max(0, Math.min(100, ((val + 10) / 20) * 100));
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <div class="eyebrow" style="margin:0;">${barLabels[key]}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="left:${Math.min(50,pct)}%; width:${Math.abs(pct-50)}%; background:${scoreColor(val)};"></div>
+      </div>
+      <div class="bar-value tabular" style="color:${scoreColor(val)}">${fmtScore(val)}</div>
+    `;
+    barsEl.appendChild(row);
+  });
+
+  document.getElementById('hero-updated').textContent = 'Updated ' + timeAgo(d.updated_at);
+  markUpdated('hero-live');
+}
+
+/* ── Section 2: Instrument cards (data comes bundled with /api/mri/mtf) ── */
+function renderInstrumentCard(sym, snap) {
+  if (!snap) {
+    return `<div class="empty-state">${sym} data unavailable</div>`;
+  }
+  const price = snap.price;
+  const changePts = snap.change_pts;
+  const changePct = snap.change_pct;
+  const changeColor = changePts > 0 ? 'var(--bullish)' : (changePts < 0 ? 'var(--bearish)' : 'var(--neutral)');
+  const bias = snap.htf_bias_4h || 'NEUTRAL';
+  const conf = snap.regime_confidence;
+  const confPct = conf === null || conf === undefined ? 0 : Math.round(conf * 100);
+  const mtf = snap.mtf_biases || {};
+  const tfOrder = ['1m','5m','15m','30m','1h','4h'];
+  const pills = tfOrder.map(tf => {
+    const b = mtf[tf];
+    const cls = b === 'BULLISH' ? 'b' : (b === 'BEARISH' ? 'r' : 'u');
+    return `<div class="tf-pill ${cls}" title="${tf}">${tf}</div>`;
+  }).join('');
+
+  const fvg = snap.nearest_fvg;
+  const fvgTxt = fvg ? `${fvg.kind === 'bull' ? 'Bullish' : 'Bearish'} FVG @ ${fmtNum((fvg.high+fvg.low)/2)}` : 'none nearby';
+  const eq = snap.nearest_equal_level;
+  const eqTxt = eq ? `Equal ${eq.type === 'high' ? 'High' : 'Low'} @ ${fmtNum(eq.price)}` : 'none nearby';
+  const vahValTxt = (snap.vah != null && snap.val != null) ? `VAH ${fmtNum(snap.vah)} / VAL ${fmtNum(snap.val)}` : 'not yet computed';
+
+  return `
+    <div class="card-header">
+      <span class="card-title">${sym}</span>
+      <span class="badge ${biasBadgeClass(bias)}">${bias} · 4H</span>
+    </div>
+    <div class="instr-price-row">
+      <div class="instr-price tabular">${price != null ? fmtNum(price) : '—'}</div>
+      <div class="instr-change tabular" style="color:${changeColor}">
+        ${changePts != null ? (changePts > 0 ? '+' : '') + fmtNum(changePts) + ' pts' : ''}
+        ${changePct != null ? ' (' + (changePct > 0 ? '+' : '') + fmtNum(changePct) + '%)' : ''}
+      </div>
+    </div>
+
+    <div class="instr-row">
+      <span class="eyebrow">Regime</span>
+      <span class="tabular">${snap.regime || 'unavailable'}</span>
+    </div>
+    <div class="conf-track"><div class="conf-fill" style="width:${confPct}%"></div></div>
+
+    <div class="instr-row">
+      <span class="eyebrow">Meridian L3</span>
+      <span class="tabular">${snap.l3_probability != null ? (snap.l3_probability*100).toFixed(1)+'%' : '—'} × ${snap.l3_multiplier != null ? snap.l3_multiplier.toFixed(2) : '—'}</span>
+    </div>
+
+    <div class="instr-row">
+      <span class="eyebrow">ATR14 vs 20-avg</span>
+      <span class="tabular">${snap.atr14 != null ? fmtNum(snap.atr14) : '—'} / ${snap.atr_avg20 != null ? fmtNum(snap.atr_avg20) : '—'}
+        ${snap.atr_expanding === true ? ' (expanding)' : snap.atr_expanding === false ? ' (contracting)' : ''}</span>
+    </div>
+
+    <div class="instr-row">
+      <span class="eyebrow">MTF Alignment</span>
+      <span class="tabular">${snap.mtf_bullish_count}/${snap.mtf_total} BULLISH</span>
+    </div>
+    <div class="pill-grid">${pills}</div>
+
+    <div class="level-list">
+      <div class="level-item"><span class="lt">Nearest FVG</span><span class="lv">${fvgTxt}</span></div>
+      <div class="level-item"><span class="lt">Value Area</span><span class="lv">${vahValTxt}</span></div>
+      <div class="level-item"><span class="lt">Nearest Equal Lvl</span><span class="lv">${eqTxt}</span></div>
+    </div>
+  `;
+}
+
+/* ── Section 6: MTF table + instrument snapshots (single endpoint) ────── */
+async function refreshMtfAndInstruments() {
+  const d = await apiFetch('/api/mri/mtf');
+  if (!d || !d.ok) return;
+
+  ['ES', 'MNQ'].forEach(sym => {
+    document.getElementById('instr-card-' + sym).innerHTML = renderInstrumentCard(sym, (d.instruments || {})[sym]);
+  });
+
+  const mtf = d.mtf || {};
+  const rows = mtf.rows || [];
+  const symbols = mtf.symbols || ['ES', 'MNQ'];
+  const table = mtf.table || {};
+
+  function cell(rowData) {
+    if (!rowData) return `<td class="cell-insufficient">insufficient history</td>`;
+    if (rowData.trend === 'insufficient history') return `<td class="cell-insufficient">insufficient history</td>`;
+    const cls = rowData.trend === 'BULLISH' ? 'cell-bullish' : (rowData.trend === 'BEARISH' ? 'cell-bearish' : '');
+    return `<td class="${cls}">${rowData.trend}${rowData.price != null ? ' <span class="tabular" style="opacity:0.7;font-size:0.72em;">' + fmtNum(rowData.price) + '</span>' : ''}</td>`;
+  }
+
+  let html = `<table class="mtf-table"><thead><tr>
+      <th>Timeframe</th><th>ES Trend</th><th>MNQ Trend</th>
+    </tr></thead><tbody>`;
+  rows.forEach(r => {
+    html += `<tr><td style="font-weight:600;">${r}</td>${cell((table[r]||{}).ES)}${cell((table[r]||{}).MNQ)}</tr>`;
+  });
+  html += '</tbody></table>';
+
+  const alignment = mtf.alignment || {};
+  html += `<div class="alignment-footer">` + symbols.map(sym =>
+    `<div><div class="eyebrow">${sym} Alignment</div><div class="tabular" style="font-size:1.1rem;font-weight:700;">${alignment[sym] != null ? alignment[sym].toFixed(1) + '%' : '—'}</div></div>`
+  ).join('') + `</div>`;
+
+  document.getElementById('mtf-body').innerHTML = html;
+  markUpdated('mtf-live');
+}
+
+/* ── Section 3: ICT price ladder ───────────────────────────────────── */
+function renderLadderColumn(sym, data) {
+  if (!data || data.price == null) {
+    return `<div><div class="ladder-col-title">${sym}</div><div class="empty-state">Price structure unavailable</div></div>`;
+  }
+  const above = (data.above || []).slice().reverse(); // nearest-to-price last in reversed list -> render descending
+  const below = data.below || [];
+
+  function rung(lv) {
+    return `<div class="ladder-rung ${lv.color_group}">
+      <span class="lr-type">${lv.type}</span>
+      <span class="lr-price tabular">${fmtNum(lv.price)}</span>
+      <span class="lr-dist tabular">${lv.distance_pts > 0 ? '+' : ''}${fmtNum(lv.distance_pts)} (${lv.distance_pct > 0 ? '+' : ''}${fmtNum(lv.distance_pct)}%)</span>
+    </div>`;
+  }
+
+  const aboveHtml = above.length ? above.map(rung).join('') : '<div class="empty-state">No resistance levels found</div>';
+  const belowHtml = below.length ? below.map(rung).join('') : '<div class="empty-state">No support levels found</div>';
+
+  return `
+    <div>
+      <div class="ladder-col-title">${sym}</div>
+      ${aboveHtml}
+      <div class="ladder-current"><span>Current Price</span><span class="tabular">${fmtNum(data.price)}</span></div>
+      ${belowHtml}
+    </div>
+  `;
+}
+
+async function refreshLevels() {
+  const d = await apiFetch('/api/mri/levels');
+  if (!d || !d.ok) return;
+  const levels = d.levels || {};
+  document.getElementById('ladder-body').innerHTML =
+    renderLadderColumn('ES', levels.ES) + renderLadderColumn('MNQ', levels.MNQ);
+  markUpdated('ladder-live');
+}
+
+/* ── Section 4: Macro conditions ───────────────────────────────────── */
+const MACRO_META = {
+  vix:       {label: 'VIX', fmt: v => fmtNum(v, 1)},
+  dxy:       {label: 'DXY', fmt: v => fmtNum(v, 2)},
+  yield_10y: {label: '10Y Yield', fmt: v => fmtNum(v, 2) + '%'},
+  oil:       {label: 'WTI Crude', fmt: v => '$' + fmtNum(v, 2)},
+  put_call:  {label: 'Put/Call · Fear&Greed', fmt: v => '—'},
+};
+
+async function refreshMacro() {
+  const d = await apiFetch('/api/mri/macro');
+  if (!d || !d.ok) return;
+  const macro = d.macro || {};
+  Object.keys(MACRO_META).forEach(key => {
+    const meta = MACRO_META[key];
+    const m = macro[key] || {};
+    const el = document.getElementById('macro-card-' + key);
+    if (!el) return;
+    if (!m.available) {
+      el.innerHTML = `
+        <div class="eyebrow">${meta.label}</div>
+        <div class="macro-value" style="color:var(--neutral); font-size:1.05rem;">Data unavailable</div>
+        <div class="macro-sub">${m.interpretation || ''}</div>
+      `;
+      return;
+    }
+    const arrow = (m.trend === 'rising' || (m.change_5d != null && m.change_5d > 0) || (m.change_pct_5d != null && m.change_pct_5d > 0)) ? '&#8593;'
+                : (m.trend === 'falling' || (m.change_5d != null && m.change_5d < 0) || (m.change_pct_5d != null && m.change_pct_5d < 0)) ? '&#8595;' : '&#8594;';
+    el.innerHTML = `
+      <div class="eyebrow">${meta.label}${m.regime ? ' · ' + m.regime : ''}</div>
+      <div class="macro-value tabular">${meta.fmt(m.value)}<span class="macro-arrow">${arrow}</span></div>
+      <div class="macro-sub">${m.interpretation || ''}</div>
+    `;
+  });
+}
+
+/* ── Section 5: News ───────────────────────────────────────────────── */
+async function refreshNews() {
+  const d = await apiFetch('/api/mri/news');
+  if (!d || !d.ok) return;
+  const items = d.news || [];
+  if (!items.length) {
+    document.getElementById('news-body').innerHTML = '<div class="empty-state">No medium/high-relevance items in the current cycle.</div>';
+  } else {
+    document.getElementById('news-body').innerHTML = items.map(it => {
+      const dir = (it.direction || 'Neutral').toLowerCase();
+      const relCls = it.relevance === 'High' ? 'high ' + dir : '';
+      const dirBadgeCls = dir === 'bullish' ? 'bullish' : (dir === 'bearish' ? 'bearish' : 'neutral');
+      return `
+        <div class="news-item ${relCls}">
+          <div class="news-top">
+            <span class="news-headline">${it.headline}</span>
+            <span class="news-time tabular">${timeAgo(it.timestamp)}</span>
+          </div>
+          <div class="news-badges">
+            <span class="badge ${it.relevance === 'High' ? 'bearish' : 'neutral'}" style="${it.relevance==='High' ? 'background:rgba(26,86,219,0.12);color:var(--highlight);' : ''}">${it.relevance}</span>
+            <span class="badge ${dirBadgeCls}">${it.direction}</span>
+            <span class="eyebrow" style="align-self:center;">${it.source || ''}</span>
+          </div>
+          <div class="news-explain">${it.explanation || ''}</div>
+        </div>
+      `;
+    }).join('');
+  }
+  markUpdated('news-live');
+}
+
+/* ── Market status pill ────────────────────────────────────────────── */
+async function refreshStatus() {
+  const d = await apiFetch('/api/status');
+  const dot = document.getElementById('market-status-dot');
+  const txt = document.getElementById('market-status-text');
+  if (d && d.status === 'online') {
+    dot.classList.add('online');
+    txt.textContent = 'Meridian — Live';
+  } else {
+    dot.classList.remove('online');
+    txt.textContent = 'Connection lost';
+  }
+}
+
+/* ── Boot + polling ────────────────────────────────────────────────── */
+refreshComposite();
+refreshMtfAndInstruments();
+refreshLevels();
+refreshMacro();
+refreshNews();
+refreshStatus();
+
+setInterval(refreshComposite, 30000);
+setInterval(refreshMtfAndInstruments, 30000);
+setInterval(refreshLevels, 30000);
+setInterval(refreshMacro, 30000);
+setInterval(refreshNews, 300000);
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>

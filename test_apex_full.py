@@ -490,7 +490,8 @@ def test_7_setup_i_model():
                 if np.isnan(xgb_prob):
                     _fail(label, 'xgb predict_proba returned NaN')
                     continue
-                _pass(label, f'xgb_prob={xgb_prob:.3f} lr_prob={lr_prob:.3f if lr_prob is not None else "N/A"}')
+                lr_prob_str = f'{lr_prob:.3f}' if lr_prob is not None else 'N/A'
+                _pass(label, f'xgb_prob={xgb_prob:.3f} lr_prob={lr_prob_str}')
 
             except Exception as e:
                 _fail(label, f'{type(e).__name__}: {e}')
@@ -2716,6 +2717,380 @@ def test_new9_meridian_l3_retrain_endpoint():
 
 
 # ─────────────────────────────────────────────────────────────
+#  Meridian MRI scoring-engine tests (MRI1–MRI11)
+#  Pure functions — zero DB/HTTP, literal known inputs.
+# ─────────────────────────────────────────────────────────────
+
+def test_mri1_vix_subscore_thresholds():
+    """VIX sub-score follows the brief's exact thresholds: <15=+2, 15-20=0, 20-25=-1, >25=-2."""
+    _section('TEST MRI1 — VIX sub-score thresholds')
+    try:
+        import meridian_mri as m
+        for vix, expected in [(12, 2), (17, 0), (22, -1), (30, -2)]:
+            got = m.vix_subscore(vix)
+            if got == expected:
+                _pass(f'TEST MRI1  vix={vix} -> {expected}', '')
+            else:
+                _fail(f'TEST MRI1  vix={vix} -> {expected}', f'got {got}')
+    except Exception as e:
+        _fail('TEST MRI1', f'{type(e).__name__}: {e}')
+
+
+def test_mri2_macro_layer_score_known_inputs():
+    """Macro layer score is mean(sub-scores) * 5, clipped to +-10."""
+    _section('TEST MRI2 — macro_layer_score known inputs')
+    try:
+        import meridian_mri as m
+        subs = {'vix': 2, 'dxy': -1, 'yield': 1, 'oil': 0}
+        expected = round(np.mean(list(subs.values())) * 5, 2)
+        got = m.macro_layer_score(subs)
+        if abs(got - expected) < 0.01:
+            _pass('TEST MRI2  weighted mean matches hand calc', f'{got} == {expected}')
+        else:
+            _fail('TEST MRI2  weighted mean matches hand calc', f'got {got} expected {expected}')
+    except Exception as e:
+        _fail('TEST MRI2', f'{type(e).__name__}: {e}')
+
+
+def test_mri3_regime_momentum_score_direction_sign():
+    """TRENDING+high-conf+high-L3 must flip SIGN (not just magnitude) with htf_bias direction."""
+    _section('TEST MRI3 — regime_momentum_score direction sign')
+    try:
+        import meridian_mri as m
+        bear_score = m.regime_momentum_score('TRENDING', 0.8, 0.9, 'BEARISH')
+        bull_score = m.regime_momentum_score('TRENDING', 0.8, 0.9, 'BULLISH')
+        none_score = m.regime_momentum_score('TRENDING', 0.8, 0.9, 'NEUTRAL')
+        if bear_score < 0:
+            _pass('TEST MRI3  bearish htf_bias -> negative score', f'{bear_score}')
+        else:
+            _fail('TEST MRI3  bearish htf_bias -> negative score', f'got {bear_score}')
+        if bull_score > 0:
+            _pass('TEST MRI3  bullish htf_bias -> positive score', f'{bull_score}')
+        else:
+            _fail('TEST MRI3  bullish htf_bias -> positive score', f'got {bull_score}')
+        if none_score == 0.0:
+            _pass('TEST MRI3  no directional read -> 0.0 (not fabricated)', '')
+        else:
+            _fail('TEST MRI3  no directional read -> 0.0 (not fabricated)', f'got {none_score}')
+    except Exception as e:
+        _fail('TEST MRI3', f'{type(e).__name__}: {e}')
+
+
+def test_mri4_ict_structure_score_missing_data():
+    """vah=val=None with empty FVG/equal-level lists returns 0.0 without raising (pre-session case)."""
+    _section('TEST MRI4 — ict_structure_score missing-data case')
+    try:
+        import meridian_mri as m
+        got = m.ict_structure_score(100.0, None, None, [], [])
+        if got == 0.0:
+            _pass('TEST MRI4  vah/val=None -> 0.0, no crash', '')
+        else:
+            _fail('TEST MRI4  vah/val=None -> 0.0, no crash', f'got {got}')
+    except Exception as e:
+        _fail('TEST MRI4', f'{type(e).__name__}: {e}')
+
+
+def test_mri5_mtf_trend_score_extremes():
+    """All-bullish 6/6 -> +10.0, all-bearish 6/6 -> -10.0."""
+    _section('TEST MRI5 — mtf_trend_score at both extremes')
+    try:
+        import meridian_mri as m
+        b_score = m.mtf_trend_score({str(i): 'BULLISH' for i in range(6)})
+        r_score = m.mtf_trend_score({str(i): 'BEARISH' for i in range(6)})
+        if b_score == 10.0:
+            _pass('TEST MRI5  all-bullish -> 10.0', '')
+        else:
+            _fail('TEST MRI5  all-bullish -> 10.0', f'got {b_score}')
+        if r_score == -10.0:
+            _pass('TEST MRI5  all-bearish -> -10.0', '')
+        else:
+            _fail('TEST MRI5  all-bearish -> -10.0', f'got {r_score}')
+    except Exception as e:
+        _fail('TEST MRI5', f'{type(e).__name__}: {e}')
+
+
+def test_mri6_composite_weights_sum_to_one():
+    """WEIGHTS_SHORT and WEIGHTS_MEDIUM must each sum to 1.0 — regression guard against a silently unnormalised edit."""
+    _section('TEST MRI6 — composite weights sum to 1.0')
+    try:
+        import meridian_mri as m
+        s_sum = round(sum(m.WEIGHTS_SHORT.values()), 6)
+        m_sum = round(sum(m.WEIGHTS_MEDIUM.values()), 6)
+        if s_sum == 1.0:
+            _pass('TEST MRI6  WEIGHTS_SHORT sums to 1.0', '')
+        else:
+            _fail('TEST MRI6  WEIGHTS_SHORT sums to 1.0', f'got {s_sum}')
+        if m_sum == 1.0:
+            _pass('TEST MRI6  WEIGHTS_MEDIUM sums to 1.0', '')
+        else:
+            _fail('TEST MRI6  WEIGHTS_MEDIUM sums to 1.0', f'got {m_sum}')
+    except Exception as e:
+        _fail('TEST MRI6', f'{type(e).__name__}: {e}')
+
+
+def test_mri7_composite_score_known_layers():
+    """Composite score matches a hand-computed weighted sum for a literal layers dict."""
+    _section('TEST MRI7 — composite_score known layers')
+    try:
+        import meridian_mri as m
+        layers = {'macro': 5, 'regime': -5, 'ict': 0, 'mtf': 10, 'news': -6}
+        exp_short  = round(sum(layers[k] * w for k, w in m.WEIGHTS_SHORT.items()), 1)
+        exp_medium = round(sum(layers[k] * w for k, w in m.WEIGHTS_MEDIUM.items()), 1)
+        got_short  = m.composite_score(layers, m.WEIGHTS_SHORT)
+        got_medium = m.composite_score(layers, m.WEIGHTS_MEDIUM)
+        if got_short == exp_short:
+            _pass('TEST MRI7  short-term matches hand calc', f'{got_short}')
+        else:
+            _fail('TEST MRI7  short-term matches hand calc', f'got {got_short} expected {exp_short}')
+        if got_medium == exp_medium:
+            _pass('TEST MRI7  medium-term matches hand calc', f'{got_medium}')
+        else:
+            _fail('TEST MRI7  medium-term matches hand calc', f'got {got_medium} expected {exp_medium}')
+    except Exception as e:
+        _fail('TEST MRI7', f'{type(e).__name__}: {e}')
+
+
+def test_mri8_mri_label_thresholds():
+    """MRI label boundaries: >=5 BULLISH, [2,5) CAUTIOUSLY BULLISH, (-2,2) NEUTRAL, (-5,-2] CAUTIOUSLY BEARISH, <=-5 BEARISH."""
+    _section('TEST MRI8 — mri_label thresholds')
+    try:
+        import meridian_mri as m
+        cases = [(6, 'BULLISH'), (3, 'CAUTIOUSLY BULLISH'), (0, 'NEUTRAL'),
+                 (-3, 'CAUTIOUSLY BEARISH'), (-7, 'BEARISH')]
+        for val, expected in cases:
+            got = m.mri_label(val)
+            if got == expected:
+                _pass(f'TEST MRI8  label({val}) == {expected}', '')
+            else:
+                _fail(f'TEST MRI8  label({val}) == {expected}', f'got {got}')
+    except Exception as e:
+        _fail('TEST MRI8', f'{type(e).__name__}: {e}')
+
+
+def test_mri9_news_layer_score_caps_and_window():
+    """News score: only High-relevance items within the last 3h count, +-2 each, capped at +-6."""
+    _section('TEST MRI9 — news_layer_score window + cap')
+    try:
+        import meridian_mri as m
+        now = time.time()
+        items = [{'relevance': 'High', 'direction': 'Bullish', 'timestamp': now - 60} for _ in range(5)]
+        score = m.news_layer_score(items, now_ts=now)
+        if score == 6.0:
+            _pass('TEST MRI9  5 bullish High items capped at +6', f'score={score}')
+        else:
+            _fail('TEST MRI9  5 bullish High items capped at +6', f'got {score}')
+
+        old_items = [{'relevance': 'High', 'direction': 'Bullish', 'timestamp': now - 4 * 3600}]
+        score_old = m.news_layer_score(old_items, now_ts=now)
+        if score_old == 0.0:
+            _pass('TEST MRI9  item older than 3h excluded', '')
+        else:
+            _fail('TEST MRI9  item older than 3h excluded', f'got {score_old}')
+    except Exception as e:
+        _fail('TEST MRI9', f'{type(e).__name__}: {e}')
+
+
+def test_mri10_pct_bullish_vs_pct_alignment():
+    """pct_bullish and pct_alignment measure genuinely different things for a lopsided bias set."""
+    _section('TEST MRI10 — pct_bullish vs pct_alignment differ')
+    try:
+        import meridian_mri as m
+        biases = {'a': 'BEARISH', 'b': 'BEARISH', 'c': 'BEARISH', 'd': 'BEARISH', 'e': 'BEARISH', 'f': 'BULLISH'}
+        bull_pct  = m.pct_bullish(biases)
+        align_pct = m.pct_alignment(biases)
+        if abs(bull_pct - 16.7) < 0.1:
+            _pass('TEST MRI10  pct_bullish ~16.7%', f'{bull_pct}')
+        else:
+            _fail('TEST MRI10  pct_bullish ~16.7%', f'got {bull_pct}')
+        if abs(align_pct - 83.3) < 0.1:
+            _pass('TEST MRI10  pct_alignment ~83.3%', f'{align_pct}')
+        else:
+            _fail('TEST MRI10  pct_alignment ~83.3%', f'got {align_pct}')
+    except Exception as e:
+        _fail('TEST MRI10', f'{type(e).__name__}: {e}')
+
+
+def test_mri11_check_threshold_cross_edge_triggered():
+    """Threshold-cross fires once on the crossing tick, not again while the score stays past threshold."""
+    _section('TEST MRI11 — check_threshold_cross edge-triggered')
+    try:
+        import meridian_mri as m
+        m._STATE['last_short'] = 4.0
+        first  = m.check_threshold_cross(5.5)
+        second = m.check_threshold_cross(6.0)
+        if first == 'crossed_up_5':
+            _pass('TEST MRI11  crossing 4.0 -> 5.5 fires crossed_up_5', '')
+        else:
+            _fail('TEST MRI11  crossing 4.0 -> 5.5 fires crossed_up_5', f'got {first}')
+        if second is None:
+            _pass('TEST MRI11  staying above +5 does not re-fire', '')
+        else:
+            _fail('TEST MRI11  staying above +5 does not re-fire', f'got {second}')
+    except Exception as e:
+        _fail('TEST MRI11', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
+#  HTTP against Railway — follows the D4/CTX1 "not-a-hard-fail" idiom.
+# ─────────────────────────────────────────────────────────────
+
+def test_mriapi1_composite_endpoint_structure():
+    """GET /api/mri/composite returns ok=True with all 5 layers + both composites + label + narrative."""
+    _section('TEST MRIAPI1 — /api/mri/composite structure')
+    try:
+        data = _api('/api/mri/composite', timeout=30)
+        if data is None:
+            _fail('TEST MRIAPI1  endpoint reachable', 'No response'); return
+        if not data.get('ok'):
+            _pass('TEST MRIAPI1  endpoint responds', f'ok={data.get("ok")} error={data.get("error","none")}')
+            return
+        required = {'layers', 'short_term', 'medium_term', 'label', 'narrative', 'updated_at'}
+        missing  = required - set(data.keys())
+        if missing:
+            _fail('TEST MRIAPI1  top-level keys present', f'missing {missing}')
+        else:
+            _pass('TEST MRIAPI1  top-level keys present', '')
+        layer_keys = {'macro', 'regime', 'ict', 'mtf', 'news'}
+        got_layers = set(data.get('layers', {}).keys())
+        if layer_keys == got_layers:
+            _pass('TEST MRIAPI1  exactly 5 layer sub-keys', '')
+        else:
+            _fail('TEST MRIAPI1  exactly 5 layer sub-keys', f'got {got_layers}')
+    except Exception as e:
+        _fail('TEST MRIAPI1', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi2_composite_never_500s():
+    """Endpoint always returns 200 with a JSON ok flag, even on internal error — never a hard 500."""
+    _section('TEST MRIAPI2 — /api/mri/composite never hard-fails')
+    try:
+        data, status = _api_get_raw('/api/mri/composite', timeout=30)
+        if status == 200 and isinstance(data, dict) and 'ok' in data:
+            _pass('TEST MRIAPI2  200 with ok flag', f'ok={data.get("ok")}')
+        else:
+            _fail('TEST MRIAPI2  200 with ok flag', f'status={status} data={data}')
+    except Exception as e:
+        _fail('TEST MRIAPI2', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi3_levels_endpoint_structure():
+    """GET /api/mri/levels has above/below lists for both ES and MNQ."""
+    _section('TEST MRIAPI3 — /api/mri/levels structure')
+    try:
+        data = _api('/api/mri/levels', timeout=30)
+        if data is None:
+            _fail('TEST MRIAPI3  endpoint reachable', 'No response'); return
+        if not data.get('ok'):
+            _pass('TEST MRIAPI3  endpoint responds', f'ok={data.get("ok")}')
+            return
+        levels = data.get('levels', {})
+        for sym in ('ES', 'MNQ'):
+            sym_data = levels.get(sym)
+            if sym_data and 'above' in sym_data and 'below' in sym_data:
+                _pass(f'TEST MRIAPI3  {sym} has above/below', '')
+            else:
+                _fail(f'TEST MRIAPI3  {sym} has above/below', f'got {sym_data}')
+    except Exception as e:
+        _fail('TEST MRIAPI3', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi4_macro_endpoint_subscores_and_unavailable():
+    """Each macro metric reports a sub_score in [-2,2] (or None), and put_call is explicitly unavailable, never fabricated."""
+    _section('TEST MRIAPI4 — /api/mri/macro sub-scores + Data unavailable')
+    try:
+        data = _api('/api/mri/macro', timeout=20)
+        if data is None:
+            _fail('TEST MRIAPI4  endpoint reachable', 'No response'); return
+        if not data.get('ok'):
+            _pass('TEST MRIAPI4  endpoint responds', f'ok={data.get("ok")}')
+            return
+        macro = data.get('macro', {})
+        for key in ('vix', 'dxy', 'yield_10y', 'oil'):
+            sub = macro.get(key, {}).get('sub_score')
+            if sub is None or -2 <= sub <= 2:
+                _pass(f'TEST MRIAPI4  {key} sub_score in range', f'{sub}')
+            else:
+                _fail(f'TEST MRIAPI4  {key} sub_score in range', f'got {sub}')
+        pc = macro.get('put_call', {})
+        if pc.get('available') is False and pc.get('value') is None:
+            _pass('TEST MRIAPI4  put_call explicitly unavailable (not fabricated)', '')
+        else:
+            _fail('TEST MRIAPI4  put_call explicitly unavailable (not fabricated)', f'got {pc}')
+    except Exception as e:
+        _fail('TEST MRIAPI4', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi5_news_endpoint_max_10_medium_high_only():
+    """News feed caps at 10 items, and only ever shows Medium/High relevance."""
+    _section('TEST MRIAPI5 — /api/mri/news caps + relevance filter')
+    try:
+        data = _api('/api/mri/news', timeout=20)
+        if data is None:
+            _fail('TEST MRIAPI5  endpoint reachable', 'No response'); return
+        if not data.get('ok'):
+            _pass('TEST MRIAPI5  endpoint responds', f'ok={data.get("ok")}')
+            return
+        items = data.get('news', [])
+        if len(items) <= 10:
+            _pass('TEST MRIAPI5  <=10 items', f'{len(items)}')
+        else:
+            _fail('TEST MRIAPI5  <=10 items', f'got {len(items)}')
+        bad = [it for it in items if it.get('relevance') not in ('Medium', 'High')]
+        if not bad:
+            _pass('TEST MRIAPI5  only Medium/High relevance shown', '')
+        else:
+            _fail('TEST MRIAPI5  only Medium/High relevance shown', f'{len(bad)} bad items')
+    except Exception as e:
+        _fail('TEST MRIAPI5', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi6_mtf_endpoint_weekly_monthly_graceful():
+    """Monthly is always 'insufficient history'; Weekly is either real or the same graceful string — never fabricated."""
+    _section('TEST MRIAPI6 — /api/mri/mtf Monthly/Weekly graceful')
+    try:
+        data = _api('/api/mri/mtf', timeout=30)
+        if data is None:
+            _fail('TEST MRIAPI6  endpoint reachable', 'No response'); return
+        if not data.get('ok'):
+            _pass('TEST MRIAPI6  endpoint responds', f'ok={data.get("ok")}')
+            return
+        table = data.get('mtf', {}).get('table', {})
+        monthly = table.get('Monthly', {})
+        all_insufficient = all(v.get('trend') == 'insufficient history' for v in monthly.values())
+        if all_insufficient:
+            _pass('TEST MRIAPI6  Monthly always insufficient history', '')
+        else:
+            _fail('TEST MRIAPI6  Monthly always insufficient history', f'got {monthly}')
+        weekly = table.get('Weekly', {})
+        bad = [v for v in weekly.values() if v.get('trend') not in ('BULLISH', 'BEARISH', 'insufficient history')]
+        if not bad:
+            _pass('TEST MRIAPI6  Weekly trend is real or graceful string', '')
+        else:
+            _fail('TEST MRIAPI6  Weekly trend is real or graceful string', f'{bad}')
+    except Exception as e:
+        _fail('TEST MRIAPI6', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi7_root_serves_meridian_and_v8_still_reachable():
+    """/ now serves the Meridian dashboard; /apex_dashboard_v8.html is still directly reachable."""
+    _section('TEST MRIAPI7 — root route swap + v8 still reachable')
+    try:
+        _, root_status = _api_get_raw('/', timeout=15)
+        _, v8_status   = _api_get_raw('/apex_dashboard_v8.html', timeout=15)
+        if root_status == 200:
+            _pass('TEST MRIAPI7  / returns 200', '')
+        else:
+            _fail('TEST MRIAPI7  / returns 200', f'status={root_status}')
+        if v8_status == 200:
+            _pass('TEST MRIAPI7  /apex_dashboard_v8.html still reachable', '')
+        else:
+            _fail('TEST MRIAPI7  /apex_dashboard_v8.html still reachable', f'status={v8_status}')
+    except Exception as e:
+        _fail('TEST MRIAPI7', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
 
@@ -2817,6 +3192,28 @@ if __name__ == '__main__':
     test_new7_reconcile_endpoint()
     test_new8_scan_log_abc_scanning()
     test_new9_meridian_l3_retrain_endpoint()
+
+    # Meridian MRI scoring-engine tests (MRI1–MRI11)
+    test_mri1_vix_subscore_thresholds()
+    test_mri2_macro_layer_score_known_inputs()
+    test_mri3_regime_momentum_score_direction_sign()
+    test_mri4_ict_structure_score_missing_data()
+    test_mri5_mtf_trend_score_extremes()
+    test_mri6_composite_weights_sum_to_one()
+    test_mri7_composite_score_known_layers()
+    test_mri8_mri_label_thresholds()
+    test_mri9_news_layer_score_caps_and_window()
+    test_mri10_pct_bullish_vs_pct_alignment()
+    test_mri11_check_threshold_cross_edge_triggered()
+
+    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
+    test_mriapi1_composite_endpoint_structure()
+    test_mriapi2_composite_never_500s()
+    test_mriapi3_levels_endpoint_structure()
+    test_mriapi4_macro_endpoint_subscores_and_unavailable()
+    test_mriapi5_news_endpoint_max_10_medium_high_only()
+    test_mriapi6_mtf_endpoint_weekly_monthly_graceful()
+    test_mriapi7_root_serves_meridian_and_v8_still_reachable()
 
     _cleanup()
     _print_results()

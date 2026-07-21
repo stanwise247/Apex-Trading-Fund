@@ -1239,7 +1239,7 @@ def call_anthropic(api_key, prompt, max_tokens=2500):
 @app.route('/')
 def dashboard():
     from flask import send_from_directory
-    return send_from_directory('.', 'apex_dashboard_v8.html')
+    return send_from_directory('.', 'meridian_dashboard.html')
 
 @app.route('/api/debug')
 def debug():
@@ -1878,6 +1878,54 @@ def background_scheduler():
                         )
             except Exception as _ks_e:
                 logger.warning(f'Kill switch check failed: {_ks_e}')
+
+        # ── Meridian MRI narrative — regenerate every 5 min ──────────
+        if not hasattr(background_scheduler, '_last_mri_narrative') or \
+                now - background_scheduler._last_mri_narrative >= 300:
+            background_scheduler._last_mri_narrative = now
+            try:
+                import meridian_mri as _mri_n
+                _mri_n.refresh_narrative()
+            except Exception as _mri_n_e:
+                logger.warning(f'MRI narrative refresh error: {_mri_n_e}')
+
+        # ── Meridian MRI news — fetch + classify every 5 min, Telegram on High ─
+        if not hasattr(background_scheduler, '_last_mri_news') or \
+                now - background_scheduler._last_mri_news >= 300:
+            background_scheduler._last_mri_news = now
+            try:
+                import meridian_mri as _mri_nw
+                _new_high_items = _mri_nw.refresh_news()
+                if _new_high_items:
+                    from live_scanner import send_telegram as _mri_tg
+                    for _item in _new_high_items:
+                        _msg = (
+                            f'🔔 <b>Meridian High-Relevance News</b>\n'
+                            f'{_item["headline"]}\n'
+                            f'Direction: {_item["direction"]} | {_item["explanation"]}'
+                        )
+                        _mri_tg(_msg, message_type='mri_alert')
+            except Exception as _mri_nw_e:
+                logger.warning(f'MRI news refresh error: {_mri_nw_e}')
+
+        # ── Meridian MRI composite threshold-cross — check every ~2 min ─
+        if not hasattr(background_scheduler, '_last_mri_threshold') or \
+                now - background_scheduler._last_mri_threshold >= 120:
+            background_scheduler._last_mri_threshold = now
+            try:
+                import meridian_mri as _mri_c
+                _mri_result = _mri_c.compute_composite()
+                _cross = _mri_c.check_threshold_cross(_mri_result.get('short_term'))
+                if _cross:
+                    from live_scanner import send_telegram as _mri_tg2
+                    _dir_word = 'above +5 (bullish)' if 'up' in _cross else 'below -5 (bearish)'
+                    _mri_tg2(
+                        f'📈 <b>Meridian MRI crossed {_dir_word}</b>\n'
+                        f'Composite (short-term): {_mri_result.get("short_term")}',
+                        message_type='mri_alert',
+                    )
+            except Exception as _mri_c_e:
+                logger.warning(f'MRI threshold-cross check error: {_mri_c_e}')
 
         # ── Economic calendar refresh (every 6 hours) + 15-min warnings ─
         if not hasattr(background_scheduler, '_last_cal_refresh') or \
@@ -6335,6 +6383,65 @@ def apex_mtf():
         return jsonify({'ok': False, 'error': str(e)})
 
 
+# ─────────────────────────────────────────────────────────────
+#  MERIDIAN MRI — market-intelligence composite endpoints
+#  See meridian_mri.py and docs/meridian_mri.md / docs/meridian_news.md
+# ─────────────────────────────────────────────────────────────
+
+@app.route('/api/mri/composite', methods=['GET'])
+def mri_composite():
+    try:
+        import meridian_mri as _mri
+        return jsonify({'ok': True, **_mri.compute_composite()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/levels', methods=['GET'])
+def mri_levels():
+    try:
+        import meridian_mri as _mri
+        levels = {sym: _mri.build_price_ladder(sym) for sym in _mri.SYMBOLS}
+        return jsonify({'ok': True, 'levels': levels})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/macro', methods=['GET'])
+def mri_macro():
+    try:
+        import meridian_mri as _mri
+        return jsonify({'ok': True, 'macro': _mri.fetch_macro()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/news', methods=['GET'])
+def mri_news():
+    try:
+        import meridian_mri as _mri
+        return jsonify({
+            'ok': True,
+            'news': _mri._STATE['news_items']['items'],
+            'updated_at': _mri._STATE['news_items']['updated_at'],
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/mtf', methods=['GET'])
+def mri_mtf():
+    try:
+        import meridian_mri as _mri
+        return jsonify({
+            'ok': True,
+            'mtf': _mri.build_mtf_table(),
+            'instruments': {sym: _mri.instrument_snapshot(sym) for sym in _mri.SYMBOLS},
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/apex/forecast', methods=['GET'])
 def apex_forecast():
     """
@@ -7134,6 +7241,21 @@ def morning_brief():
         except Exception as _mb_sh_e:
             logger.debug(f'morning_brief shadow_lab: {_mb_sh_e}')
 
+        # ── 8. Meridian MRI composite + top 3 ICT levels ─────────
+        mri_summary = {}
+        try:
+            import meridian_mri as _mb_mri
+            _mb_mri_data = _mb_mri.compute_composite()
+            mri_summary['composite_short']  = _mb_mri_data.get('short_term')
+            mri_summary['composite_medium'] = _mb_mri_data.get('medium_term')
+            mri_summary['label']            = _mb_mri_data.get('label')
+            _mb_levels = _mb_mri.build_price_ladder('ES')
+            mri_summary['top_ict_levels'] = (
+                (_mb_levels.get('above') or []) + (_mb_levels.get('below') or [])
+            )[:3]
+        except Exception as _mb_mri_e:
+            logger.warning(f'morning_brief MRI error: {_mb_mri_e}')
+
         # ── Build response payload ──────────────────────────────
         result = {
             'ok':              True,
@@ -7148,6 +7270,7 @@ def morning_brief():
             'htf_4h_bias':     htf_bias,
             'signal_ready':    signal_ready,
             'shadow_active':   shadow_active,
+            'mri':             mri_summary,
         }
 
         # ── Build and send Telegram message ─────────────────────
@@ -7185,6 +7308,19 @@ def morning_brief():
                 f'<b>Signal-ready:</b>  {", ".join(signal_ready) or "none"}',
                 f'<b>Shadow lab:</b>    {shadow_active} active candidate{"s" if shadow_active != 1 else ""}',
             ]
+
+            if mri_summary:
+                _lines.append(_sep)
+                _lines.append(
+                    f'<b>MRI:</b> {mri_summary.get("label","?")} '
+                    f'(short={mri_summary.get("composite_short","?")}, '
+                    f'medium={mri_summary.get("composite_medium","?")})'
+                )
+                for _lvl in mri_summary.get('top_ict_levels', [])[:3]:
+                    _lines.append(
+                        f'  • {_lvl.get("type","?")} @ {_lvl.get("price","?")} '
+                        f'({_lvl.get("distance_pts", 0):+.1f}pt)'
+                    )
 
             if open_positions:
                 _lines.append(_sep)
