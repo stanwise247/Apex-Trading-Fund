@@ -466,15 +466,22 @@ _PG_DDL = [
     'CREATE INDEX IF NOT EXISTS idx_wyckoff_sym_date ON wyckoff_log (symbol, date)',
     'CREATE INDEX IF NOT EXISTS idx_swing_alert ON swing_alerted_signals (symbol, direction, setup, date)',
     'CREATE INDEX IF NOT EXISTS idx_regime_log_sym_ts ON regime_log (symbol, timestamp)',
+    # Tracks one-time migrations (e.g. the ohlcv dedup below) so they run
+    # exactly once ever, not on every startup — a full-table dedup scan
+    # gets slower as ohlcv grows and must never block app startup again.
+    """CREATE TABLE IF NOT EXISTS schema_migrations (
+        name       TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ DEFAULT NOW()
+    )""",
 ]
 
 # Separate migration steps run after DDL — dedup then add unique index.
 # ON CONFLICT (symbol,timeframe,ts) requires a UNIQUE INDEX to exist.
 # CREATE TABLE IF NOT EXISTS won't add the constraint to a pre-existing table.
+# NOTE: the one-time ohlcv dedup is handled separately in init_schema() via
+# the schema_migrations table — it is NOT in this list, because it must run
+# at most once ever, not be re-attempted on every deploy (see init_schema()).
 _PG_MIGRATIONS = [
-    # Remove any duplicate ohlcv rows (keep lowest id) before creating unique index
-    'DELETE FROM ohlcv WHERE id NOT IN '
-    '(SELECT MIN(id) FROM ohlcv GROUP BY symbol, timeframe, ts)',
     # Unique index — required for ON CONFLICT (symbol,timeframe,ts) to work
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique '
     'ON ohlcv (symbol, timeframe, ts)',
@@ -564,6 +571,26 @@ def init_schema():
         cur = conn.cursor()
         for ddl in _PG_DDL:
             cur.execute(ddl)
+
+        # One-time ohlcv dedup — gated on schema_migrations so this full-table
+        # scan runs at most once ever, not on every deploy (it previously had
+        # no such guard and, as ohlcv grew, started taking 8+ minutes and
+        # blocking every subsequent app startup).
+        cur.execute("SELECT 1 FROM schema_migrations WHERE name = %s", ('ohlcv_dedup_v1',))
+        if cur.fetchone() is None:
+            try:
+                cur.execute(
+                    'DELETE FROM ohlcv WHERE id NOT IN '
+                    '(SELECT MIN(id) FROM ohlcv GROUP BY symbol, timeframe, ts)'
+                )
+                cur.execute(
+                    "INSERT INTO schema_migrations (name) VALUES (%s) ON CONFLICT DO NOTHING",
+                    ('ohlcv_dedup_v1',),
+                )
+                logger.info('ohlcv dedup migration applied (one-time)')
+            except Exception as dedup_err:
+                logger.warning(f'ohlcv dedup migration skipped ({dedup_err})')
+
         for sql in _PG_MIGRATIONS:
             try:
                 cur.execute(sql)
