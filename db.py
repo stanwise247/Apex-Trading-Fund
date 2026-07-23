@@ -572,16 +572,22 @@ def init_schema():
         for ddl in _PG_DDL:
             cur.execute(ddl)
 
-        # One-time ohlcv dedup — gated on schema_migrations so this full-table
-        # scan runs at most once ever, not on every deploy (it previously had
-        # no such guard and, as ohlcv grew, started taking 8+ minutes and
-        # blocking every subsequent app startup).
+        # One-time ohlcv dedup — gated on schema_migrations so this runs at
+        # most once ever, not on every deploy (it previously had no such
+        # guard and, as ohlcv grew, started taking 8+ minutes and blocking
+        # every subsequent app startup).
+        #
+        # Uses a self-join on (symbol, timeframe, ts) rather than
+        # `NOT IN (SELECT MIN(id) ... GROUP BY ...)` — the join can use the
+        # existing idx_ohlcv_sym_tf_ts index directly, while NOT IN forces a
+        # full aggregate scan. Same semantics (keep the lowest id per group).
         cur.execute("SELECT 1 FROM schema_migrations WHERE name = %s", ('ohlcv_dedup_v1',))
         if cur.fetchone() is None:
             try:
                 cur.execute(
-                    'DELETE FROM ohlcv WHERE id NOT IN '
-                    '(SELECT MIN(id) FROM ohlcv GROUP BY symbol, timeframe, ts)'
+                    'DELETE FROM ohlcv a USING ohlcv b '
+                    'WHERE a.symbol = b.symbol AND a.timeframe = b.timeframe '
+                    'AND a.ts = b.ts AND a.id > b.id'
                 )
                 cur.execute(
                     "INSERT INTO schema_migrations (name) VALUES (%s) ON CONFLICT DO NOTHING",
