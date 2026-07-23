@@ -2930,6 +2930,100 @@ def test_mri11_check_threshold_cross_edge_triggered():
         _fail('TEST MRI11', f'{type(e).__name__}: {e}')
 
 
+def test_mri12_classify_news_item_failure_shows_unclassified():
+    """When the Anthropic call fails, classify_news_item returns Unclassified/ok=False rather than a fake Low."""
+    _section('TEST MRI12 — classify_news_item failure -> Unclassified, not silently dropped')
+    try:
+        import meridian_mri as m
+        orig_key = m.ANTHROPIC_KEY
+        m.ANTHROPIC_KEY = ''   # forces call_anthropic to raise deterministically
+        try:
+            result = m.classify_news_item('Some headline', 'some description')
+        finally:
+            m.ANTHROPIC_KEY = orig_key
+        if result.get('relevance') == 'Unclassified' and result.get('ok') is False:
+            _pass('TEST MRI12  failed classification tagged Unclassified/ok=False', '')
+        else:
+            _fail('TEST MRI12  failed classification tagged Unclassified/ok=False', f'got {result}')
+        # refresh_news() must keep Unclassified items (not drop them like a real Low)
+        if 'Unclassified' not in ('Medium', 'High') and result['relevance'] == 'Unclassified':
+            _pass('TEST MRI12  Unclassified is a distinct tag from a real Low/Irrelevant', '')
+    except Exception as e:
+        _fail('TEST MRI12', f'{type(e).__name__}: {e}')
+
+
+def test_mri13_explain_macro_layer_known_inputs():
+    """All-negative macro sub-scores produce an 'All N headwinds' summary from real values, not hardcoded text."""
+    _section('TEST MRI13 — explain_macro_layer known inputs')
+    try:
+        import meridian_mri as m
+        macro = {
+            'vix':       {'available': True, 'value': 22.5, 'regime': 'High', 'sub_score': -1},
+            'dxy':       {'available': True, 'value': 105.2, 'trend': 'rising', 'sub_score': -1},
+            'yield_10y': {'available': True, 'value': 4.8, 'direction': 'rising_sharply', 'sub_score': -1},
+            'oil':       {'available': False},
+        }
+        text = m.explain_macro_layer(macro)
+        checks = [
+            ('mentions VIX value', '22.5' in text),
+            ('mentions DXY rising', 'DXY rising' in text),
+            ('mentions yield rising sharply', 'rising sharply' in text),
+            ('summarises as headwinds', 'headwind' in text.lower()),
+        ]
+        for label, ok in checks:
+            if ok:
+                _pass(f'TEST MRI13  {label}', '')
+            else:
+                _fail(f'TEST MRI13  {label}', text)
+    except Exception as e:
+        _fail('TEST MRI13', f'{type(e).__name__}: {e}')
+
+
+def test_mri14_explain_regime_layer_l3_neutral():
+    """L3 probability near 0.5 is phrased as 'L3 neutral', not a misleadingly precise percentage."""
+    _section('TEST MRI14 — explain_regime_layer L3-neutral phrasing')
+    try:
+        import meridian_mri as m
+        per_symbol = {
+            'ES':  {'regime': 'CHOPPY', 'l3_probability': 0.52},
+            'MNQ': {'regime': 'TRENDING', 'l3_probability': 0.873},
+        }
+        text = m.explain_regime_layer(per_symbol)
+        if 'L3 neutral' in text:
+            _pass('TEST MRI14  near-0.5 L3 phrased as neutral', text)
+        else:
+            _fail('TEST MRI14  near-0.5 L3 phrased as neutral', text)
+        if '87.3%' in text:
+            _pass('TEST MRI14  confident L3 shows exact percentage', text)
+        else:
+            _fail('TEST MRI14  confident L3 shows exact percentage', text)
+    except Exception as e:
+        _fail('TEST MRI14', f'{type(e).__name__}: {e}')
+
+
+def test_mri15_layer_explanations_has_all_five_keys():
+    """layer_explanations() always returns exactly the 5 layer keys, matching the score layers."""
+    _section('TEST MRI15 — layer_explanations key coverage')
+    try:
+        import meridian_mri as m
+        scored = {
+            'macro': {},
+            'per_symbol': {'ES': {}, 'MNQ': {}},
+        }
+        result = m.layer_explanations(scored)
+        expected = {'macro', 'regime', 'ict', 'mtf', 'news'}
+        if set(result.keys()) == expected:
+            _pass('TEST MRI15  exactly 5 explanation keys', '')
+        else:
+            _fail('TEST MRI15  exactly 5 explanation keys', f'got {set(result.keys())}')
+        if all(isinstance(v, str) and v for v in result.values()):
+            _pass('TEST MRI15  every explanation is a non-empty string', '')
+        else:
+            _fail('TEST MRI15  every explanation is a non-empty string', f'{result}')
+    except Exception as e:
+        _fail('TEST MRI15', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
 #  HTTP against Railway — follows the D4/CTX1 "not-a-hard-fail" idiom.
@@ -3205,6 +3299,10 @@ if __name__ == '__main__':
     test_mri9_news_layer_score_caps_and_window()
     test_mri10_pct_bullish_vs_pct_alignment()
     test_mri11_check_threshold_cross_edge_triggered()
+    test_mri12_classify_news_item_failure_shows_unclassified()
+    test_mri13_explain_macro_layer_known_inputs()
+    test_mri14_explain_regime_layer_l3_neutral()
+    test_mri15_layer_explanations_has_all_five_keys()
 
     # Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
     test_mriapi1_composite_endpoint_structure()

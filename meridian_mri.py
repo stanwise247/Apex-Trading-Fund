@@ -47,9 +47,10 @@ def _load_config():
 
 _cfg = _load_config()
 ANTHROPIC_KEY   = os.environ.get('ANTHROPIC_KEY', _cfg.get('anthropic_key', ''))
-# Reuses the exact model already proven working in production (server.py's
-# call_anthropic) rather than the brief's unverified 'claude-sonnet-4-6'.
-ANTHROPIC_MODEL = 'claude-sonnet-4-20250514'
+# claude-sonnet-4-20250514 (originally chosen to match server.py's existing
+# convention) was confirmed 404/not_found_error on Railway's key as of
+# 2026-07-23 — deprecated/retired. claude-sonnet-5 confirmed working live.
+ANTHROPIC_MODEL = 'claude-sonnet-5'
 
 SYMBOLS = ('ES', 'MNQ')
 
@@ -78,11 +79,14 @@ EQUAL_LEVELS_LOOKBACK = 400   # ~5 sessions of 5min bars
 # today) — substituted with equivalent, already-proven-working free feeds.
 # See docs/meridian_news.md for the substitution rationale.
 NEWS_RSS_FEEDS = [
-    ('Reuters Business', 'macro',   'https://feeds.reuters.com/reuters/businessNews'),
-    ('Reuters World',     'macro',   'https://feeds.reuters.com/reuters/worldNews'),
-    ('CNBC Markets',      'markets', 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069'),
-    ('MarketWatch',       'markets', 'https://feeds.marketwatch.com/marketwatch/topstories/'),
-    ('WSJ Economy',       'macro',   'https://feeds.a.dj.com/rss/RSSEconomics.xml'),
+    ('Reuters Business',        'macro',       'https://feeds.reuters.com/reuters/businessNews'),
+    ('Reuters World',           'macro',       'https://feeds.reuters.com/reuters/worldNews'),
+    ('CNBC Markets',            'markets',     'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069'),
+    ('CNBC Markets (Top News)', 'markets',     'https://www.cnbc.com/id/20910258/device/rss/rss.html'),
+    ('Yahoo Finance',           'markets',     'https://finance.yahoo.com/news/rssindex'),
+    ('Investing.com Commodities', 'commodities', 'https://www.investing.com/rss/commodities.rss'),
+    ('MarketWatch',              'markets',     'https://feeds.marketwatch.com/marketwatch/topstories/'),
+    ('WSJ Economy',              'macro',       'https://feeds.a.dj.com/rss/RSSEconomics.xml'),
 ]
 
 
@@ -653,11 +657,15 @@ def classify_news_item(headline: str, description: str = '') -> dict:
             relevance = 'Low'
         if direction not in ('Bullish', 'Bearish', 'Neutral'):
             direction = 'Neutral'
-        return {'relevance': relevance, 'direction': direction, 'explanation': explanation}
+        return {'relevance': relevance, 'direction': direction, 'explanation': explanation, 'ok': True}
     except Exception as e:
-        # Fails toward "don't show" — never fake-injects a High-relevance item.
+        # Classification genuinely failed (API/network/parse error) — distinct
+        # from a real Low/Irrelevant classification. refresh_news() still
+        # shows these items, tagged 'Unclassified', rather than silently
+        # dropping every headline whenever the AI call has a problem.
         logger.debug(f'classify_news_item error: {e}')
-        return {'relevance': 'Low', 'direction': 'Neutral', 'explanation': 'classification unavailable'}
+        return {'relevance': 'Unclassified', 'direction': 'Neutral',
+                'explanation': 'Classification unavailable', 'ok': False}
 
 
 # =============================================================
@@ -702,7 +710,10 @@ def refresh_news():
             continue
         seen.add(key)
         c = classify_news_item(art['headline'], art.get('description', ''))
-        if c['relevance'] not in ('Medium', 'High'):
+        # Show Medium/High (genuinely relevant) and Unclassified (classification
+        # failed — better to show with a badge than silently vanish). Genuine
+        # Low/Irrelevant classifications are still filtered out as intended.
+        if c['relevance'] not in ('Medium', 'High', 'Unclassified'):
             continue
         item = {
             'headline': art['headline'], 'source': art['source'],
@@ -776,6 +787,145 @@ def refresh_narrative():
 
 
 # =============================================================
+#  LAYER EXPLANATIONS — deterministic, template-based from real score
+#  inputs (never hardcoded text, never an extra Anthropic call).
+# =============================================================
+
+def explain_macro_layer(macro: dict) -> str:
+    parts, negatives, positives = [], 0, 0
+
+    vix = macro.get('vix', {})
+    if vix.get('available'):
+        parts.append(f"VIX {(vix.get('regime') or '?').lower()} ({vix.get('value')})")
+        sub = vix.get('sub_score') or 0
+        negatives += sub < 0; positives += sub > 0
+
+    dxy = macro.get('dxy', {})
+    if dxy.get('available'):
+        parts.append(f"DXY {dxy.get('trend')}")
+        sub = dxy.get('sub_score') or 0
+        negatives += sub < 0; positives += sub > 0
+
+    yld = macro.get('yield_10y', {})
+    if yld.get('available'):
+        dir_txt = {'rising_sharply': 'rising sharply', 'stable_or_falling': 'stable/falling'}.get(
+            yld.get('direction'), 'mixed')
+        parts.append(f"10Y yield {dir_txt}")
+        sub = yld.get('sub_score') or 0
+        negatives += sub < 0; positives += sub > 0
+
+    oil = macro.get('oil', {})
+    if oil.get('available'):
+        sub = oil.get('sub_score') or 0
+        if sub != 0:
+            parts.append(f"Oil {'rising' if sub < 0 else 'falling'} ({oil.get('change_pct_5d')}% 5d)")
+            negatives += sub < 0; positives += sub > 0
+
+    if not parts:
+        return 'Macro data unavailable.'
+
+    lead  = ', '.join(parts) + '.'
+    total = negatives + positives
+    if total == 0:
+        summary = 'Net neutral for ES/MNQ momentum.'
+    elif negatives == total:
+        summary = f"All {total} headwind{'s' if total != 1 else ''} for ES/MNQ momentum."
+    elif positives == total:
+        summary = f"All {total} tailwind{'s' if total != 1 else ''} for ES/MNQ momentum."
+    else:
+        summary = f"{positives} tailwind{'s' if positives != 1 else ''}, {negatives} headwind{'s' if negatives != 1 else ''} — mixed picture."
+    return f'{lead} {summary}'
+
+
+def _regime_symbol_phrase(sym: str, info: dict) -> str:
+    regime = info.get('regime') or 'regime unavailable'
+    l3     = info.get('l3_probability')
+    if l3 is None:
+        return f'{sym} {regime}, L3 unavailable'
+    if abs(l3 - 0.5) < 0.10:
+        return f'{sym} {regime} but L3 neutral'
+    return f'{sym} in {regime} regime ({l3 * 100:.1f}% L3 probability)'
+
+
+def explain_regime_layer(per_symbol: dict) -> str:
+    phrases = [_regime_symbol_phrase(sym, per_symbol.get(sym, {})) for sym in SYMBOLS if sym in per_symbol]
+    if not phrases:
+        return 'Regime data unavailable.'
+    return '. '.join(phrases) + '.'
+
+
+def _ict_symbol_phrase(sym: str, info: dict) -> str:
+    price, vah, val = info.get('price'), info.get('vah'), info.get('val')
+    parts = []
+    if price is not None and vah is not None and val is not None:
+        if price > vah:
+            parts.append('above VAH')
+        elif price < val:
+            parts.append('below VAL')
+        else:
+            parts.append('inside value area')
+    bull_fvg = info.get('bull_fvg_below', 0)
+    bear_fvg = info.get('bear_fvg_above', 0)
+    if bull_fvg:
+        parts.append(f"{bull_fvg} bullish FVG{'s' if bull_fvg != 1 else ''} below")
+    if bear_fvg:
+        parts.append(f"{bear_fvg} bearish FVG{'s' if bear_fvg != 1 else ''} above")
+    if not parts:
+        return f'{sym} no clear structural signal'
+    return f"{sym} {', '.join(parts)}"
+
+
+def explain_ict_layer(per_symbol: dict) -> str:
+    phrases = [_ict_symbol_phrase(sym, per_symbol.get(sym, {})) for sym in SYMBOLS if sym in per_symbol]
+    if not phrases:
+        return 'ICT structure data unavailable.'
+    return '. '.join(phrases) + '.'
+
+
+def explain_mtf_layer(per_symbol: dict) -> str:
+    phrases = []
+    for sym in SYMBOLS:
+        info = per_symbol.get(sym)
+        if not info or not info.get('mtf_total'):
+            continue
+        phrases.append(f"{sym} {info['mtf_bull_count']}/{info['mtf_total']} bullish")
+    if not phrases:
+        return 'MTF data unavailable.'
+    return ', '.join(phrases) + '.'
+
+
+def explain_news_layer(items, now_ts=None) -> str:
+    if now_ts is None:
+        now_ts = time.time()
+    bullish = bearish = 0
+    for it in (items or []):
+        if it.get('relevance') != 'High':
+            continue
+        ts = it.get('timestamp')
+        if ts is None or now_ts - ts > NEWS_WINDOW_SECONDS:
+            continue
+        if it.get('direction') == 'Bullish':
+            bullish += 1
+        elif it.get('direction') == 'Bearish':
+            bearish += 1
+    if bullish == 0 and bearish == 0:
+        return 'No high-relevance news in the last 3 hours.'
+    return (f"{bullish} high-relevance bullish headline{'s' if bullish != 1 else ''}, "
+            f"{bearish} bearish, in the last 3 hours.")
+
+
+def layer_explanations(scored: dict) -> dict:
+    """Compose all five layer explanations from the same real inputs _score_all_layers() already fetched."""
+    return {
+        'macro':  explain_macro_layer(scored.get('macro', {})),
+        'regime': explain_regime_layer(scored.get('per_symbol', {})),
+        'ict':    explain_ict_layer(scored.get('per_symbol', {})),
+        'mtf':    explain_mtf_layer(scored.get('per_symbol', {})),
+        'news':   explain_news_layer(_STATE['news_items']['items']),
+    }
+
+
+# =============================================================
 #  ORCHESTRATION
 # =============================================================
 
@@ -810,9 +960,28 @@ def _score_all_layers() -> dict:
         mscore     = mtf_trend_score(mtf_biases)
         mtf_scores.append(mscore)
 
+        # Extra detail captured purely so layer_explanations() can describe
+        # *why* a score is what it is, from the same real inputs already
+        # fetched above — not a second round of IO.
+        bull_fvg_below, bear_fvg_above = 0, 0
+        if price is not None:
+            for f in (liq.get('active_fvgs') or []):
+                mid = (f.get('high', 0) + f.get('low', 0)) / 2
+                if f.get('kind') == 'bull' and price > mid:
+                    bull_fvg_below += 1
+                elif f.get('kind') == 'bear' and price < mid:
+                    bear_fvg_above += 1
+        mtf_bull_count = sum(1 for b in mtf_biases.values() if b == 'BULLISH')
+        mtf_bear_count = sum(1 for b in mtf_biases.values() if b == 'BEARISH')
+
         per_symbol[sym] = {
             'price': price, 'regime': regime.get('regime'), 'htf_bias': htf_bias,
             'regime_score': round(rscore, 2), 'ict_score': round(iscore, 2), 'mtf_score': round(mscore, 2),
+            'l3_probability': round(l3_prob, 3) if l3_prob is not None else None,
+            'regime_confidence': regime.get('confidence'),
+            'vah': va.get('vah'), 'val': va.get('val'),
+            'bull_fvg_below': bull_fvg_below, 'bear_fvg_above': bear_fvg_above,
+            'mtf_bull_count': mtf_bull_count, 'mtf_bear_count': mtf_bear_count, 'mtf_total': len(mtf_biases),
         }
 
     regime_layer = float(np.clip(np.mean(regime_scores), -10, 10)) if regime_scores else 0.0
@@ -846,6 +1015,7 @@ def compute_composite() -> dict:
         'narrative': narrative,
         'narrative_updated_at': _STATE['narrative']['updated_at'],
         'per_symbol': scored['per_symbol'],
+        'layer_explanations': layer_explanations(scored),
         'updated_at': int(time.time()),
     }
 
@@ -860,13 +1030,18 @@ def build_price_ladder(symbol: str) -> dict:
 
     above, below = [], []
 
-    def add(level_type, lvl_price, color):
+    def add(level_type, lvl_price, color, zone_high=None, zone_low=None):
         if lvl_price is None or price is None:
             return
         dist_pts = round(lvl_price - price, 2)
         dist_pct = round(dist_pts / price * 100, 3) if price else None
         entry = {'type': level_type, 'price': round(lvl_price, 2),
-                  'distance_pts': dist_pts, 'distance_pct': dist_pct, 'color_group': color}
+                  'distance_pts': dist_pts, 'distance_pct': dist_pct, 'color_group': color,
+                  # zone_high/zone_low: real bounds for FVGs/order blocks (None for
+                  # single-price levels like VAH/PDH) — lets a chart draw the actual
+                  # zone rather than approximating from the midpoint alone.
+                  'zone_high': round(zone_high, 2) if zone_high is not None else None,
+                  'zone_low': round(zone_low, 2) if zone_low is not None else None}
         (above if lvl_price > price else below).append(entry)
 
     if va.get('vah') is not None:
@@ -879,10 +1054,12 @@ def build_price_ladder(symbol: str) -> dict:
         add('PDL', pdl, 'neutral')
     for f in liq.get('active_fvgs', []):
         mid = (f['high'] + f['low']) / 2
-        add('Bullish FVG' if f['kind'] == 'bull' else 'Bearish FVG', mid, 'blue')
+        add('Bullish FVG' if f['kind'] == 'bull' else 'Bearish FVG', mid, 'blue',
+            zone_high=f['high'], zone_low=f['low'])
     for o in liq.get('active_obs', []):
         mid = (o['high'] + o['low']) / 2
-        add('Bullish OB' if o['kind'] == 'bull' else 'Bearish OB', mid, 'purple')
+        add('Bullish OB' if o['kind'] == 'bull' else 'Bearish OB', mid, 'purple',
+            zone_high=o['high'], zone_low=o['low'])
     for lvl in eq_levels:
         add('Equal High' if lvl['type'] == 'high' else 'Equal Low', lvl['price'], 'amber')
 

@@ -3,12 +3,17 @@
 ## What it shows
 
 Meridian pulls headlines from free RSS feeds every 5 minutes, runs each new one through the
-Anthropic API for relevance/direction classification, and shows only Medium and High relevance
-items — newest first, capped at 10. High-relevance items also trigger an immediate Telegram alert.
+Anthropic API for relevance/direction classification, and shows Medium/High relevance items plus
+any item whose classification genuinely failed (tagged `Unclassified`) — newest first, capped at
+10. High-relevance items also trigger an immediate Telegram alert.
 
 **Interpretation:** relevance tells you whether a headline is worth reading at all for ES/MNQ;
 direction tells you which way it leans. A High-relevance item with a colored left border is the
-kind of headline that would make a macro desk look up from their screens.
+kind of headline that would make a macro desk look up from their screens. An "Unclassified —
+Classification unavailable" badge means the AI call itself failed (bad key, network error,
+malformed response) — the headline is real, only the relevance/direction judgment is missing;
+this is shown rather than silently dropped so a systemic classification failure is visible instead
+of just looking like "no news today."
 
 ---
 
@@ -17,19 +22,23 @@ kind of headline that would make a macro desk look up from their screens.
 The original brief asked for "Reuters markets, Bloomberg markets RSS, Fed press releases,
 economic calendar." **Bloomberg discontinued its free public RSS feeds years ago** — no free,
 no-auth Bloomberg feed exists today. It's substituted with a subset of feeds already proven
-working elsewhere in this codebase (server.py's `RSS_FEEDS`):
+working elsewhere in this codebase (server.py's `RSS_FEEDS`), plus three more added later:
 
 | Source | Category |
 |---|---|
 | Reuters Business | macro |
 | Reuters World | macro |
 | CNBC Markets | markets |
+| CNBC Markets (Top News) | markets |
+| Yahoo Finance | markets |
+| Investing.com Commodities | commodities |
 | MarketWatch | markets |
 | WSJ Economy | macro |
 
 Feeds are hand-parsed via `requests` + `xml.etree.ElementTree` (namespace-stripped with regex) —
 same approach as server.py, deliberately not using the `feedparser` package (keeps the module
-dependency-free, matching the rest of this codebase's convention).
+dependency-free, matching the rest of this codebase's convention). All entries in
+`meridian_mri.NEWS_RSS_FEEDS` were verified to parse and return real headlines before being added.
 
 ---
 
@@ -121,10 +130,19 @@ stays fast regardless of feed latency.
 
 ## Debugging
 
-- **News list stays empty** — check Railway logs for `MRI news refresh error`. Most common local
-  cause: `ANTHROPIC_KEY not configured` (classification fails toward Low, so nothing clears the
-  Medium/High filter). RSS fetch itself degrades silently per-feed (`_fetch_rss_feed` returns `[]`
-  on any HTTP/XML error) — a single feed being down never blocks the others.
+- **News list stays empty (all items Unclassified, none ever Medium/High)** — the AI call is
+  failing for every item. Most common causes: `ANTHROPIC_KEY not configured` (only set on Railway,
+  not local `.env`), or the model in `meridian_mri.ANTHROPIC_MODEL` has been deprecated (this
+  exact incident happened on 2026-07-23 — `claude-sonnet-4-20250514` started returning
+  `404 not_found_error`, silently degrading every item to `Unclassified` for an unknown period
+  before being caught). Test directly: `python3 -c "import meridian_mri as m;
+  print(m.call_anthropic('say hi as {\"ok\":true}'))"` — a clean exception message there
+  (e.g. `not_found_error`) is the fastest way to catch this.
+- **News list stays empty (no items at all, not even Unclassified)** — check Railway logs for
+  `MRI news refresh error`; this means RSS fetch itself is failing, not classification. RSS fetch
+  degrades silently per-feed (`_fetch_rss_feed` returns `[]` on any HTTP/XML error) — a single feed
+  being down never blocks the others, so total silence means either all feeds are unreachable
+  (network egress issue) or the scheduler job itself hasn't ticked yet.
 - **A High item never sent a Telegram alert** — check `live_scanner.py`'s `_ALLOWED_TYPES` still
   includes `'mri_alert'` (added specifically for Meridian; if this set gets edited in an unrelated
   change, alerts get silently dropped, not errored).

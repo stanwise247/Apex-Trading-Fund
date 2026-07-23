@@ -115,9 +115,16 @@ behind named constants/functions so they're easy to change:
 `meridian_mri.generate_narrative(scored)` builds a prompt containing all five layer scores, both
 composites, the label, and each symbol's price/regime/HTF bias, then calls the Anthropic API
 (`meridian_mri.call_anthropic`, raw HTTP — matches the existing codebase convention of not using
-the `anthropic` SDK) asking for a 2-3 sentence narrative as JSON. Model is
-`claude-sonnet-4-20250514` — the same model already proven working in production via server.py's
-`call_anthropic`, not the unverified string named in the original product brief.
+the `anthropic` SDK) asking for a 2-3 sentence narrative as JSON. Model is `claude-sonnet-5`.
+
+**History:** originally shipped as `claude-sonnet-4-20250514` (matching server.py's existing
+`call_anthropic` at the time). That snapshot was confirmed `404 not_found_error` on 2026-07-23 —
+deprecated/retired — which silently broke both the narrative (silently falling back to the
+templated `_fallback_narrative` every cycle) and news classification (every headline falling back
+to `Unclassified`, filtering the feed down to nothing). Switched to `claude-sonnet-5`, confirmed
+working live. If narrative/news classification silently stop working again, check the model string
+first — `call_anthropic` raising `not_found_error` is a very easy failure to miss since both
+callers already degrade gracefully instead of crashing.
 
 Refreshed every 5 minutes by a `background_scheduler()` job in server.py. If the API call fails
 (missing key, network error, bad response), `generate_narrative` falls back to a templated
@@ -140,8 +147,17 @@ fake narrative.
   "narrative": "The market picture is mixed...",
   "narrative_updated_at": 1784664057,
   "per_symbol": {
-    "ES":  {"price": 7508.0, "regime": "TRENDING", "htf_bias": "BULLISH", "regime_score": 4.25, "ict_score": 0.0, "mtf_score": 0.0},
+    "ES":  {"price": 7508.0, "regime": "TRENDING", "htf_bias": "BULLISH", "regime_score": 4.25, "ict_score": 0.0, "mtf_score": 0.0,
+            "l3_probability": 0.796, "regime_confidence": 0.75, "vah": 7522.5, "val": 7510.25,
+            "bull_fvg_below": 0, "bear_fvg_above": 0, "mtf_bull_count": 4, "mtf_bear_count": 2, "mtf_total": 6},
     "MNQ": {"price": 28910.0, "regime": "TRENDING", "htf_bias": "BULLISH", "regime_score": 3.54, "ict_score": 3.0, "mtf_score": 3.33}
+  },
+  "layer_explanations": {
+    "macro": "VIX elevated (16.9), DXY rising, 10Y yield rising sharply. All 3 headwinds for ES/MNQ momentum.",
+    "regime": "ES in TRENDING regime (79.6% L3 probability). MNQ in TRENDING regime (62.9% L3 probability).",
+    "ict": "ES inside value area. MNQ above VAH.",
+    "mtf": "ES 4/6 bullish, MNQ 4/6 bullish.",
+    "news": "No high-relevance news in the last 3 hours."
   },
   "updated_at": 1784664057
 }
@@ -153,7 +169,8 @@ fake narrative.
 | `short_term` / `medium_term` | float | Weighted composites, -10..+10, 1 decimal |
 | `label` | string | BULLISH / CAUTIOUSLY BULLISH / NEUTRAL / CAUTIOUSLY BEARISH / BEARISH |
 | `narrative` | string | Cached, refreshed every 5 min |
-| `per_symbol` | object | Per-symbol contribution detail for ES/MNQ |
+| `per_symbol` | object | Per-symbol contribution detail for ES/MNQ, including the extra fields (`l3_probability`, `vah`/`val`, FVG counts, MTF bull/bear counts) that `layer_explanations` is built from |
+| `layer_explanations` | object | One plain-English sentence per layer (`macro`/`regime`/`ict`/`mtf`/`news`), generated deterministically from the same real inputs above — see `meridian_mri.layer_explanations()`. Never hardcoded, never a second Anthropic call. |
 
 ### `GET /api/mri/mtf`
 

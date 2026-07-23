@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Meridian — Market Intelligence</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lightweight-charts/4.1.3/lightweight-charts.standalone.production.js"></script>
 <style>
   :root {
     --bg: #F0F2F5;
@@ -253,6 +254,55 @@
   }
 
   .empty-state { color: var(--text-secondary); font-size: 0.82rem; padding: 8px 0; }
+
+  /* ── Session status bar (below MERIDIAN header, top of main content) ── */
+  .session-bar {
+    display: flex; align-items: center; gap: 24px;
+    padding: 10px 20px; margin-bottom: 20px;
+    font-size: 0.78rem; color: var(--text-secondary);
+  }
+  .session-dot {
+    width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px;
+    background: var(--neutral);
+  }
+  .session-dot.active  { background: var(--bullish); }
+  .session-dot.premkt  { background: var(--amber); }
+  .session-dot.closed  { background: var(--neutral); }
+  .session-item { display: flex; align-items: center; gap: 8px; }
+  .session-item .val { color: var(--text-primary); font-weight: 650; }
+  .session-sep { color: var(--border); }
+
+  /* ── Section 3: TradingView lightweight-charts ─────────────────────── */
+  .chart-row { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; margin-bottom: 20px; }
+  .chart-col-title { font-size: 0.85rem; font-weight: 700; margin-bottom: 8px; }
+  .chart-container { width: 100%; height: 320px; border-radius: 10px; overflow: hidden; }
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 0.68rem; color: var(--text-secondary); }
+  .chart-legend .lg-item { display: flex; align-items: center; gap: 4px; }
+  .chart-legend .lg-swatch { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  /* ── Section 1: layer explanation tooltip ──────────────────────────── */
+  .info-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: rgba(142,155,174,0.25); color: var(--text-secondary);
+    font-size: 0.62rem; font-weight: 700; font-style: normal;
+    cursor: default; position: relative; margin-left: 5px;
+  }
+  .info-icon .tooltip-bubble {
+    visibility: hidden; opacity: 0; position: absolute;
+    bottom: 130%; left: 50%; transform: translateX(-50%);
+    width: 260px; padding: 10px 12px; border-radius: 8px;
+    background: var(--text-primary); color: #fff;
+    font-size: 0.72rem; font-weight: 400; line-height: 1.4;
+    text-transform: none; letter-spacing: normal;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    transition: opacity 0.12s ease; z-index: 20;
+  }
+  .info-icon:hover .tooltip-bubble { visibility: visible; opacity: 1; }
+  .bar-row-label { display: flex; align-items: center; }
+
+  /* ── Section 5: Unclassified news badge ────────────────────────────── */
+  .badge.unclassified { background: rgba(142,155,174,0.18); color: var(--text-secondary); border: 1px dashed var(--neutral); }
 </style>
 </head>
 <body>
@@ -278,6 +328,15 @@
   </div>
 
   <div class="main">
+
+    <!-- SESSION STATUS BAR -->
+    <div class="card session-bar" id="session-bar">
+      <div class="session-item"><span class="session-dot" id="session-dot"></span><span class="val" id="session-status">—</span></div>
+      <span class="session-sep">·</span>
+      <div class="session-item"><span class="eyebrow" style="margin:0;">UTC</span><span class="val tabular" id="session-clock">—</span></div>
+      <span class="session-sep">·</span>
+      <div class="session-item" id="session-countdown-wrap"><span id="session-countdown">—</span></div>
+    </div>
 
     <!-- SECTION 1 — MRI COMPOSITE -->
     <div class="grid" id="sec-hero">
@@ -323,7 +382,31 @@
           <span class="card-title">ICT Price Structure</span>
           <span class="live-badge" id="ladder-live"><span class="ring"></span>LIVE</span>
         </div>
-        <div class="ladder-cols" id="ladder-body">
+
+        <div class="chart-row">
+          <div>
+            <div class="chart-col-title">ES · 5min · last 2 sessions</div>
+            <div class="chart-container" id="chart-ES"></div>
+          </div>
+          <div>
+            <div class="chart-col-title">MNQ · 5min · last 2 sessions</div>
+            <div class="chart-container" id="chart-MNQ"></div>
+          </div>
+        </div>
+        <div class="chart-legend">
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--green);"></span>VAH</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--green); opacity:0.6;"></span>VAL (dashed)</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--amber);"></span>Equal High</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--amber); opacity:0.6;"></span>Equal Low (dashed)</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--purple);"></span>Bullish OB</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--purple); opacity:0.6;"></span>Bearish OB (dashed)</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--neutral);"></span>PDH</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--neutral); opacity:0.6;"></span>PDL (dashed)</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--blue);"></span>Bullish FVG zone</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--bearish);"></span>Bearish FVG zone</span>
+        </div>
+
+        <div class="ladder-cols" id="ladder-body" style="margin-top:20px; padding-top:20px; border-top:1px solid var(--border);">
           <div class="empty-state">Loading price structure…</div>
         </div>
       </div>
@@ -422,6 +505,173 @@ function timeAgo(ts) {
   return Math.floor(secs / 3600) + 'h ago';
 }
 
+/* ── Session status bar ─────────────────────────────────────────────
+   UTC-based approximation of CME Globex futures session structure:
+   PRE-MARKET (00:00-07:00 & 22:00-24:00 UTC weekdays), LONDON OPEN
+   (07:00-11:00), NY OPEN (13:00-19:00, matches this codebase's existing
+   SESSION_START/END_UTC used throughout setup_h_vwap.py/setup_j_value_area.py),
+   AFTER HOURS (19:00-21:00), CLOSED (21:00-22:00 daily maintenance, and
+   the long weekend closure Fri 21:00 UTC -> Sun 22:00 UTC). ─────────── */
+function getSessionInfo(now) {
+  const day = now.getUTCDay();   // 0=Sun..6=Sat
+  const totalMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const M = { pre1End: 7*60, londonEnd: 11*60, pre2End: 13*60, nyEnd: 19*60, ahEnd: 21*60, maintEnd: 22*60 };
+
+  function at(dayOffset, minutesOfDay) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    d.setUTCDate(d.getUTCDate() + dayOffset);
+    d.setUTCHours(0, minutesOfDay, 0, 0);
+    return d;
+  }
+
+  // Long weekend closure: Friday 21:00 UTC -> Sunday 22:00 UTC
+  if ((day === 5 && totalMin >= M.ahEnd) || day === 6 || (day === 0 && totalMin < M.maintEnd)) {
+    const daysToSunday = day === 5 ? 2 : day === 6 ? 1 : 0;
+    return { status: 'CLOSED', dotClass: 'closed', nextLabel: 'Reopens', nextTime: at(daysToSunday, M.maintEnd) };
+  }
+  // Daily maintenance break, Mon-Thu 21:00-22:00 UTC (Friday handled above)
+  if (day >= 1 && day <= 4 && totalMin >= M.ahEnd && totalMin < M.maintEnd) {
+    return { status: 'CLOSED', dotClass: 'closed', nextLabel: 'Reopens', nextTime: at(0, M.maintEnd) };
+  }
+  // Pre-market: previous evening 22:00 -> today 07:00
+  if (totalMin >= M.maintEnd || totalMin < M.pre1End) {
+    const nextDayOffset = totalMin >= M.maintEnd ? 1 : 0;
+    return { status: 'PRE-MARKET', dotClass: 'premkt', nextLabel: 'London Open', nextTime: at(nextDayOffset, M.pre1End) };
+  }
+  if (totalMin < M.londonEnd) {
+    return { status: 'LONDON OPEN', dotClass: 'active', nextLabel: 'London Close', nextTime: at(0, M.londonEnd) };
+  }
+  if (totalMin < M.pre2End) {
+    return { status: 'PRE-MARKET', dotClass: 'premkt', nextLabel: 'NY Open', nextTime: at(0, M.pre2End) };
+  }
+  if (totalMin < M.nyEnd) {
+    return { status: 'NY OPEN', dotClass: 'active', nextLabel: 'Session Close', nextTime: at(0, M.nyEnd) };
+  }
+  return { status: 'AFTER HOURS', dotClass: 'premkt', nextLabel: 'Maintenance Close', nextTime: at(0, M.ahEnd) };
+}
+
+function fmtCountdown(target, now) {
+  if (!target) return '—';
+  const diffMs = Math.max(0, target - now);
+  const totalSec = Math.floor(diffMs / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function updateSessionBar() {
+  const now = new Date();
+  document.getElementById('session-clock').textContent = now.toISOString().substr(11, 8);
+  const info = getSessionInfo(now);
+  document.getElementById('session-status').textContent = info.status;
+  document.getElementById('session-dot').className = 'session-dot ' + info.dotClass;
+  document.getElementById('session-countdown').textContent =
+    info.nextTime ? `${info.nextLabel} in ${fmtCountdown(info.nextTime, now)}` : '—';
+}
+
+/* ── Section 3: TradingView lightweight-charts with ICT level overlays ──
+   Uses createChart (full programmatic control over price lines) rather
+   than the Advanced Chart iframe embed, which doesn't expose a custom
+   price-line API. Bars come from the existing /api/apex/candles endpoint
+   (already shaped for lightweight-charts); levels come from /api/mri/levels. */
+const _charts = {};
+
+function initCharts() {
+  if (typeof LightweightCharts === 'undefined') {
+    ['ES', 'MNQ'].forEach(sym => {
+      const el = document.getElementById('chart-' + sym);
+      if (el) el.innerHTML = '<div class="empty-state">Chart library failed to load.</div>';
+    });
+    return;
+  }
+  ['ES', 'MNQ'].forEach(sym => {
+    const container = document.getElementById('chart-' + sym);
+    if (!container) return;
+    const chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 320,
+      layout: { background: { color: 'transparent' }, textColor: '#6B7A8D', fontSize: 11 },
+      grid: { vertLines: { color: 'rgba(0,0,0,0.04)' }, horzLines: { color: 'rgba(0,0,0,0.04)' } },
+      rightPriceScale: { borderColor: 'rgba(0,0,0,0.08)' },
+      timeScale: { borderColor: 'rgba(0,0,0,0.08)', timeVisible: true, secondsVisible: false },
+    });
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#1B7F4F', downColor: '#B03A2E', borderVisible: false,
+      wickUpColor: '#1B7F4F', wickDownColor: '#B03A2E',
+    });
+    _charts[sym] = { chart, candleSeries, priceLines: [] };
+    window.addEventListener('resize', () => chart.applyOptions({ width: container.clientWidth }));
+  });
+}
+
+async function refreshChartBars(sym) {
+  const state = _charts[sym];
+  if (!state) return;
+  const d = await apiFetch(`/api/apex/candles/${sym}/5m?limit=300`);
+  if (!d || !d.ok || !d.bars || !d.bars.length) return;
+  state.candleSeries.setData(d.bars);
+  // "last 2 sessions" — NY session is ~6h (13-19 UTC) = ~72 5min bars/session
+  const bars = d.bars;
+  const visibleCount = Math.min(bars.length, 145);
+  state.chart.timeScale().setVisibleRange({
+    from: bars[bars.length - visibleCount].time,
+    to: bars[bars.length - 1].time,
+  });
+}
+
+function levelLineStyleFor(entry) {
+  const t = entry.type;
+  const isFvg = /FVG/.test(t);
+  const dashed = /VAL|Low|Bearish OB|PDL/.test(t) && !isFvg;
+  let color;
+  if (isFvg) color = /Bullish/.test(t) ? '#1A56DB' : '#B03A2E';
+  else if (entry.color_group === 'green')  color = '#1B7F4F';
+  else if (entry.color_group === 'amber')  color = '#B7791F';
+  else if (entry.color_group === 'purple') color = '#6B46A8';
+  else color = '#8E9BAE';
+  return { color, dashed };
+}
+
+function updateChartLevels(sym, levelData) {
+  const state = _charts[sym];
+  if (!state || !levelData) return;
+  state.priceLines.forEach(pl => { try { state.candleSeries.removePriceLine(pl); } catch (e) {} });
+  state.priceLines = [];
+
+  const all = [...(levelData.above || []), ...(levelData.below || [])];
+  all.forEach(entry => {
+    const { color, dashed } = levelLineStyleFor(entry);
+    const lineStyle = dashed ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid;
+    if (entry.zone_high != null && entry.zone_low != null) {
+      // FVG/order-block zone — draw as a paired top/bottom boundary rather
+      // than a single midpoint line, using the real zone bounds.
+      state.priceLines.push(state.candleSeries.createPriceLine({
+        price: entry.zone_high, color, lineWidth: 1, lineStyle,
+        axisLabelVisible: true, title: `${entry.type} ${fmtNum(entry.zone_high)}`,
+      }));
+      state.priceLines.push(state.candleSeries.createPriceLine({
+        price: entry.zone_low, color, lineWidth: 1, lineStyle,
+        axisLabelVisible: true, title: `${entry.type} ${fmtNum(entry.zone_low)}`,
+      }));
+    } else {
+      state.priceLines.push(state.candleSeries.createPriceLine({
+        price: entry.price, color, lineWidth: 1, lineStyle,
+        axisLabelVisible: true, title: `${entry.type} ${fmtNum(entry.price)}`,
+      }));
+    }
+  });
+
+  if (levelData.price != null) {
+    state.priceLines.push(state.candleSeries.createPriceLine({
+      price: levelData.price, color: '#1A56DB', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true, title: 'Current',
+    }));
+  }
+}
+
 /* ── Section 1: Composite ──────────────────────────────────────────── */
 async function refreshComposite() {
   const d = await apiFetch('/api/mri/composite');
@@ -439,15 +689,17 @@ async function refreshComposite() {
   document.getElementById('hero-narrative').textContent = d.narrative || 'Narrative unavailable.';
 
   const barLabels = {macro: 'Macro', regime: 'Regime / Momentum', ict: 'ICT Structure', mtf: 'MTF Trend Alignment', news: 'News Sentiment'};
+  const explanations = d.layer_explanations || {};
   const barsEl = document.getElementById('hero-bars');
   barsEl.innerHTML = '';
   Object.keys(barLabels).forEach(key => {
     const val = (d.layers || {})[key];
     const pct = val === null || val === undefined ? 50 : Math.max(0, Math.min(100, ((val + 10) / 20) * 100));
+    const explainText = explanations[key] || 'No explanation available yet.';
     const row = document.createElement('div');
     row.className = 'bar-row';
     row.innerHTML = `
-      <div class="eyebrow" style="margin:0;">${barLabels[key]}</div>
+      <div class="eyebrow bar-row-label" style="margin:0;">${barLabels[key]}<span class="info-icon">i<span class="tooltip-bubble">${explainText}</span></span></div>
       <div class="bar-track">
         <div class="bar-fill" style="left:${Math.min(50,pct)}%; width:${Math.abs(pct-50)}%; background:${scoreColor(val)};"></div>
       </div>
@@ -603,6 +855,8 @@ async function refreshLevels() {
   const levels = d.levels || {};
   document.getElementById('ladder-body').innerHTML =
     renderLadderColumn('ES', levels.ES) + renderLadderColumn('MNQ', levels.MNQ);
+  updateChartLevels('ES', levels.ES);
+  updateChartLevels('MNQ', levels.MNQ);
   markUpdated('ladder-live');
 }
 
@@ -651,9 +905,13 @@ async function refreshNews() {
     document.getElementById('news-body').innerHTML = '<div class="empty-state">No medium/high-relevance items in the current cycle.</div>';
   } else {
     document.getElementById('news-body').innerHTML = items.map(it => {
+      const unclassified = it.relevance === 'Unclassified';
       const dir = (it.direction || 'Neutral').toLowerCase();
       const relCls = it.relevance === 'High' ? 'high ' + dir : '';
       const dirBadgeCls = dir === 'bullish' ? 'bullish' : (dir === 'bearish' ? 'bearish' : 'neutral');
+      const relBadge = unclassified
+        ? `<span class="badge unclassified">Classification unavailable</span>`
+        : `<span class="badge ${it.relevance === 'High' ? 'bearish' : 'neutral'}" style="${it.relevance==='High' ? 'background:rgba(26,86,219,0.12);color:var(--highlight);' : ''}">${it.relevance}</span>`;
       return `
         <div class="news-item ${relCls}">
           <div class="news-top">
@@ -661,11 +919,11 @@ async function refreshNews() {
             <span class="news-time tabular">${timeAgo(it.timestamp)}</span>
           </div>
           <div class="news-badges">
-            <span class="badge ${it.relevance === 'High' ? 'bearish' : 'neutral'}" style="${it.relevance==='High' ? 'background:rgba(26,86,219,0.12);color:var(--highlight);' : ''}">${it.relevance}</span>
-            <span class="badge ${dirBadgeCls}">${it.direction}</span>
+            ${relBadge}
+            ${unclassified ? '' : `<span class="badge ${dirBadgeCls}">${it.direction}</span>`}
             <span class="eyebrow" style="align-self:center;">${it.source || ''}</span>
           </div>
-          <div class="news-explain">${it.explanation || ''}</div>
+          ${unclassified ? '' : `<div class="news-explain">${it.explanation || ''}</div>`}
         </div>
       `;
     }).join('');
@@ -688,6 +946,10 @@ async function refreshStatus() {
 }
 
 /* ── Boot + polling ────────────────────────────────────────────────── */
+initCharts();
+refreshChartBars('ES');
+refreshChartBars('MNQ');
+updateSessionBar();
 refreshComposite();
 refreshMtfAndInstruments();
 refreshLevels();
@@ -695,9 +957,11 @@ refreshMacro();
 refreshNews();
 refreshStatus();
 
+setInterval(updateSessionBar, 1000);
 setInterval(refreshComposite, 30000);
 setInterval(refreshMtfAndInstruments, 30000);
 setInterval(refreshLevels, 30000);
+setInterval(() => { refreshChartBars('ES'); refreshChartBars('MNQ'); }, 30000);
 setInterval(refreshMacro, 30000);
 setInterval(refreshNews, 300000);
 setInterval(refreshStatus, 30000);
