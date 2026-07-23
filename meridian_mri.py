@@ -367,11 +367,28 @@ def fetch_mtf_biases(symbol: str) -> dict:
 
 
 def fetch_price(symbol: str) -> dict:
-    try:
-        df1   = load_bars(symbol, '1min', limit=5)
-        price = float(df1['close'].iloc[-1])
-    except Exception:
+    """
+    "Current price" = the close of whichever timeframe has the single most
+    recent bar, not just the latest 1min bar. 1min ingestion can stall while
+    coarser timeframes (5min/1hour/4hour) keep updating via a separate feed
+    path (or vice versa) — pinning to 1min alone showed a stale price
+    whenever that specific feed lagged, even though fresher data existed
+    elsewhere in ohlcv for the same symbol.
+    """
+    best_price, best_ts = None, -1
+    for tf in ('1min', '5min', '15min', '1hour', '4hour'):
+        try:
+            df = load_bars(symbol, tf, limit=3)
+            if df.empty:
+                continue
+            ts = int(df.index[-1].timestamp())
+            if ts > best_ts:
+                best_ts, best_price = ts, float(df['close'].iloc[-1])
+        except Exception:
+            continue
+    if best_price is None:
         return {'price': None, 'change_pts': None, 'change_pct': None}
+    price = best_price
     try:
         dfd = load_bars(symbol, '1day', limit=3)
         prior_close = float(dfd['close'].iloc[-2]) if len(dfd) >= 2 else float(dfd['close'].iloc[-1])
