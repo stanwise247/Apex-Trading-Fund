@@ -661,6 +661,12 @@ def call_anthropic(prompt: str, max_tokens: int = 600) -> dict:
         raise Exception(f'No text block in Anthropic response (content types: '
                          f'{[b.get("type") for b in data.get("content", [])]})')
     text  = ''.join(text_blocks).strip()
+    if data.get('stop_reason') == 'max_tokens':
+        # thinking_tokens count against max_tokens and vary per call — a
+        # truncated response reads as a generic "no JSON found" below unless
+        # flagged explicitly here, which makes it much faster to diagnose.
+        raise Exception(f'Response truncated at max_tokens={max_tokens} before completing '
+                         f'(got {len(text)} chars) — raise max_tokens for this call')
     match = re.search(r'\{[\s\S]*\}', text)
     if not match:
         raise Exception('Could not parse JSON from AI response')
@@ -1363,14 +1369,37 @@ def generate_week_ahead_report() -> dict:
     try:
         ctx    = gather_week_ahead_context()
         prompt = _week_ahead_prompt(ctx)
-        result = call_anthropic(prompt, max_tokens=1500)
-        sections = {k: result.get(k) for k in WEEK_AHEAD_SECTIONS}
-        missing = [k for k in WEEK_AHEAD_SECTIONS if not sections.get(k)]
-        if missing:
-            raise Exception(f'Anthropic response missing sections: {missing}')
     except Exception as e:
-        logger.warning(f'generate_week_ahead_report error: {e}')
+        logger.warning(f'generate_week_ahead_report context error: {e}')
         return {'ok': False, 'error': str(e)}
+
+    # A large structured 6-section JSON response occasionally comes back with
+    # a minor syntax slip (a missing comma, etc) — not truncation (max_tokens
+    # is generous below), just an intermittent model formatting error. This
+    # is a once-a-week job, so a couple of retries is cheap insurance against
+    # having to wait a full week for the next attempt.
+    last_err = None
+    result   = None
+    for attempt in range(3):
+        try:
+            # 4000, not 1500 — claude-sonnet-5's thinking_tokens count against
+            # max_tokens and vary per generation; a tight budget intermittently
+            # truncated the JSON mid-response.
+            result = call_anthropic(prompt, max_tokens=4000)
+            break
+        except Exception as e:
+            last_err = e
+            logger.warning(f'generate_week_ahead_report attempt {attempt + 1}/3 failed: {e}')
+
+    if result is None:
+        logger.warning(f'generate_week_ahead_report: all attempts failed: {last_err}')
+        return {'ok': False, 'error': str(last_err)}
+
+    sections = {k: result.get(k) for k in WEEK_AHEAD_SECTIONS}
+    missing  = [k for k in WEEK_AHEAD_SECTIONS if not sections.get(k)]
+    if missing:
+        logger.warning(f'generate_week_ahead_report: missing sections {missing}')
+        return {'ok': False, 'error': f'Anthropic response missing sections: {missing}'}
 
     text = _render_week_ahead_text(sections)
     generated_at = datetime.now(timezone.utc)
