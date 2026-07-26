@@ -10,3 +10,4 @@ xgboost
 python-dotenv
 pandas
 numpy
+reportlab

@@ -30,6 +30,8 @@ from setup_j_value_area import get_setup_j_state
 from setup_h_vwap import get_h_state
 import meridian_l3
 import regime_engine
+import db as _db
+import news_calendar
 
 logger = logging.getLogger('MERIDIAN')
 
@@ -1173,3 +1175,326 @@ def build_mtf_table() -> dict:
         alignment[sym] = pct_alignment(biases)
 
     return {'table': table, 'rows': MTF_TABLE_ROWS, 'symbols': list(SYMBOLS), 'alignment': alignment}
+
+
+# =============================================================
+#  WEEK AHEAD REPORT
+#  Weekly market-intelligence report, generated Sunday 18:00 UTC (or
+#  on-demand via POST /api/mri/week_ahead/generate), stored in Postgres,
+#  rendered on the dashboard and downloadable as PDF.
+# =============================================================
+
+WEEK_AHEAD_RETENTION = 8   # keep last 8 reports (~2 months at 1/week)
+WEEK_AHEAD_SECTIONS  = ('week_in_review', 'macro_backdrop', 'key_levels',
+                        'scenarios', 'calendar_events', 'overall_bias')
+
+_week_ahead_table_ensured = False
+
+
+def _ensure_week_ahead_table():
+    """Create week_ahead_reports table if it doesn't exist (called once per process)."""
+    global _week_ahead_table_ensured
+    if _week_ahead_table_ensured:
+        return
+    conn = _db.connect()
+    try:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS week_ahead_reports (
+                id           SERIAL PRIMARY KEY,
+                generated_at TIMESTAMPTZ NOT NULL,
+                report_json  TEXT NOT NULL,
+                report_text  TEXT NOT NULL
+            )
+        ''')
+        conn.commit()
+        _week_ahead_table_ensured = True
+    except Exception as e:
+        logger.debug(f'week_ahead_reports table ensure failed (may already exist): {e}')
+    finally:
+        conn.close()
+
+
+def _week_ahead_news_top5(now_ts=None) -> list:
+    """Top 5 news items from the last 48h, ranked by relevance (High > Medium > Unclassified)."""
+    if now_ts is None:
+        now_ts = time.time()
+    weight = {'High': 2, 'Medium': 1, 'Unclassified': 0}
+    items = []
+    for it in _STATE['news_items']['items']:
+        ts = it.get('timestamp')
+        if ts is None or now_ts - ts > 48 * 3600:
+            continue
+        items.append(it)
+    items.sort(key=lambda it: (weight.get(it.get('relevance'), 0), it.get('timestamp', 0)), reverse=True)
+    return items[:5]
+
+
+def _week_ahead_friday_close(symbol: str):
+    """Most recent completed daily bar's close — represents last Friday's close
+    when generation runs Sunday evening (weekend has no new daily bar)."""
+    try:
+        df = load_bars(symbol, '1day', limit=3)
+        if df.empty:
+            return None
+        return round(float(df['close'].iloc[-1]), 2)
+    except Exception:
+        return None
+
+
+def gather_week_ahead_context() -> dict:
+    """Collect every input the report prompt needs. Pure orchestration over
+    functions already used elsewhere in this module — no new IO patterns."""
+    composite = compute_composite()
+    levels    = {sym: build_price_ladder(sym) for sym in SYMBOLS}
+    mtf       = build_mtf_table()
+    macro     = fetch_macro()
+    news_top5 = _week_ahead_news_top5()
+
+    try:
+        calendar_events = news_calendar.fetch_economic_calendar(days_ahead=7)
+    except Exception as e:
+        logger.warning(f'week_ahead calendar fetch error: {e}')
+        calendar_events = []
+
+    return {
+        'composite': composite,
+        'friday_close': {sym: _week_ahead_friday_close(sym) for sym in SYMBOLS},
+        'levels': levels,
+        'mtf': mtf,
+        'macro': macro,
+        'calendar_events': calendar_events,
+        'news_top5': news_top5,
+    }
+
+
+def _week_ahead_prompt(ctx: dict) -> str:
+    layers = ctx['composite']['layers']
+    lvl_lines = []
+    for sym in SYMBOLS:
+        lad = ctx['levels'].get(sym, {})
+        for entry in (lad.get('above', []) + lad.get('below', []))[:6]:
+            lvl_lines.append(f"{sym} {entry['type']} @ {entry['price']} ({entry['distance_pts']:+.1f}pt)")
+
+    mtf_lines = []
+    for row in ('Daily', '4H', '1H'):
+        row_data = ctx['mtf'].get('table', {}).get(row, {})
+        parts = [f"{sym}={row_data.get(sym, {}).get('trend', '?')}" for sym in SYMBOLS]
+        mtf_lines.append(f"{row}: {', '.join(parts)}")
+
+    macro_lines = []
+    for key in ('vix', 'dxy', 'yield_10y', 'oil'):
+        m = ctx['macro'].get(key, {})
+        if m.get('available'):
+            macro_lines.append(f"{key}: {m.get('value')} ({m.get('interpretation', '')})")
+
+    cal_lines = [f"{e.get('title')} — {e.get('datetime')} — impact={e.get('impact')}"
+                 for e in ctx['calendar_events'][:10]]
+
+    news_lines = [f"[{n.get('relevance')}/{n.get('direction')}] {n.get('headline')} — {n.get('explanation', '')}"
+                  for n in ctx['news_top5']]
+
+    prompt = (
+        'You are a professional macro/futures desk analyst writing a weekly report for ES '
+        '(S&P 500 E-mini) and MNQ (Nasdaq 100 Micro) futures traders. Use ONLY the data below — '
+        'do not invent prices, levels, or events not listed here.\n\n'
+        f"MRI COMPOSITE: {ctx['composite']['label']} short={ctx['composite']['short_term']:+.1f} "
+        f"medium={ctx['composite']['medium_term']:+.1f}\n"
+        f"Layer scores: macro={layers['macro']:+.1f} regime={layers['regime']:+.1f} "
+        f"ict={layers['ict']:+.1f} mtf={layers['mtf']:+.1f} news={layers['news']:+.1f}\n\n"
+        f"Friday close: ES={ctx['friday_close'].get('ES')} MNQ={ctx['friday_close'].get('MNQ')}\n\n"
+        f"Key ICT levels (nearest to price, both symbols):\n" + '\n'.join(lvl_lines[:16]) + '\n\n'
+        f"MTF trend picture:\n" + '\n'.join(mtf_lines) + '\n\n'
+        f"Macro conditions:\n" + '\n'.join(macro_lines) + '\n\n'
+        f"Calendar events, next 7 days:\n" + ('\n'.join(cal_lines) if cal_lines else 'None scheduled') + '\n\n'
+        f"Top news, last 48h:\n" + ('\n'.join(news_lines) if news_lines else 'None') + '\n\n'
+        'Write a structured weekly report. Respond with ONLY a JSON object with exactly these keys:\n'
+        '{"week_in_review": "2-3 sentences on where price closed and key moves this week",\n'
+        ' "macro_backdrop": "3-4 sentences on current macro conditions and what they mean for ES/MNQ next week",\n'
+        ' "key_levels": ["3-5 strings, one per level, format \'SYMBOL: level @ price — why it matters\'"],\n'
+        ' "scenarios": {"bullish": "what needs to happen and what levels confirm it",'
+        ' "bearish": "what needs to happen and what levels confirm it"},\n'
+        ' "calendar_events": ["specific events this week that could move ES/MNQ with expected impact,'
+        ' or a single string saying none are scheduled"],\n'
+        ' "overall_bias": "one paragraph synthesising everything into a directional lean, ending with'
+        ' a confidence qualifier: (High confidence) or (Medium confidence) or (Low confidence)"}\n'
+        'This is a framework for the week, not a prediction — scenarios must be conditional ("if X, then Y"), not forecasts.'
+    )
+    return prompt
+
+
+def _render_week_ahead_text(sections: dict) -> str:
+    """Deterministic full-text rendering of the structured sections — not a
+    second model call, just formatting, so text and JSON never disagree."""
+    scenarios = sections.get('scenarios') or {}
+    lines = [
+        'MERIDIAN — WEEK AHEAD REPORT', '',
+        'WEEK IN REVIEW', sections.get('week_in_review', ''), '',
+        'MACRO BACKDROP', sections.get('macro_backdrop', ''), '',
+        'KEY LEVELS TO WATCH',
+    ]
+    for lvl in sections.get('key_levels') or []:
+        lines.append(f'  - {lvl}')
+    lines += ['', 'SCENARIOS FOR THE WEEK',
+              f"  Bullish case: {scenarios.get('bullish', '')}",
+              f"  Bearish case: {scenarios.get('bearish', '')}", '',
+              'CALENDAR EVENTS TO WATCH']
+    for ev in sections.get('calendar_events') or []:
+        lines.append(f'  - {ev}')
+    lines += ['', 'OVERALL BIAS', sections.get('overall_bias', '')]
+    return '\n'.join(lines)
+
+
+def generate_week_ahead_report() -> dict:
+    """
+    Gather context, call Anthropic for the structured report, store it, and
+    enforce the 8-report retention window. Returns the stored report dict
+    ({'generated_at', 'sections', 'text'}) or a graceful error dict — never
+    raises, matching this module's fault-isolation convention.
+    """
+    try:
+        ctx    = gather_week_ahead_context()
+        prompt = _week_ahead_prompt(ctx)
+        result = call_anthropic(prompt, max_tokens=1500)
+        sections = {k: result.get(k) for k in WEEK_AHEAD_SECTIONS}
+        missing = [k for k in WEEK_AHEAD_SECTIONS if not sections.get(k)]
+        if missing:
+            raise Exception(f'Anthropic response missing sections: {missing}')
+    except Exception as e:
+        logger.warning(f'generate_week_ahead_report error: {e}')
+        return {'ok': False, 'error': str(e)}
+
+    text = _render_week_ahead_text(sections)
+    generated_at = datetime.now(timezone.utc)
+
+    _ensure_week_ahead_table()
+    try:
+        conn = _db.connect()
+        conn.execute(
+            'INSERT INTO week_ahead_reports (generated_at, report_json, report_text) VALUES (?, ?, ?)',
+            (generated_at.isoformat(), json.dumps(sections), text)
+        )
+        conn.commit()
+        # Retention: keep only the most recent WEEK_AHEAD_RETENTION reports.
+        conn.execute(
+            'DELETE FROM week_ahead_reports WHERE id NOT IN ('
+            'SELECT id FROM week_ahead_reports ORDER BY generated_at DESC LIMIT ?)',
+            (WEEK_AHEAD_RETENTION,)
+        )
+        conn.commit()
+        conn.close()
+        logger.info('Week Ahead: report generated and stored')
+    except Exception as e:
+        logger.error(f'generate_week_ahead_report: DB write failed: {e}')
+        return {'ok': False, 'error': f'DB write failed: {e}'}
+
+    return {'ok': True, 'generated_at': generated_at.isoformat(), 'sections': sections, 'text': text}
+
+
+def get_latest_week_ahead_report() -> dict:
+    """Returns the most recent report, or {'ok': True, 'report': None} if none exists yet."""
+    _ensure_week_ahead_table()
+    try:
+        conn = _db.connect()
+        row = conn.execute(
+            'SELECT generated_at, report_json, report_text FROM week_ahead_reports '
+            'ORDER BY generated_at DESC LIMIT 1'
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return {'ok': True, 'report': None}
+        return {
+            'ok': True,
+            'report': {
+                'generated_at': str(row[0]),
+                'sections': json.loads(row[1]),
+                'text': row[2],
+            },
+        }
+    except Exception as e:
+        logger.error(f'get_latest_week_ahead_report error: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
+def build_week_ahead_pdf():
+    """
+    Render the latest Week Ahead report as a PDF (reportlab — pure Python,
+    no system libraries required, unlike weasyprint).
+    Returns (pdf_bytes, filename), or (None, None) if no report exists yet.
+    """
+    from io import BytesIO
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+    latest = get_latest_week_ahead_report()
+    report = latest.get('report') if latest.get('ok') else None
+    if not report:
+        return None, None
+
+    sections = report['sections']
+    generated_at = report['generated_at']
+
+    navy      = HexColor('#0A1628')
+    secondary = HexColor('#6B7A8D')
+    bullish   = HexColor('#1B7F4F')
+    bearish   = HexColor('#B03A2E')
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('MeridianTitle', parent=styles['Title'],
+                                  textColor=navy, fontName='Helvetica-Bold', fontSize=20, spaceAfter=4)
+    meta_style = ParagraphStyle('MeridianMeta', parent=styles['Normal'],
+                                 textColor=secondary, fontSize=9, spaceAfter=18)
+    heading_style = ParagraphStyle('MeridianHeading', parent=styles['Heading2'],
+                                    textColor=navy, fontName='Helvetica-Bold', fontSize=13,
+                                    spaceBefore=16, spaceAfter=6)
+    body_style = ParagraphStyle('MeridianBody', parent=styles['Normal'],
+                                 fontName='Helvetica', fontSize=10.5, leading=15, spaceAfter=6)
+    bullish_style = ParagraphStyle('MeridianBullish', parent=body_style, textColor=bullish)
+    bearish_style = ParagraphStyle('MeridianBearish', parent=body_style, textColor=bearish)
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=LETTER,
+                             topMargin=0.75 * inch, bottomMargin=0.75 * inch,
+                             leftMargin=0.85 * inch, rightMargin=0.85 * inch)
+
+    story = [
+        Paragraph('MERIDIAN — Week Ahead Report', title_style),
+        Paragraph(f'Generated {generated_at}', meta_style),
+
+        Paragraph('Week in Review', heading_style),
+        Paragraph(sections.get('week_in_review', ''), body_style),
+
+        Paragraph('Macro Backdrop', heading_style),
+        Paragraph(sections.get('macro_backdrop', ''), body_style),
+
+        Paragraph('Key Levels to Watch', heading_style),
+        ListFlowable(
+            [ListItem(Paragraph(lvl, body_style)) for lvl in (sections.get('key_levels') or [])],
+            bulletType='bullet',
+        ),
+
+        Paragraph('Scenarios for the Week', heading_style),
+        Paragraph('Bullish case', ParagraphStyle('BullLabel', parent=body_style, fontName='Helvetica-Bold', textColor=bullish)),
+        Paragraph((sections.get('scenarios') or {}).get('bullish', ''), bullish_style),
+        Spacer(1, 6),
+        Paragraph('Bearish case', ParagraphStyle('BearLabel', parent=body_style, fontName='Helvetica-Bold', textColor=bearish)),
+        Paragraph((sections.get('scenarios') or {}).get('bearish', ''), bearish_style),
+
+        Paragraph('Calendar Events to Watch', heading_style),
+        ListFlowable(
+            [ListItem(Paragraph(ev, body_style)) for ev in (sections.get('calendar_events') or [])],
+            bulletType='bullet',
+        ),
+
+        Paragraph('Overall Bias', heading_style),
+        Paragraph(sections.get('overall_bias', ''), body_style),
+    ]
+    doc.build(story)
+    pdf_bytes = buf.getvalue()
+    buf.close()
+
+    date_str = generated_at[:10] if generated_at else datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    filename = f'meridian_week_ahead_{date_str}.pdf'
+    return pdf_bytes, filename

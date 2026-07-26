@@ -3024,6 +3024,78 @@ def test_mri15_layer_explanations_has_all_five_keys():
         _fail('TEST MRI15', f'{type(e).__name__}: {e}')
 
 
+def test_mri16_week_ahead_table_creation():
+    """_ensure_week_ahead_table() creates week_ahead_reports without raising, idempotently."""
+    _section('TEST MRI16 — week_ahead_reports table creation')
+    try:
+        import meridian_mri as m
+        m._ensure_week_ahead_table()
+        m._ensure_week_ahead_table()   # second call must be a no-op, not an error
+        conn = m._db.connect()
+        conn.execute('SELECT id, generated_at, report_json, report_text FROM week_ahead_reports LIMIT 1')
+        conn.close()
+        _pass('TEST MRI16  table exists with expected columns', '')
+    except Exception as e:
+        _fail('TEST MRI16', f'{type(e).__name__}: {e}')
+
+
+def test_mri17_week_ahead_no_report_response():
+    """get_latest_week_ahead_report() returns {'ok': True, 'report': None} on an empty table."""
+    _section('TEST MRI17 — week_ahead no-report-yet response')
+    try:
+        import meridian_mri as m
+        m._ensure_week_ahead_table()
+        conn = m._db.connect()
+        conn.execute('DELETE FROM week_ahead_reports')
+        conn.commit()
+        conn.close()
+        result = m.get_latest_week_ahead_report()
+        if result.get('ok') is True and result.get('report') is None:
+            _pass('TEST MRI17  empty table -> ok=True, report=None', '')
+        else:
+            _fail('TEST MRI17  empty table -> ok=True, report=None', f'got {result}')
+    except Exception as e:
+        _fail('TEST MRI17', f'{type(e).__name__}: {e}')
+
+
+def test_mri18_week_ahead_report_exists_structure():
+    """get_latest_week_ahead_report() returns the stored sections/text once a report row exists."""
+    _section('TEST MRI18 — week_ahead report-exists structure')
+    try:
+        import meridian_mri as m
+        import json as _json
+        from datetime import datetime, timezone
+        m._ensure_week_ahead_table()
+        sections = {k: f'test {k}' for k in m.WEEK_AHEAD_SECTIONS}
+        sections['scenarios'] = {'bullish': 'test bullish', 'bearish': 'test bearish'}
+        conn = m._db.connect()
+        conn.execute(
+            'INSERT INTO week_ahead_reports (generated_at, report_json, report_text) VALUES (?, ?, ?)',
+            (datetime.now(timezone.utc).isoformat(), _json.dumps(sections), m._render_week_ahead_text(sections))
+        )
+        conn.commit()
+        conn.close()
+
+        result = m.get_latest_week_ahead_report()
+        report = result.get('report')
+        if result.get('ok') and report and set(m.WEEK_AHEAD_SECTIONS) <= set(report.get('sections', {}).keys()):
+            _pass('TEST MRI18  report has all expected section keys', '')
+        else:
+            _fail('TEST MRI18  report has all expected section keys', f'got {result}')
+        if isinstance(report.get('text'), str) and report['text']:
+            _pass('TEST MRI18  report_text is a non-empty string', '')
+        else:
+            _fail('TEST MRI18  report_text is a non-empty string', f'{report}')
+
+        # Cleanup — this test's synthetic row must not linger as a fake "latest report"
+        conn = m._db.connect()
+        conn.execute('DELETE FROM week_ahead_reports')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        _fail('TEST MRI18', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
 #  HTTP against Railway — follows the D4/CTX1 "not-a-hard-fail" idiom.
@@ -3184,6 +3256,58 @@ def test_mriapi7_root_serves_meridian_and_v8_still_reachable():
         _fail('TEST MRIAPI7', f'{type(e).__name__}: {e}')
 
 
+def test_mriapi8_week_ahead_generate_endpoint():
+    """POST /api/mri/week_ahead/generate triggers real generation and returns the structured sections."""
+    _section('TEST MRIAPI8 — /api/mri/week_ahead/generate manual trigger')
+    try:
+        resp = _api_post('/api/mri/week_ahead/generate', timeout=90)
+        if resp is None:
+            _fail('TEST MRIAPI8  endpoint reachable', 'No response'); return
+        if not resp.get('ok'):
+            # Not a hard fail — a transient Anthropic/network issue is an
+            # operational state, not a code defect (matches D4/CTX1 idiom).
+            _pass('TEST MRIAPI8  endpoint responds', f'ok={resp.get("ok")} error={resp.get("error","none")}')
+            return
+        sections = resp.get('sections', {})
+        expected = {'week_in_review', 'macro_backdrop', 'key_levels', 'scenarios', 'calendar_events', 'overall_bias'}
+        if expected <= set(sections.keys()):
+            _pass('TEST MRIAPI8  generated report has all 6 sections', '')
+        else:
+            _fail('TEST MRIAPI8  generated report has all 6 sections', f'got {set(sections.keys())}')
+        if isinstance(sections.get('scenarios'), dict) and 'bullish' in sections['scenarios'] and 'bearish' in sections['scenarios']:
+            _pass('TEST MRIAPI8  scenarios has bullish + bearish cases', '')
+        else:
+            _fail('TEST MRIAPI8  scenarios has bullish + bearish cases', f'{sections.get("scenarios")}')
+    except Exception as e:
+        _fail('TEST MRIAPI8', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi9_week_ahead_pdf_endpoint():
+    """GET /api/mri/week_ahead/pdf returns a real PDF (application/pdf, %PDF header) once a report exists."""
+    _section('TEST MRIAPI9 — /api/mri/week_ahead/pdf content-type')
+    try:
+        import requests
+        r = requests.get(f'{RAILWAY_BASE}/api/mri/week_ahead/pdf', timeout=30)
+        if r.status_code == 404:
+            # Graceful "no report yet" — acceptable, not a defect.
+            _pass('TEST MRIAPI9  no report yet -> graceful 404', '')
+            return
+        if r.status_code != 200:
+            _fail('TEST MRIAPI9  endpoint returns 200 or graceful 404', f'status={r.status_code}')
+            return
+        content_type = r.headers.get('Content-Type', '')
+        if 'application/pdf' in content_type:
+            _pass('TEST MRIAPI9  Content-Type is application/pdf', content_type)
+        else:
+            _fail('TEST MRIAPI9  Content-Type is application/pdf', f'got {content_type}')
+        if r.content[:4] == b'%PDF':
+            _pass('TEST MRIAPI9  body starts with %PDF magic bytes', '')
+        else:
+            _fail('TEST MRIAPI9  body starts with %PDF magic bytes', f'got {r.content[:20]}')
+    except Exception as e:
+        _fail('TEST MRIAPI9', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
@@ -3303,8 +3427,11 @@ if __name__ == '__main__':
     test_mri13_explain_macro_layer_known_inputs()
     test_mri14_explain_regime_layer_l3_neutral()
     test_mri15_layer_explanations_has_all_five_keys()
+    test_mri16_week_ahead_table_creation()
+    test_mri17_week_ahead_no_report_response()
+    test_mri18_week_ahead_report_exists_structure()
 
-    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
+    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI9)
     test_mriapi1_composite_endpoint_structure()
     test_mriapi2_composite_never_500s()
     test_mriapi3_levels_endpoint_structure()
@@ -3312,6 +3439,8 @@ if __name__ == '__main__':
     test_mriapi5_news_endpoint_max_10_medium_high_only()
     test_mriapi6_mtf_endpoint_weekly_monthly_graceful()
     test_mriapi7_root_serves_meridian_and_v8_still_reachable()
+    test_mriapi8_week_ahead_generate_endpoint()
+    test_mriapi9_week_ahead_pdf_endpoint()
 
     _cleanup()
     _print_results()

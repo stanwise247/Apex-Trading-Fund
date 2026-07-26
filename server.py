@@ -1927,6 +1927,23 @@ def background_scheduler():
             except Exception as _mri_c_e:
                 logger.warning(f'MRI threshold-cross check error: {_mri_c_e}')
 
+        # ── Meridian Week Ahead report — fires once, Sunday 18:00 UTC ────
+        _now_utc_wa = datetime.now(timezone.utc)
+        if _now_utc_wa.weekday() == 6 and _now_utc_wa.hour == 18 and _now_utc_wa.minute < 5:
+            _this_iso_week = _now_utc_wa.isocalendar()[1]
+            if getattr(background_scheduler, '_last_week_ahead_week', None) != _this_iso_week:
+                background_scheduler._last_week_ahead_week = _this_iso_week
+                logger.info('Week Ahead: scheduled generation starting (Sunday 18:00 UTC)')
+                try:
+                    import meridian_mri as _mri_wa
+                    _wa_result = _mri_wa.generate_week_ahead_report()
+                    if _wa_result.get('ok'):
+                        logger.info('Week Ahead: scheduled generation complete')
+                    else:
+                        logger.warning(f'Week Ahead: scheduled generation failed — {_wa_result.get("error")}')
+                except Exception as _wa_e:
+                    logger.warning(f'Week Ahead: scheduled generation error: {_wa_e}')
+
         # ── Economic calendar refresh (every 6 hours) + 15-min warnings ─
         if not hasattr(background_scheduler, '_last_cal_refresh') or \
                 now - background_scheduler._last_cal_refresh >= 21600:
@@ -6440,6 +6457,39 @@ def mri_mtf():
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/week_ahead', methods=['GET'])
+def mri_week_ahead():
+    try:
+        import meridian_mri as _mri
+        return jsonify(_mri.get_latest_week_ahead_report())
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/week_ahead/generate', methods=['POST'])
+def mri_week_ahead_generate():
+    try:
+        import meridian_mri as _mri
+        return jsonify(_mri.generate_week_ahead_report())
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/week_ahead/pdf', methods=['GET'])
+def mri_week_ahead_pdf():
+    try:
+        import meridian_mri as _mri
+        pdf_bytes, filename = _mri.build_week_ahead_pdf()
+        if pdf_bytes is None:
+            return jsonify({'ok': False, 'error': 'No report available yet'}), 404
+        from flask import Response
+        return Response(pdf_bytes, mimetype='application/pdf', headers={
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/apex/forecast', methods=['GET'])
