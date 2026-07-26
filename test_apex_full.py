@@ -3096,6 +3096,95 @@ def test_mri18_week_ahead_report_exists_structure():
         _fail('TEST MRI18', f'{type(e).__name__}: {e}')
 
 
+def test_mri19_daily_levels_table_creation():
+    """_ensure_daily_levels_table() creates daily_levels without raising, idempotently."""
+    _section('TEST MRI19 — daily_levels table creation')
+    try:
+        import meridian_mri as m
+        m._ensure_daily_levels_table()
+        m._ensure_daily_levels_table()   # second call must be a no-op, not an error
+        conn = m._db.connect()
+        conn.execute(
+            'SELECT id, date, symbol, level_type, price, zone_high, zone_low, '
+            'description, is_active, created_at FROM daily_levels LIMIT 1'
+        )
+        conn.close()
+        _pass('TEST MRI19  table exists with expected columns', '')
+    except Exception as e:
+        _fail('TEST MRI19', f'{type(e).__name__}: {e}')
+
+
+def test_mri20_calculate_daily_levels_populates_types():
+    """calculate_daily_levels() runs for both symbols and returns a well-formed counts structure.
+
+    Exact counts aren't asserted (order blocks/FVGs/equal levels legitimately
+    vary day to day with real market data) — this checks the function does
+    real work end-to-end without raising, for both symbols."""
+    _section('TEST MRI20 — calculate_daily_levels() structure for ES and MNQ')
+    try:
+        import meridian_mri as m
+        result = m.calculate_daily_levels()
+        if result.get('ok') and result.get('date'):
+            _pass('TEST MRI20  returns ok=True with a date', '')
+        else:
+            _fail('TEST MRI20  returns ok=True with a date', f'got {result}')
+        counts = result.get('counts', {})
+        if set(m.SYMBOLS) <= set(counts.keys()):
+            _pass('TEST MRI20  counts present for both ES and MNQ', '')
+        else:
+            _fail('TEST MRI20  counts present for both ES and MNQ', f'got {set(counts.keys())}')
+        # Whatever level types were found must be valid ones — never a fabricated type.
+        known_types = m.FIXED_LEVEL_TYPES | {'BULLISH_OB', 'BEARISH_OB', 'BULLISH_FVG',
+                                              'BEARISH_FVG', 'EQUAL_HIGH', 'EQUAL_LOW'}
+        bad_types = []
+        for sym, sym_counts in counts.items():
+            if isinstance(sym_counts, dict):
+                bad_types += [t for t in sym_counts if t != 'error' and t not in known_types]
+        if not bad_types:
+            _pass('TEST MRI20  every populated level_type is a known type', '')
+        else:
+            _fail('TEST MRI20  every populated level_type is a known type', f'{bad_types}')
+    except Exception as e:
+        _fail('TEST MRI20', f'{type(e).__name__}: {e}')
+
+
+def test_mri21_daily_levels_invalidation_logic():
+    """_is_level_invalidated() correctly marks OB/FVG/equal-level breaks, never invalidates fixed refs."""
+    _section('TEST MRI21 — daily levels invalidation logic')
+    try:
+        import meridian_mri as m
+        import pandas as pd
+        bars = pd.DataFrame({'high': [100, 101, 99, 98], 'low': [95, 96, 94, 93], 'close': [98, 99, 96, 95]})
+
+        bullish_ob = {'level_type': 'BULLISH_OB', 'price': 98, 'zone_high': 99, 'zone_low': 97}
+        if m._is_level_invalidated(bullish_ob, bars):
+            _pass('TEST MRI21  bullish OB invalidated when close < zone_low', '')
+        else:
+            _fail('TEST MRI21  bullish OB invalidated when close < zone_low', 'got False')
+
+        bearish_ob = {'level_type': 'BEARISH_OB', 'price': 100, 'zone_high': 102, 'zone_low': 99}
+        if not m._is_level_invalidated(bearish_ob, bars):
+            _pass('TEST MRI21  bearish OB not invalidated when close never exceeds zone_high', '')
+        else:
+            _fail('TEST MRI21  bearish OB not invalidated when close never exceeds zone_high', 'got True')
+
+        equal_high = {'level_type': 'EQUAL_HIGH', 'price': 97, 'zone_high': None, 'zone_low': None}
+        if m._is_level_invalidated(equal_high, bars):
+            _pass('TEST MRI21  equal high invalidated when swept (high > level)', '')
+        else:
+            _fail('TEST MRI21  equal high invalidated when swept (high > level)', 'got False')
+
+        for fixed_type in ('PDH', 'PDL', 'PWH', 'PWL', 'VAH', 'VAL'):
+            fixed = {'level_type': fixed_type, 'price': 1, 'zone_high': None, 'zone_low': None}
+            if m._is_level_invalidated(fixed, bars):
+                _fail(f'TEST MRI21  {fixed_type} is never invalidated', 'got True')
+                break
+        else:
+            _pass('TEST MRI21  fixed reference types are never invalidated', '')
+    except Exception as e:
+        _fail('TEST MRI21', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
 #  HTTP against Railway — follows the D4/CTX1 "not-a-hard-fail" idiom.
@@ -3308,6 +3397,34 @@ def test_mriapi9_week_ahead_pdf_endpoint():
         _fail('TEST MRIAPI9', f'{type(e).__name__}: {e}')
 
 
+def test_mriapi10_daily_levels_active_vs_all():
+    """GET /api/mri/daily_levels returns only active levels by default, all levels with ?include_invalidated=true."""
+    _section('TEST MRIAPI10 — /api/mri/daily_levels active vs. all')
+    try:
+        active_only = _api('/api/mri/daily_levels?symbol=ES', timeout=20)
+        all_levels  = _api('/api/mri/daily_levels?symbol=ES&include_invalidated=true', timeout=20)
+        if active_only is None or all_levels is None:
+            _fail('TEST MRIAPI10  endpoint reachable', 'No response'); return
+        if not active_only.get('ok') or not all_levels.get('ok'):
+            _pass('TEST MRIAPI10  endpoint responds', f'active ok={active_only.get("ok")} all ok={all_levels.get("ok")}')
+            return
+
+        active_list = active_only.get('levels', [])
+        all_list    = all_levels.get('levels', [])
+        if all(lv.get('is_active') is True for lv in active_list):
+            _pass('TEST MRIAPI10  default response contains only active levels', '')
+        else:
+            _fail('TEST MRIAPI10  default response contains only active levels',
+                  f'{[lv for lv in active_list if not lv.get("is_active")]}')
+        if len(all_list) >= len(active_list):
+            _pass('TEST MRIAPI10  include_invalidated=true returns >= active-only count', '')
+        else:
+            _fail('TEST MRIAPI10  include_invalidated=true returns >= active-only count',
+                  f'active={len(active_list)} all={len(all_list)}')
+    except Exception as e:
+        _fail('TEST MRIAPI10', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
@@ -3430,8 +3547,11 @@ if __name__ == '__main__':
     test_mri16_week_ahead_table_creation()
     test_mri17_week_ahead_no_report_response()
     test_mri18_week_ahead_report_exists_structure()
+    test_mri19_daily_levels_table_creation()
+    test_mri20_calculate_daily_levels_populates_types()
+    test_mri21_daily_levels_invalidation_logic()
 
-    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI9)
+    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI10)
     test_mriapi1_composite_endpoint_structure()
     test_mriapi2_composite_never_500s()
     test_mriapi3_levels_endpoint_structure()
@@ -3441,6 +3561,7 @@ if __name__ == '__main__':
     test_mriapi7_root_serves_meridian_and_v8_still_reachable()
     test_mriapi8_week_ahead_generate_endpoint()
     test_mriapi9_week_ahead_pdf_endpoint()
+    test_mriapi10_daily_levels_active_vs_all()
 
     _cleanup()
     _print_results()

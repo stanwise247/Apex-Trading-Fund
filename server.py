@@ -1944,6 +1944,51 @@ def background_scheduler():
                 except Exception as _wa_e:
                     logger.warning(f'Week Ahead: scheduled generation error: {_wa_e}')
 
+        # ── Meridian Daily Levels — calculate once, 13:00 UTC weekdays ───
+        _now_utc_dl   = datetime.now(timezone.utc)
+        _today_str_dl = _now_utc_dl.strftime('%Y-%m-%d')
+
+        # On first tick ever, catch up immediately if today's levels haven't
+        # been calculated yet and the session has already opened — otherwise
+        # a deploy after 13:00 UTC would leave the day with no levels at all
+        # until tomorrow.
+        if not hasattr(background_scheduler, '_daily_levels_startup_checked'):
+            background_scheduler._daily_levels_startup_checked = True
+            if _now_utc_dl.weekday() < 5 and _now_utc_dl.hour >= 13:
+                try:
+                    import meridian_mri as _mri_dl0
+                    _existing_dl = _mri_dl0.get_daily_levels('ES', include_invalidated=True)
+                    if not _existing_dl.get('levels'):
+                        logger.info('Daily Levels: calculating on startup (13:00 UTC already passed today)')
+                        _dl0_result = _mri_dl0.calculate_daily_levels()
+                        logger.info(f'Daily Levels: startup calculation complete — {_dl0_result.get("counts")}')
+                        background_scheduler._last_daily_levels_date = _today_str_dl
+                except Exception as _dl0_e:
+                    logger.warning(f'Daily Levels: startup calculation error: {_dl0_e}')
+
+        if _now_utc_dl.weekday() < 5 and _now_utc_dl.hour == 13 and _now_utc_dl.minute < 5:
+            if getattr(background_scheduler, '_last_daily_levels_date', None) != _today_str_dl:
+                background_scheduler._last_daily_levels_date = _today_str_dl
+                logger.info('Daily Levels: scheduled calculation starting (13:00 UTC)')
+                try:
+                    import meridian_mri as _mri_dl
+                    _dl_result = _mri_dl.calculate_daily_levels()
+                    logger.info(f'Daily Levels: scheduled calculation complete — {_dl_result.get("counts")}')
+                except Exception as _dl_e:
+                    logger.warning(f'Daily Levels: scheduled calculation error: {_dl_e}')
+
+        # ── Daily Levels invalidation check — every 15 min ───────────────
+        if not hasattr(background_scheduler, '_last_daily_levels_invalidation') or \
+                now - background_scheduler._last_daily_levels_invalidation >= 900:
+            background_scheduler._last_daily_levels_invalidation = now
+            try:
+                import meridian_mri as _mri_inv
+                _inv_result = _mri_inv.check_daily_levels_invalidation()
+                if any(v for v in _inv_result.values() if isinstance(v, int) and v > 0):
+                    logger.info(f'Daily Levels: invalidation check — newly invalidated: {_inv_result}')
+            except Exception as _inv_e:
+                logger.warning(f'Daily Levels: invalidation check error: {_inv_e}')
+
         # ── Economic calendar refresh (every 6 hours) + 15-min warnings ─
         if not hasattr(background_scheduler, '_last_cal_refresh') or \
                 now - background_scheduler._last_cal_refresh >= 21600:
@@ -6490,6 +6535,26 @@ def mri_week_ahead_pdf():
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/mri/levels/calculate', methods=['POST'])
+def mri_levels_calculate():
+    try:
+        import meridian_mri as _mri
+        return jsonify(_mri.calculate_daily_levels())
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/daily_levels', methods=['GET'])
+def mri_daily_levels():
+    try:
+        import meridian_mri as _mri
+        symbol = request.args.get('symbol', 'ES').upper()
+        include_invalidated = request.args.get('include_invalidated', 'false').lower() == 'true'
+        return jsonify(_mri.get_daily_levels(symbol, include_invalidated=include_invalidated))
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 
 @app.route('/api/apex/forecast', methods=['GET'])

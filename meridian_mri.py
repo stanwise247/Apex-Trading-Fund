@@ -16,7 +16,7 @@ import re
 import json
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 
 import requests
@@ -334,10 +334,11 @@ def fetch_liquidity(symbol: str, timeframe: str = '1hour') -> dict:
         return {'active_fvgs': [], 'active_obs': []}
 
 
-def fetch_equal_levels(symbol: str, timeframe: str = '5min', lookback: int = EQUAL_LEVELS_LOOKBACK) -> list:
+def fetch_equal_levels(symbol: str, timeframe: str = '5min', lookback: int = EQUAL_LEVELS_LOOKBACK,
+                        tolerance_pct: float = 0.1) -> list:
     try:
         df = load_bars(symbol, timeframe, limit=lookback)
-        levels = find_equal_levels(df, lookback=lookback, tolerance_pct=0.1)
+        levels = find_equal_levels(df, lookback=lookback, tolerance_pct=tolerance_pct)
         # find_equal_levels returns numpy float64 prices — cast to native float for JSON safety
         for lv in levels:
             lv['price'] = float(lv['price'])
@@ -1536,3 +1537,380 @@ def build_week_ahead_pdf():
     date_str = generated_at[:10] if generated_at else datetime.now(timezone.utc).strftime('%Y-%m-%d')
     filename = f'meridian_week_ahead_{date_str}.pdf'
     return pdf_bytes, filename
+
+
+# =============================================================
+#  DAILY LEVELS
+#  ICT reference levels calculated once at 13:00 UTC session open and held
+#  fixed for the day — NOT recalculated intraday. Only is_active changes as
+#  levels get invalidated by price action (checked every 15 min). Session
+#  high/low are the one deliberately dynamic exception (computed live on
+#  every read, never stored) — see compute_session_high_low().
+# =============================================================
+
+SESSION_OPEN_HOUR = 13   # UTC — matches SESSION_START_UTC used throughout this module
+
+# Fixed reference levels are never invalidated intraday — they describe
+# where price *was*, not a zone that can be "broken" the same way an
+# order block or FVG can.
+FIXED_LEVEL_TYPES = {'PDH', 'PDL', 'PWH', 'PWL', 'VAH', 'VAL', 'SESSION_OPEN', 'DAILY_OPEN'}
+
+_daily_levels_table_ensured = False
+
+
+def _ensure_daily_levels_table():
+    global _daily_levels_table_ensured
+    if _daily_levels_table_ensured:
+        return
+    conn = _db.connect()
+    try:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS daily_levels (
+                id          SERIAL PRIMARY KEY,
+                date        TEXT NOT NULL,
+                symbol      TEXT NOT NULL,
+                level_type  TEXT NOT NULL,
+                price       REAL,
+                zone_high   REAL,
+                zone_low    REAL,
+                description TEXT,
+                is_active   BOOLEAN DEFAULT TRUE,
+                created_at  TIMESTAMPTZ NOT NULL
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_daily_levels_date_sym ON daily_levels (date, symbol)')
+        conn.commit()
+        _daily_levels_table_ensured = True
+    except Exception as e:
+        logger.debug(f'daily_levels table ensure failed (may already exist): {e}')
+    finally:
+        conn.close()
+
+
+def _today_str() -> str:
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+
+def _session_start_ts(for_date=None) -> int:
+    d = for_date or datetime.now(timezone.utc).date()
+    return int(datetime(d.year, d.month, d.day, SESSION_OPEN_HOUR, tzinfo=timezone.utc).timestamp())
+
+
+def _bars_in_range(symbol: str, timeframe: str, start_ts: int, end_ts: int) -> pd.DataFrame:
+    conn = _db.connect()
+    try:
+        return _db.read_sql(
+            'SELECT ts, open, high, low, close, volume FROM ohlcv '
+            'WHERE symbol=? AND timeframe=? AND ts>=? AND ts<? ORDER BY ts ASC',
+            conn, params=(symbol, timeframe, start_ts, end_ts)
+        )
+    finally:
+        conn.close()
+
+
+def _weekday_before(d, n: int = 1):
+    """n trading days before date d, skipping weekends."""
+    cur, count = d, 0
+    while count < n:
+        cur -= timedelta(days=1)
+        if cur.weekday() < 5:
+            count += 1
+    return cur
+
+
+def _high_low_in_range(symbol: str, start_ts: int, end_ts: int):
+    """
+    High/low over a date range, preferring 1min bars but falling back to
+    5min if 1min has a gap for that range — the two feeds have occasionally
+    drifted out of sync in production (1min lagging while 5min stayed
+    current), and max/min over finer bars equals max/min over coarser bars
+    covering the same underlying period, so the fallback is exact, not an
+    approximation.
+    """
+    for tf in ('1min', '5min'):
+        df = _bars_in_range(symbol, tf, start_ts, end_ts)
+        if not df.empty:
+            return round(float(df['high'].max()), 2), round(float(df['low'].min()), 2)
+    return None, None
+
+
+def _prev_day_high_low(symbol: str):
+    """PDH/PDL from yesterday's (last trading day's) bars."""
+    try:
+        prev_day = _weekday_before(datetime.now(timezone.utc).date(), 1)
+        start_ts = int(datetime(prev_day.year, prev_day.month, prev_day.day, tzinfo=timezone.utc).timestamp())
+        return _high_low_in_range(symbol, start_ts, start_ts + 86400)
+    except Exception as e:
+        logger.debug(f'_prev_day_high_low {symbol} error: {e}')
+        return None, None
+
+
+def _prev_week_high_low(symbol: str):
+    """PWH/PWL — highest high / lowest low of last week's (Mon-Fri) bars."""
+    try:
+        today = datetime.now(timezone.utc).date()
+        this_monday = today - timedelta(days=today.weekday())
+        last_monday = this_monday - timedelta(days=7)
+        start_ts = int(datetime(last_monday.year, last_monday.month, last_monday.day, tzinfo=timezone.utc).timestamp())
+        end_ts   = int(datetime(this_monday.year, this_monday.month, this_monday.day, tzinfo=timezone.utc).timestamp())
+        return _high_low_in_range(symbol, start_ts, end_ts)
+    except Exception as e:
+        logger.debug(f'_prev_week_high_low {symbol} error: {e}')
+        return None, None
+
+
+def _session_open(symbol: str):
+    """Today's first 1min bar open at/after 13:00 UTC."""
+    try:
+        start_ts = _session_start_ts()
+        df = _bars_in_range(symbol, '1min', start_ts, start_ts + 3600)
+        if df.empty:
+            return None
+        return round(float(df['open'].iloc[0]), 2)
+    except Exception:
+        return None
+
+
+def _daily_open(symbol: str):
+    """First 1min bar of the calendar trading day (may equal session_open if
+    the feed only ingests during session hours — see docs/meridian_mri.md)."""
+    try:
+        today = datetime.now(timezone.utc).date()
+        start_ts = int(datetime(today.year, today.month, today.day, tzinfo=timezone.utc).timestamp())
+        df = _bars_in_range(symbol, '1min', start_ts, start_ts + 86400)
+        if df.empty:
+            return None
+        return round(float(df['open'].iloc[0]), 2)
+    except Exception:
+        return None
+
+
+def compute_session_high_low(symbol: str):
+    """Dynamic — highest high / lowest low since 13:00 UTC today. Never stored,
+    computed fresh on every call so it always reflects the live session."""
+    try:
+        start_ts = _session_start_ts()
+        now_ts   = int(time.time())
+        df = _bars_in_range(symbol, '1min', start_ts, now_ts + 1)
+        if df.empty:
+            return None, None
+        return round(float(df['high'].max()), 2), round(float(df['low'].min()), 2)
+    except Exception:
+        return None, None
+
+
+def _level_row(level_type: str, price, zone_high=None, zone_low=None, description: str = '') -> dict:
+    return {
+        'level_type': level_type,
+        'price': round(price, 2) if price is not None else None,
+        'zone_high': round(zone_high, 2) if zone_high is not None else None,
+        'zone_low': round(zone_low, 2) if zone_low is not None else None,
+        'description': description,
+    }
+
+
+def _compute_symbol_daily_levels(symbol: str) -> list:
+    rows = []
+
+    pdh, pdl = _prev_day_high_low(symbol)
+    if pdh is not None:
+        rows.append(_level_row('PDH', pdh, description='Previous day high — fixed reference'))
+    if pdl is not None:
+        rows.append(_level_row('PDL', pdl, description='Previous day low — fixed reference'))
+
+    pwh, pwl = _prev_week_high_low(symbol)
+    if pwh is not None:
+        rows.append(_level_row('PWH', pwh, description='Previous week high — fixed reference'))
+    if pwl is not None:
+        rows.append(_level_row('PWL', pwl, description='Previous week low — fixed reference'))
+
+    va = fetch_value_area(symbol)
+    if va.get('vah') is not None:
+        rows.append(_level_row('VAH', va['vah'], description='Previous session value area high'))
+    if va.get('val') is not None:
+        rows.append(_level_row('VAL', va['val'], description='Previous session value area low'))
+
+    # Order blocks + FVGs from the 15min chart, per the brief's explicit spec
+    # (existing build_price_ladder() uses 1hour for the live ladder — this is
+    # a deliberately different, finer timeframe for the morning reference map).
+    liq = fetch_liquidity(symbol, '15min')
+    for ob in liq.get('active_obs', []):
+        bull = ob['kind'] == 'bull'
+        rows.append(_level_row(
+            'BULLISH_OB' if bull else 'BEARISH_OB',
+            (ob['high'] + ob['low']) / 2, ob['high'], ob['low'],
+            f"{'Bullish' if bull else 'Bearish'} order block (15min)"
+        ))
+    for f in liq.get('active_fvgs', []):
+        bull = f['kind'] == 'bull'
+        rows.append(_level_row(
+            'BULLISH_FVG' if bull else 'BEARISH_FVG',
+            (f['high'] + f['low']) / 2, f['high'], f['low'],
+            f"{'Bullish' if bull else 'Bearish'} FVG (15min)"
+        ))
+
+    # Equal highs/lows — 0.15% tolerance per this feature's spec (distinct
+    # from build_price_ladder()'s 0.1% default for the live ladder).
+    for lvl in fetch_equal_levels(symbol, '5min', tolerance_pct=0.15):
+        high = lvl['type'] == 'high'
+        rows.append(_level_row(
+            'EQUAL_HIGH' if high else 'EQUAL_LOW', lvl['price'],
+            description=f"{'Equal high' if high else 'Equal low'} cluster (count={lvl.get('count')})"
+        ))
+
+    sess_open = _session_open(symbol)
+    if sess_open is not None:
+        rows.append(_level_row('SESSION_OPEN', sess_open, description='Session open (13:00 UTC)'))
+    daily_open = _daily_open(symbol)
+    if daily_open is not None:
+        rows.append(_level_row('DAILY_OPEN', daily_open, description='Daily open'))
+
+    return rows
+
+
+def _store_daily_levels(symbol: str, date_str: str, rows: list):
+    conn = _db.connect()
+    try:
+        # Idempotent — a manual recalculation via POST /api/mri/levels/calculate
+        # replaces the day's levels rather than appending duplicates.
+        conn.execute('DELETE FROM daily_levels WHERE date=? AND symbol=?', (date_str, symbol))
+        created_at = datetime.now(timezone.utc).isoformat()
+        for r in rows:
+            conn.execute(
+                'INSERT INTO daily_levels (date, symbol, level_type, price, zone_high, zone_low, '
+                'description, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (date_str, symbol, r['level_type'], r['price'], r['zone_high'], r['zone_low'],
+                 r['description'], True, created_at)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def calculate_daily_levels() -> dict:
+    """
+    Compute and store today's fixed ICT reference levels for ES and MNQ.
+    Called once at 13:00 UTC (scheduler) or on demand via
+    POST /api/mri/levels/calculate. Never raises — returns a graceful error
+    per symbol instead, matching this module's fault-isolation convention.
+    """
+    _ensure_daily_levels_table()
+    date_str = _today_str()
+    counts = {}
+    for symbol in SYMBOLS:
+        try:
+            rows = _compute_symbol_daily_levels(symbol)
+            _store_daily_levels(symbol, date_str, rows)
+            c = {}
+            for r in rows:
+                c[r['level_type']] = c.get(r['level_type'], 0) + 1
+            counts[symbol] = c
+        except Exception as e:
+            logger.error(f'calculate_daily_levels {symbol} error: {e}')
+            counts[symbol] = {'error': str(e)}
+    logger.info(f'Daily levels calculated for {date_str}: {counts}')
+    return {'ok': True, 'date': date_str, 'counts': counts}
+
+
+def _is_level_invalidated(level: dict, bars_df: pd.DataFrame) -> bool:
+    lt = level['level_type']
+    if lt in FIXED_LEVEL_TYPES:
+        return False
+    if bars_df.empty:
+        return False
+    highs, lows, closes = bars_df['high'], bars_df['low'], bars_df['close']
+    if lt == 'BULLISH_OB':
+        return bool((closes < level['zone_low']).any())
+    if lt == 'BEARISH_OB':
+        return bool((closes > level['zone_high']).any())
+    if lt == 'BULLISH_FVG':
+        mid = (level['zone_high'] + level['zone_low']) / 2
+        return bool((lows <= mid).any())
+    if lt == 'BEARISH_FVG':
+        mid = (level['zone_high'] + level['zone_low']) / 2
+        return bool((highs >= mid).any())
+    if lt == 'EQUAL_HIGH':
+        return bool((highs > level['price']).any())
+    if lt == 'EQUAL_LOW':
+        return bool((lows < level['price']).any())
+    return False
+
+
+def check_daily_levels_invalidation() -> dict:
+    """Run every 15 min during session hours — marks is_active=False for any
+    level whose invalidation condition has been met since session open."""
+    _ensure_daily_levels_table()
+    date_str = _today_str()
+    session_start = _session_start_ts()
+    now_ts = int(time.time())
+    results = {}
+    for symbol in SYMBOLS:
+        try:
+            bars_df = _bars_in_range(symbol, '1min', session_start, now_ts + 1)
+            conn = _db.connect()
+            rows = conn.execute(
+                'SELECT id, level_type, price, zone_high, zone_low FROM daily_levels '
+                'WHERE date=? AND symbol=? AND is_active=?',
+                (date_str, symbol, True)
+            ).fetchall()
+            invalidated = 0
+            for row in rows:
+                level = {'id': row[0], 'level_type': row[1], 'price': row[2], 'zone_high': row[3], 'zone_low': row[4]}
+                if _is_level_invalidated(level, bars_df):
+                    conn.execute('UPDATE daily_levels SET is_active=? WHERE id=?', (False, level['id']))
+                    invalidated += 1
+            conn.commit()
+            conn.close()
+            results[symbol] = invalidated
+        except Exception as e:
+            logger.warning(f'check_daily_levels_invalidation {symbol} error: {e}')
+            results[symbol] = 0
+    return results
+
+
+def get_daily_levels(symbol: str, include_invalidated: bool = False) -> dict:
+    """Returns today's daily levels for symbol, sorted by price descending,
+    plus the live session high/low and current price."""
+    _ensure_daily_levels_table()
+    date_str = _today_str()
+    try:
+        conn = _db.connect()
+        if include_invalidated:
+            rows = conn.execute(
+                'SELECT level_type, price, zone_high, zone_low, description, is_active, created_at '
+                'FROM daily_levels WHERE date=? AND symbol=? ORDER BY price DESC',
+                (date_str, symbol)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT level_type, price, zone_high, zone_low, description, is_active, created_at '
+                'FROM daily_levels WHERE date=? AND symbol=? AND is_active=? ORDER BY price DESC',
+                (date_str, symbol, True)
+            ).fetchall()
+        conn.close()
+
+        price = fetch_price(symbol).get('price')
+        levels = []
+        for r in rows:
+            lv_price = r[1]
+            entry = {
+                'level_type': r[0], 'price': lv_price, 'zone_high': r[2], 'zone_low': r[3],
+                'description': r[4], 'is_active': bool(r[5]), 'created_at': str(r[6]),
+            }
+            if price is not None and lv_price is not None:
+                entry['distance_pts'] = round(lv_price - price, 2)
+                entry['distance_pct'] = round(entry['distance_pts'] / price * 100, 3) if price else None
+            else:
+                entry['distance_pts'] = None
+                entry['distance_pct'] = None
+            levels.append(entry)
+
+        sess_high, sess_low = compute_session_high_low(symbol)
+        return {
+            'ok': True, 'symbol': symbol, 'date': date_str, 'price': price,
+            'levels': levels, 'session_high': sess_high, 'session_low': sess_low,
+            'calculated_at': levels[0]['created_at'] if levels else None,
+        }
+    except Exception as e:
+        logger.error(f'get_daily_levels {symbol} error: {e}')
+        return {'ok': False, 'error': str(e)}

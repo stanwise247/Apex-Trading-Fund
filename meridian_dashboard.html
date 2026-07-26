@@ -210,13 +210,21 @@
     font-size: 0.78rem; border-left: 3px solid var(--neutral);
     background: rgba(255,255,255,0.4);
   }
-  .ladder-rung.blue   { border-left-color: var(--blue); }
-  .ladder-rung.amber  { border-left-color: var(--amber); }
-  .ladder-rung.purple { border-left-color: var(--purple); }
-  .ladder-rung.green  { border-left-color: var(--green); }
+  .ladder-rung.blue    { border-left-color: var(--blue); }
+  .ladder-rung.amber   { border-left-color: var(--amber); }
+  .ladder-rung.purple  { border-left-color: var(--purple); }
+  .ladder-rung.green   { border-left-color: var(--green); }
+  .ladder-rung.bearish { border-left-color: var(--bearish); }
+  .ladder-rung.cyan    { border-left-color: #0891B2; }
   .ladder-rung .lr-type { color: var(--text-secondary); }
   .ladder-rung .lr-price { font-weight: 700; }
   .ladder-rung .lr-dist { color: var(--text-secondary); font-size: 0.72rem; }
+  .ladder-rung.invalidated {
+    opacity: 0.5; border-left-color: var(--neutral);
+  }
+  .ladder-rung.invalidated .lr-type,
+  .ladder-rung.invalidated .lr-price,
+  .ladder-rung.invalidated .lr-dist { text-decoration: line-through; }
   .ladder-current {
     display: flex; justify-content: space-between; align-items: center;
     padding: 10px 12px; border-radius: 8px; margin: 8px 0;
@@ -288,6 +296,13 @@
   .chart-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 0.68rem; color: var(--text-secondary); }
   .chart-legend .lg-item { display: flex; align-items: center; gap: 4px; }
   .chart-legend .lg-swatch { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  .daily-levels-meta { margin: -6px 0 14px; }
+  .delayed-badge {
+    display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 5px;
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+    background: rgba(142,155,174,0.18); color: var(--text-secondary); vertical-align: middle;
+  }
 
   .chart-col-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .chart-col-actions { display: flex; align-items: center; gap: 6px; }
@@ -454,11 +469,12 @@
           <span class="card-title">ICT Price Structure</span>
           <span class="live-badge" id="ladder-live"><span class="ring"></span>LIVE</span>
         </div>
+        <div class="daily-levels-meta eyebrow" id="daily-levels-meta">Daily levels set at 13:00 UTC — not yet calculated today</div>
 
         <div class="chart-row">
           <div class="chart-col" id="chart-col-ES">
             <div class="chart-col-header">
-              <div class="chart-col-title">ES · last 2 sessions</div>
+              <div class="chart-col-title">ES · last 2 sessions <span class="delayed-badge">15-min delayed</span></div>
               <div class="chart-col-actions">
                 <a class="btn-ghost" href="https://www.tradingview.com/chart/?symbol=CME_MINI%3AES1%21" target="_blank" rel="noopener">Open in TradingView ↗</a>
                 <button class="btn-icon" onclick="toggleFullscreen('ES')" title="Expand">⤢</button>
@@ -477,7 +493,7 @@
           </div>
           <div class="chart-col" id="chart-col-MNQ">
             <div class="chart-col-header">
-              <div class="chart-col-title">MNQ · last 2 sessions</div>
+              <div class="chart-col-title">MNQ · last 2 sessions <span class="delayed-badge">15-min delayed</span></div>
               <div class="chart-col-actions">
                 <a class="btn-ghost" href="https://www.tradingview.com/chart/?symbol=CME_MINI%3ANQ1%21" target="_blank" rel="noopener">Open in TradingView ↗</a>
                 <button class="btn-icon" onclick="toggleFullscreen('MNQ')" title="Expand">⤢</button>
@@ -502,10 +518,12 @@
           <span class="lg-item"><span class="lg-swatch" style="background:var(--amber); opacity:0.6;"></span>Equal Low (dashed)</span>
           <span class="lg-item"><span class="lg-swatch" style="background:var(--purple);"></span>Bullish OB</span>
           <span class="lg-item"><span class="lg-swatch" style="background:var(--purple); opacity:0.6;"></span>Bearish OB (dashed)</span>
-          <span class="lg-item"><span class="lg-swatch" style="background:var(--neutral);"></span>PDH</span>
-          <span class="lg-item"><span class="lg-swatch" style="background:var(--neutral); opacity:0.6;"></span>PDL (dashed)</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--neutral);"></span>PDH / PWH</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:var(--neutral); opacity:0.6;"></span>PDL / PWL (dashed)</span>
           <span class="lg-item"><span class="lg-swatch" style="background:var(--blue);"></span>Bullish FVG zone</span>
           <span class="lg-item"><span class="lg-swatch" style="background:var(--bearish);"></span>Bearish FVG zone</span>
+          <span class="lg-item"><span class="lg-swatch" style="background:#0891B2;"></span>Session High/Low (live, dashed)</span>
+          <span class="lg-item" style="opacity:0.6;"><span class="lg-swatch" style="background:var(--neutral); border-style:dotted;"></span>Invalidated</span>
         </div>
 
         <div class="ladder-cols" id="ladder-body" style="margin-top:20px; padding-top:20px; border-top:1px solid var(--border);">
@@ -800,51 +818,83 @@ async function refreshChartBars(sym) {
   if (_lastLevels[sym]) updateChartLevels(sym, _lastLevels[sym]);
 }
 
-function levelLineStyleFor(entry) {
-  const t = entry.type;
-  const isFvg = /FVG/.test(t);
-  const dashed = /VAL|Low|Bearish OB|PDL/.test(t) && !isFvg;
-  let color;
-  if (isFvg) color = /Bullish/.test(t) ? '#1A56DB' : '#B03A2E';
-  else if (entry.color_group === 'green')  color = '#1B7F4F';
-  else if (entry.color_group === 'amber')  color = '#B7791F';
-  else if (entry.color_group === 'purple') color = '#6B46A8';
-  else color = '#8E9BAE';
-  return { color, dashed };
-}
+/* Colour/style per level_type — same palette as before, keyed off the
+   fixed level_type strings daily_levels stores rather than a free-text
+   "type" label. */
+const LEVEL_TYPE_META = {
+  PDH:          { color: '#8E9BAE', dashed: false },
+  PDL:          { color: '#8E9BAE', dashed: true  },
+  PWH:          { color: '#8E9BAE', dashed: false },
+  PWL:          { color: '#8E9BAE', dashed: true  },
+  VAH:          { color: '#1B7F4F', dashed: false },
+  VAL:          { color: '#1B7F4F', dashed: true  },
+  BULLISH_OB:   { color: '#6B46A8', dashed: false },
+  BEARISH_OB:   { color: '#6B46A8', dashed: true  },
+  BULLISH_FVG:  { color: '#1A56DB', dashed: false },
+  BEARISH_FVG:  { color: '#B03A2E', dashed: false },
+  EQUAL_HIGH:   { color: '#B7791F', dashed: false },
+  EQUAL_LOW:    { color: '#B7791F', dashed: true  },
+  SESSION_OPEN: { color: '#1A56DB', dashed: false },
+  DAILY_OPEN:   { color: '#1A56DB', dashed: true  },
+};
+const LEVEL_TYPE_LABEL = {
+  PDH: 'PDH', PDL: 'PDL', PWH: 'PWH', PWL: 'PWL', VAH: 'VAH', VAL: 'VAL',
+  BULLISH_OB: 'Bullish OB', BEARISH_OB: 'Bearish OB',
+  BULLISH_FVG: 'Bullish FVG', BEARISH_FVG: 'Bearish FVG',
+  EQUAL_HIGH: 'Equal High', EQUAL_LOW: 'Equal Low',
+  SESSION_OPEN: 'Session Open', DAILY_OPEN: 'Daily Open',
+};
 
-function updateChartLevels(sym, levelData) {
+function updateChartLevels(sym, data) {
   const state = _charts[sym];
-  if (!state || !levelData) return;
+  if (!state || !data || !data.ok) return;
   state.priceLines.forEach(pl => { try { state.candleSeries.removePriceLine(pl); } catch (e) {} });
   state.priceLines = [];
 
-  const all = [...(levelData.above || []), ...(levelData.below || [])];
-  all.forEach(entry => {
-    const { color, dashed } = levelLineStyleFor(entry);
-    const lineStyle = dashed ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid;
-    if (entry.zone_high != null && entry.zone_low != null) {
-      // FVG/order-block zone — draw as a paired top/bottom boundary rather
-      // than a single midpoint line, using the real zone bounds.
+  (data.levels || []).forEach(lv => {
+    const meta = LEVEL_TYPE_META[lv.level_type] || { color: '#8E9BAE', dashed: false };
+    // Invalidated levels stay visible but visually recede — dotted, faded —
+    // rather than disappearing from the chart entirely.
+    const lineStyle = lv.is_active
+      ? (meta.dashed ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid)
+      : LightweightCharts.LineStyle.Dotted;
+    const color = lv.is_active ? meta.color : 'rgba(142,155,174,0.5)';
+    const label = LEVEL_TYPE_LABEL[lv.level_type] || lv.level_type;
+    if (lv.zone_high != null && lv.zone_low != null) {
       state.priceLines.push(state.candleSeries.createPriceLine({
-        price: entry.zone_high, color, lineWidth: 1, lineStyle,
-        axisLabelVisible: true, title: `${entry.type} ${fmtNum(entry.zone_high)}`,
+        price: lv.zone_high, color, lineWidth: 1, lineStyle,
+        axisLabelVisible: true, title: `${label} ${fmtNum(lv.zone_high)}`,
       }));
       state.priceLines.push(state.candleSeries.createPriceLine({
-        price: entry.zone_low, color, lineWidth: 1, lineStyle,
-        axisLabelVisible: true, title: `${entry.type} ${fmtNum(entry.zone_low)}`,
+        price: lv.zone_low, color, lineWidth: 1, lineStyle,
+        axisLabelVisible: true, title: `${label} ${fmtNum(lv.zone_low)}`,
       }));
-    } else {
+    } else if (lv.price != null) {
       state.priceLines.push(state.candleSeries.createPriceLine({
-        price: entry.price, color, lineWidth: 1, lineStyle,
-        axisLabelVisible: true, title: `${entry.type} ${fmtNum(entry.price)}`,
+        price: lv.price, color, lineWidth: 1, lineStyle,
+        axisLabelVisible: true, title: `${label} ${fmtNum(lv.price)}`,
       }));
     }
   });
 
-  if (levelData.price != null) {
+  // Session high/low — the one deliberately dynamic pair, dashed cyan/teal,
+  // updated every 30s alongside the rest of the chart data.
+  if (data.session_high != null) {
     state.priceLines.push(state.candleSeries.createPriceLine({
-      price: levelData.price, color: '#1A56DB', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
+      price: data.session_high, color: '#0891B2', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title: `Session High ${fmtNum(data.session_high)}`,
+    }));
+  }
+  if (data.session_low != null) {
+    state.priceLines.push(state.candleSeries.createPriceLine({
+      price: data.session_low, color: '#0891B2', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title: `Session Low ${fmtNum(data.session_low)}`,
+    }));
+  }
+
+  if (data.price != null) {
+    state.priceLines.push(state.candleSeries.createPriceLine({
+      price: data.price, color: '#1A56DB', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid,
       axisLabelVisible: true, title: 'Current',
     }));
   }
@@ -999,16 +1049,30 @@ async function refreshMtfAndInstruments() {
 }
 
 /* ── Section 3: ICT price ladder ───────────────────────────────────── */
+const LEVEL_TYPE_GROUP = {
+  PDH: '', PDL: '', PWH: '', PWL: '',
+  VAH: 'green', VAL: 'green',
+  BULLISH_OB: 'purple', BEARISH_OB: 'purple',
+  BULLISH_FVG: 'blue', BEARISH_FVG: 'bearish',
+  EQUAL_HIGH: 'amber', EQUAL_LOW: 'amber',
+  SESSION_OPEN: 'blue', DAILY_OPEN: 'blue',
+};
+
 function renderLadderColumn(sym, data) {
-  if (!data || data.price == null) {
+  if (!data || !data.ok || data.price == null) {
     return `<div><div class="ladder-col-title">${sym}</div><div class="empty-state">Price structure unavailable</div></div>`;
   }
-  const above = (data.above || []).slice().reverse(); // nearest-to-price last in reversed list -> render descending
-  const below = data.below || [];
+  const price  = data.price;
+  const levels = data.levels || [];
+  const above  = levels.filter(lv => lv.price != null && lv.price > price).sort((a, b) => a.price - b.price);
+  const below  = levels.filter(lv => lv.price != null && lv.price <= price).sort((a, b) => b.price - a.price);
 
   function rung(lv) {
-    return `<div class="ladder-rung ${lv.color_group}">
-      <span class="lr-type">${lv.type}</span>
+    const group = LEVEL_TYPE_GROUP[lv.level_type] || '';
+    const cls   = group + (lv.is_active ? '' : ' invalidated');
+    const label = LEVEL_TYPE_LABEL[lv.level_type] || lv.level_type;
+    return `<div class="ladder-rung ${cls}" title="${lv.description || ''}">
+      <span class="lr-type">${label}${lv.is_active ? '' : ' (invalidated)'}</span>
       <span class="lr-price tabular">${fmtNum(lv.price)}</span>
       <span class="lr-dist tabular">${lv.distance_pts > 0 ? '+' : ''}${fmtNum(lv.distance_pts)} (${lv.distance_pct > 0 ? '+' : ''}${fmtNum(lv.distance_pct)}%)</span>
     </div>`;
@@ -1023,20 +1087,36 @@ function renderLadderColumn(sym, data) {
       ${aboveHtml}
       <div class="ladder-current"><span>Current Price</span><span class="tabular">${fmtNum(data.price)}</span></div>
       ${belowHtml}
+      ${data.session_high != null || data.session_low != null ? `
+        <div class="ladder-rung cyan" style="margin-top:8px;">
+          <span class="lr-type">Session High / Low (live)</span>
+          <span class="lr-price tabular">${fmtNum(data.session_high)} / ${fmtNum(data.session_low)}</span>
+          <span class="lr-dist"></span>
+        </div>` : ''}
     </div>
   `;
 }
 
+function fmtDailyLevelsMeta(esData, mnqData) {
+  const calcAt = (esData && esData.calculated_at) || (mnqData && mnqData.calculated_at);
+  if (!calcAt) return 'Daily levels set at 13:00 UTC — not yet calculated today';
+  const d = new Date(calcAt);
+  const timeStr = isNaN(d.getTime()) ? calcAt : d.toISOString().substr(11, 5) + ' UTC';
+  return `Daily levels set at 13:00 UTC — last calculated ${timeStr}`;
+}
+
 async function refreshLevels() {
-  const d = await apiFetch('/api/mri/levels');
-  if (!d || !d.ok) return;
-  const levels = d.levels || {};
+  const [esData, mnqData] = await Promise.all([
+    apiFetch('/api/mri/daily_levels?symbol=ES&include_invalidated=true'),
+    apiFetch('/api/mri/daily_levels?symbol=MNQ&include_invalidated=true'),
+  ]);
   document.getElementById('ladder-body').innerHTML =
-    renderLadderColumn('ES', levels.ES) + renderLadderColumn('MNQ', levels.MNQ);
-  _lastLevels.ES  = levels.ES;
-  _lastLevels.MNQ = levels.MNQ;
-  updateChartLevels('ES', levels.ES);
-  updateChartLevels('MNQ', levels.MNQ);
+    renderLadderColumn('ES', esData) + renderLadderColumn('MNQ', mnqData);
+  document.getElementById('daily-levels-meta').textContent = fmtDailyLevelsMeta(esData, mnqData);
+  _lastLevels.ES  = esData;
+  _lastLevels.MNQ = mnqData;
+  updateChartLevels('ES', esData);
+  updateChartLevels('MNQ', mnqData);
   markUpdated('ladder-live');
 }
 
