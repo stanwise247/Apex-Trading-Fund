@@ -651,7 +651,16 @@ def call_anthropic(prompt: str, max_tokens: int = 600) -> dict:
     data = r.json()
     if data.get('error'):
         raise Exception(data['error'].get('message', 'anthropic error'))
-    text  = data['content'][0]['text'].strip()
+    # claude-sonnet-5 can emit a leading {"type": "thinking"} block before the
+    # actual {"type": "text"} response for longer/more complex prompts (short
+    # prompts like news classification don't seem to trigger it, which is why
+    # this went unnoticed until the much longer Week Ahead prompt hit it) —
+    # find the text block by type rather than assuming content[0].
+    text_blocks = [b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text']
+    if not text_blocks:
+        raise Exception(f'No text block in Anthropic response (content types: '
+                         f'{[b.get("type") for b in data.get("content", [])]})')
+    text  = ''.join(text_blocks).strip()
     match = re.search(r'\{[\s\S]*\}', text)
     if not match:
         raise Exception('Could not parse JSON from AI response')
