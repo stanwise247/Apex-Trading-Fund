@@ -1921,3 +1921,441 @@ def get_daily_levels(symbol: str, include_invalidated: bool = False) -> dict:
     except Exception as e:
         logger.error(f'get_daily_levels {symbol} error: {e}')
         return {'ok': False, 'error': str(e)}
+
+
+# =============================================================
+#  DAILY SESSION REPORT
+#  Same pattern as the Week Ahead report (table, generate/get/pdf,
+#  scheduler, endpoints) but generated once per trading day at 20:00 UTC
+#  instead of once per week on Sunday.
+# =============================================================
+
+DAILY_REPORT_RETENTION = 30   # keep last 30 reports (~1 month)
+DAILY_REPORT_SECTIONS  = ('session_summary', 'what_drove_it', 'key_level_reactions',
+                          'setup_for_tomorrow', 'tomorrows_bias', 'calendar_watch')
+
+_daily_reports_table_ensured = False
+
+
+def _ensure_daily_reports_table():
+    global _daily_reports_table_ensured
+    if _daily_reports_table_ensured:
+        return
+    conn = _db.connect()
+    try:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS daily_reports (
+                id           SERIAL PRIMARY KEY,
+                report_date  TEXT NOT NULL,
+                generated_at TIMESTAMPTZ NOT NULL,
+                report_json  TEXT NOT NULL,
+                report_text  TEXT NOT NULL
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_daily_reports_date ON daily_reports (report_date)')
+        conn.commit()
+        _daily_reports_table_ensured = True
+    except Exception as e:
+        logger.debug(f'daily_reports table ensure failed (may already exist): {e}')
+    finally:
+        conn.close()
+
+
+def _next_weekday(d, n: int = 1):
+    """n trading days after date d, skipping weekends."""
+    cur, count = d, 0
+    while count < n:
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            count += 1
+    return cur
+
+
+def _today_session_ohlc(symbol: str) -> dict:
+    """Today's ES/MNQ session open/high/low/close + net change, from 1min bars since 13:00 UTC."""
+    try:
+        start_ts = _session_start_ts()
+        now_ts   = int(time.time())
+        df = _bars_in_range(symbol, '1min', start_ts, now_ts + 1)
+        if df.empty:
+            return {'open': None, 'high': None, 'low': None, 'close': None,
+                    'change_pts': None, 'change_pct': None}
+        o = round(float(df['open'].iloc[0]), 2)
+        h = round(float(df['high'].max()), 2)
+        l = round(float(df['low'].min()), 2)
+        c = round(float(df['close'].iloc[-1]), 2)
+        change_pts = round(c - o, 2)
+        change_pct = round(change_pts / o * 100, 3) if o else None
+        return {'open': o, 'high': h, 'low': l, 'close': c, 'change_pts': change_pts, 'change_pct': change_pct}
+    except Exception as e:
+        logger.debug(f'_today_session_ohlc {symbol} error: {e}')
+        return {'open': None, 'high': None, 'low': None, 'close': None, 'change_pts': None, 'change_pct': None}
+
+
+def _levels_tested_today(symbol: str, session_high, session_low) -> list:
+    """Daily levels whose price fell within today's realized trading range
+    (± 0.3%, matching the "tested" threshold) — held (is_active) or broken."""
+    if session_high is None or session_low is None:
+        return []
+    try:
+        levels = get_daily_levels(symbol, include_invalidated=True).get('levels', [])
+        tested = []
+        for lv in levels:
+            if lv.get('price') is None:
+                continue
+            tol = lv['price'] * 0.003
+            if (session_low - tol) <= lv['price'] <= (session_high + tol):
+                tested.append(lv)
+        return tested
+    except Exception as e:
+        logger.debug(f'_levels_tested_today {symbol} error: {e}')
+        return []
+
+
+def _today_regime_history(symbol: str) -> dict:
+    """% of today's session TRENDING vs CHOPPY vs MEAN_REVERTING, and average confidence."""
+    try:
+        conn = _db.connect()
+        start_ts = _session_start_ts()
+        start_iso = datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat()
+        rows = conn.execute(
+            'SELECT regime, confidence FROM regime_log WHERE symbol=? AND timestamp>=? ORDER BY timestamp ASC',
+            (symbol, start_iso)
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return {'trending_pct': None, 'choppy_pct': None, 'mean_reverting_pct': None, 'avg_confidence': None}
+        total = len(rows)
+        trending = sum(1 for r in rows if r[0] == 'TRENDING')
+        choppy = sum(1 for r in rows if r[0] == 'CHOPPY')
+        mean_rev = sum(1 for r in rows if r[0] == 'MEAN_REVERTING')
+        confidences = [r[1] for r in rows if r[1] is not None]
+        return {
+            'trending_pct': round(trending / total * 100, 1),
+            'choppy_pct': round(choppy / total * 100, 1),
+            'mean_reverting_pct': round(mean_rev / total * 100, 1),
+            'avg_confidence': round(sum(confidences) / len(confidences), 3) if confidences else None,
+        }
+    except Exception as e:
+        logger.debug(f'_today_regime_history {symbol} error: {e}')
+        return {'trending_pct': None, 'choppy_pct': None, 'mean_reverting_pct': None, 'avg_confidence': None}
+
+
+def _today_news_recent(hours: int = 8) -> list:
+    """High/Medium relevance news from the last `hours` — reuses the same
+    cached news state as the composite/news endpoints, no new fetching."""
+    now_ts = time.time()
+    items = []
+    for it in _STATE['news_items']['items']:
+        ts = it.get('timestamp')
+        if ts is None or now_ts - ts > hours * 3600:
+            continue
+        if it.get('relevance') in ('High', 'Medium'):
+            items.append(it)
+    return items
+
+
+def gather_daily_report_context() -> dict:
+    """Collect every input the daily report prompt needs — pure orchestration
+    over functions already used elsewhere in this module, same approach as
+    gather_week_ahead_context()."""
+    ohlc = {sym: _today_session_ohlc(sym) for sym in SYMBOLS}
+
+    sess_high_low = {}
+    levels_tested = {}
+    regime_history = {}
+    for sym in SYMBOLS:
+        sh, sl = compute_session_high_low(sym)
+        sess_high_low[sym] = {'high': sh, 'low': sl}
+        levels_tested[sym] = _levels_tested_today(sym, sh, sl)
+        regime_history[sym] = _today_regime_history(sym)
+
+    news_recent = _today_news_recent(hours=8)
+    macro = fetch_macro()
+
+    try:
+        tomorrow = _next_weekday(datetime.now(timezone.utc).date(), 1)
+        cal_events = news_calendar.fetch_economic_calendar(days_ahead=4)
+        tomorrow_str = tomorrow.isoformat()
+        calendar_tomorrow = [e for e in cal_events if str(e.get('datetime', '')).startswith(tomorrow_str)]
+    except Exception as e:
+        logger.warning(f'gather_daily_report_context calendar error: {e}')
+        calendar_tomorrow = []
+
+    mtf = build_mtf_table()
+    htf_bias = {sym: fetch_htf_bias(sym) for sym in SYMBOLS}
+
+    return {
+        'ohlc': ohlc,
+        'session_high_low': sess_high_low,
+        'levels_tested': levels_tested,
+        'regime_history': regime_history,
+        'news_recent': news_recent,
+        'macro': macro,
+        'calendar_tomorrow': calendar_tomorrow,
+        'mtf': mtf,
+        'htf_bias': htf_bias,
+    }
+
+
+def _daily_report_prompt(ctx: dict) -> str:
+    ohlc_lines = []
+    for sym in SYMBOLS:
+        o = ctx['ohlc'].get(sym, {})
+        ohlc_lines.append(
+            f"{sym}: open={o.get('open')} high={o.get('high')} low={o.get('low')} close={o.get('close')} "
+            f"change={o.get('change_pts')}pts ({o.get('change_pct')}%)"
+        )
+
+    level_lines = []
+    for sym in SYMBOLS:
+        for lv in ctx['levels_tested'].get(sym, [])[:8]:
+            status = 'HELD' if lv.get('is_active') else 'BROKEN'
+            level_lines.append(f"{sym} {lv['level_type']} @ {lv['price']} — {status}")
+
+    regime_lines = []
+    for sym in SYMBOLS:
+        r = ctx['regime_history'].get(sym, {})
+        regime_lines.append(
+            f"{sym}: TRENDING={r.get('trending_pct')}% CHOPPY={r.get('choppy_pct')}% "
+            f"MEAN_REVERTING={r.get('mean_reverting_pct')}% avg_confidence={r.get('avg_confidence')}"
+        )
+
+    news_lines = [f"[{n.get('relevance')}/{n.get('direction')}] {n.get('headline')} — {n.get('explanation', '')}"
+                  for n in ctx['news_recent']]
+
+    macro_lines = []
+    for key in ('vix', 'dxy', 'yield_10y', 'oil'):
+        m = ctx['macro'].get(key, {})
+        if m.get('available'):
+            macro_lines.append(f"{key}: {m.get('value')} ({m.get('interpretation', '')})")
+
+    cal_lines = [f"{e.get('title')} — {e.get('datetime')} — impact={e.get('impact')}"
+                 for e in ctx['calendar_tomorrow']]
+
+    mtf_lines = []
+    for row in ('Daily', '4H', '1H'):
+        row_data = ctx['mtf'].get('table', {}).get(row, {})
+        parts = [f"{sym}={row_data.get(sym, {}).get('trend', '?')}" for sym in SYMBOLS]
+        mtf_lines.append(f"{row}: {', '.join(parts)}")
+
+    htf_lines = [f"{sym}: {ctx['htf_bias'].get(sym)}" for sym in SYMBOLS]
+
+    prompt = (
+        'You are a professional macro/futures desk analyst writing an end-of-day session report '
+        'for ES (S&P 500 E-mini) and MNQ (Nasdaq 100 Micro) futures traders. Use ONLY the data '
+        'below — do not invent prices, levels, or events not listed here.\n\n'
+        f"TODAY'S SESSION OHLC:\n" + '\n'.join(ohlc_lines) + '\n\n'
+        f"ICT LEVELS TESTED TODAY (held vs broken):\n" + ('\n'.join(level_lines) if level_lines else 'None tested') + '\n\n'
+        f"TODAY'S REGIME HISTORY:\n" + '\n'.join(regime_lines) + '\n\n'
+        f"NEWS FROM TODAY'S SESSION (last 8h):\n" + ('\n'.join(news_lines) if news_lines else 'None') + '\n\n'
+        f"CURRENT MACRO CONDITIONS:\n" + '\n'.join(macro_lines) + '\n\n'
+        f"MTF TREND PICTURE (going into tomorrow):\n" + '\n'.join(mtf_lines) + '\n\n'
+        f"CURRENT HTF 4H BIAS:\n" + '\n'.join(htf_lines) + '\n\n'
+        f"TOMORROW'S CALENDAR EVENTS:\n" + ('\n'.join(cal_lines) if cal_lines else 'None scheduled') + '\n\n'
+        'Write a structured end-of-day report. Respond with ONLY a JSON object with exactly these keys:\n'
+        '{"session_summary": "3-4 sentences on what happened today in ES and MNQ, key moves, context",\n'
+        ' "what_drove_it": "2-3 sentences on the macro/news events that mattered today and how they connected to price action",\n'
+        ' "key_level_reactions": "3-4 sentences on which ICT levels were tested, which held, which broke, and what this means structurally",\n'
+        ' "setup_for_tomorrow": "3-4 sentences on key levels to watch, developing bias, what confirmation would look like for bulls vs bears",\n'
+        ' "tomorrows_bias": "starts with one of BULLISH / CAUTIOUSLY BULLISH / NEUTRAL / CAUTIOUSLY BEARISH / BEARISH, '
+        'then a confidence qualifier in parentheses, then one paragraph of reasoning — e.g. '
+        '\\"CAUTIOUSLY BEARISH (Medium confidence): ...\\"",\n'
+        ' "calendar_watch": ["specific events tomorrow that could move ES/MNQ with expected impact, '
+        'or a single string saying none are scheduled"]}\n'
+    )
+    return prompt
+
+
+def _render_daily_report_text(sections: dict) -> str:
+    """Deterministic full-text rendering — not a second model call."""
+    lines = [
+        'MERIDIAN — DAILY SESSION REPORT', '',
+        'SESSION SUMMARY', sections.get('session_summary', ''), '',
+        'WHAT DROVE IT', sections.get('what_drove_it', ''), '',
+        'KEY LEVEL REACTIONS', sections.get('key_level_reactions', ''), '',
+        'SETUP FOR TOMORROW', sections.get('setup_for_tomorrow', ''), '',
+        "TOMORROW'S BIAS", sections.get('tomorrows_bias', ''), '',
+        'CALENDAR WATCH',
+    ]
+    for ev in sections.get('calendar_watch') or []:
+        lines.append(f'  - {ev}')
+    return '\n'.join(lines)
+
+
+def generate_daily_report() -> dict:
+    """
+    Gather context, call Anthropic for the structured report, store it, and
+    enforce the 30-report retention window. Mirrors generate_week_ahead_report()
+    exactly, including the 3-attempt retry (see that function's docstring for
+    why: a large structured JSON response occasionally comes back with a
+    minor syntax slip, unrelated to truncation).
+    """
+    try:
+        ctx    = gather_daily_report_context()
+        prompt = _daily_report_prompt(ctx)
+    except Exception as e:
+        logger.warning(f'generate_daily_report context error: {e}')
+        return {'ok': False, 'error': str(e)}
+
+    last_err = None
+    result   = None
+    for attempt in range(3):
+        try:
+            result = call_anthropic(prompt, max_tokens=4000)
+            break
+        except Exception as e:
+            last_err = e
+            logger.warning(f'generate_daily_report attempt {attempt + 1}/3 failed: {e}')
+
+    if result is None:
+        logger.warning(f'generate_daily_report: all attempts failed: {last_err}')
+        return {'ok': False, 'error': str(last_err)}
+
+    sections = {k: result.get(k) for k in DAILY_REPORT_SECTIONS}
+    missing  = [k for k in DAILY_REPORT_SECTIONS if not sections.get(k)]
+    if missing:
+        logger.warning(f'generate_daily_report: missing sections {missing}')
+        return {'ok': False, 'error': f'Anthropic response missing sections: {missing}'}
+
+    text = _render_daily_report_text(sections)
+    report_date  = _today_str()
+    generated_at = datetime.now(timezone.utc)
+
+    _ensure_daily_reports_table()
+    try:
+        conn = _db.connect()
+        # Idempotent — a manual re-trigger the same day replaces that day's
+        # report rather than appending a duplicate.
+        conn.execute('DELETE FROM daily_reports WHERE report_date=?', (report_date,))
+        conn.execute(
+            'INSERT INTO daily_reports (report_date, generated_at, report_json, report_text) VALUES (?, ?, ?, ?)',
+            (report_date, generated_at.isoformat(), json.dumps(sections), text)
+        )
+        conn.commit()
+        conn.execute(
+            'DELETE FROM daily_reports WHERE id NOT IN ('
+            'SELECT id FROM daily_reports ORDER BY generated_at DESC LIMIT ?)',
+            (DAILY_REPORT_RETENTION,)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f'Daily Report: generated and stored for {report_date}')
+    except Exception as e:
+        logger.error(f'generate_daily_report: DB write failed: {e}')
+        return {'ok': False, 'error': f'DB write failed: {e}'}
+
+    return {'ok': True, 'report_date': report_date, 'generated_at': generated_at.isoformat(),
+            'sections': sections, 'text': text}
+
+
+def get_daily_report(report_date: str = None) -> dict:
+    """Returns the report for report_date (default: most recent), or
+    {'ok': True, 'report': None} if none exists yet for that date."""
+    _ensure_daily_reports_table()
+    try:
+        conn = _db.connect()
+        if report_date:
+            row = conn.execute(
+                'SELECT report_date, generated_at, report_json, report_text FROM daily_reports '
+                'WHERE report_date=? ORDER BY generated_at DESC LIMIT 1',
+                (report_date,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                'SELECT report_date, generated_at, report_json, report_text FROM daily_reports '
+                'ORDER BY generated_at DESC LIMIT 1'
+            ).fetchone()
+        conn.close()
+        if row is None:
+            return {'ok': True, 'report': None}
+        return {
+            'ok': True,
+            'report': {
+                'report_date': row[0],
+                'generated_at': str(row[1]),
+                'sections': json.loads(row[2]),
+                'text': row[3],
+            },
+        }
+    except Exception as e:
+        logger.error(f'get_daily_report error: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
+def build_daily_report_pdf(report_date: str = None):
+    """
+    Render a daily report as a PDF, same styling as build_week_ahead_pdf().
+    Returns (pdf_bytes, filename), or (None, None) if no report exists.
+    """
+    from io import BytesIO
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+    latest = get_daily_report(report_date)
+    report = latest.get('report') if latest.get('ok') else None
+    if not report:
+        return None, None
+
+    sections = report['sections']
+
+    navy      = HexColor('#0A1628')
+    secondary = HexColor('#6B7A8D')
+    bullish   = HexColor('#1B7F4F')
+    bearish   = HexColor('#B03A2E')
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('MeridianTitle', parent=styles['Title'],
+                                  textColor=navy, fontName='Helvetica-Bold', fontSize=20, spaceAfter=4)
+    meta_style = ParagraphStyle('MeridianMeta', parent=styles['Normal'],
+                                 textColor=secondary, fontSize=9, spaceAfter=18)
+    heading_style = ParagraphStyle('MeridianHeading', parent=styles['Heading2'],
+                                    textColor=navy, fontName='Helvetica-Bold', fontSize=13,
+                                    spaceBefore=16, spaceAfter=6)
+    body_style = ParagraphStyle('MeridianBody', parent=styles['Normal'],
+                                 fontName='Helvetica', fontSize=10.5, leading=15, spaceAfter=6)
+
+    bias_text = sections.get('tomorrows_bias', '')
+    bias_color = bullish if 'BULLISH' in bias_text.upper() else (bearish if 'BEARISH' in bias_text.upper() else navy)
+    bias_style = ParagraphStyle('MeridianBias', parent=body_style, textColor=bias_color, fontName='Helvetica-Bold')
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=LETTER,
+                             topMargin=0.75 * inch, bottomMargin=0.75 * inch,
+                             leftMargin=0.85 * inch, rightMargin=0.85 * inch)
+
+    story = [
+        Paragraph('MERIDIAN — Daily Session Report', title_style),
+        Paragraph(f"{report['report_date']} · generated {report['generated_at']}", meta_style),
+
+        Paragraph('Session Summary', heading_style),
+        Paragraph(sections.get('session_summary', ''), body_style),
+
+        Paragraph('What Drove It', heading_style),
+        Paragraph(sections.get('what_drove_it', ''), body_style),
+
+        Paragraph('Key Level Reactions', heading_style),
+        Paragraph(sections.get('key_level_reactions', ''), body_style),
+
+        Paragraph('Setup for Tomorrow', heading_style),
+        Paragraph(sections.get('setup_for_tomorrow', ''), body_style),
+
+        Paragraph("Tomorrow's Bias", heading_style),
+        Paragraph(bias_text, bias_style),
+
+        Paragraph('Calendar Watch', heading_style),
+        ListFlowable(
+            [ListItem(Paragraph(ev, body_style)) for ev in (sections.get('calendar_watch') or [])],
+            bulletType='bullet',
+        ),
+    ]
+    doc.build(story)
+    pdf_bytes = buf.getvalue()
+    buf.close()
+
+    date_str = report['report_date'] or datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    filename = f'meridian_daily_{date_str}.pdf'
+    return pdf_bytes, filename

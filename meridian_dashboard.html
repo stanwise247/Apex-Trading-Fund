@@ -425,6 +425,25 @@
       </div>
     </div>
 
+    <!-- DAILY SESSION REPORT -->
+    <div class="grid" id="sec-daily-report">
+      <div class="card" id="daily-report-card">
+        <div class="card-header" style="cursor:pointer; margin-bottom:0;" onclick="toggleDailyReport()">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="card-title">Daily Report</span>
+            <span class="eyebrow" id="daily-report-meta" style="margin:0;">—</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button class="btn-ghost" id="daily-report-pdf-btn" onclick="event.stopPropagation(); downloadDailyReportPdf();" style="display:none;">Download PDF</button>
+            <button class="btn-icon" id="daily-report-toggle-icon" title="Expand">▾</button>
+          </div>
+        </div>
+        <div id="daily-report-body" style="display:none; margin-top:18px; padding-top:18px; border-top:1px solid var(--border);">
+          <div class="empty-state">Loading…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- SECTION 1 — MRI COMPOSITE -->
     <div class="grid" id="sec-hero">
       <div class="card" id="hero-card">
@@ -1247,6 +1266,64 @@ async function refreshWeekAhead() {
   pdfBtn.style.display = '';
 }
 
+/* ── Daily Report ──────────────────────────────────────────────────── */
+let _dailyReportExpanded = false;
+
+function toggleDailyReport() {
+  _dailyReportExpanded = !_dailyReportExpanded;
+  document.getElementById('daily-report-body').style.display = _dailyReportExpanded ? '' : 'none';
+  document.getElementById('daily-report-toggle-icon').textContent = _dailyReportExpanded ? '▴' : '▾';
+}
+
+function downloadDailyReportPdf() {
+  window.open('/api/mri/daily_report/pdf', '_blank');
+}
+
+function biasColorFor(biasText) {
+  const t = (biasText || '').toUpperCase();
+  if (t.indexOf('BULLISH') !== -1 && t.indexOf('CAUTIOUSLY') === -1) return 'var(--bullish)';
+  if (t.indexOf('BEARISH') !== -1 && t.indexOf('CAUTIOUSLY') === -1) return 'var(--bearish)';
+  if (t.indexOf('BULLISH') !== -1 || t.indexOf('BEARISH') !== -1) return 'var(--text-primary)';
+  return 'var(--neutral)';
+}
+
+function renderDailyReportSections(sections) {
+  const s = sections || {};
+  const calWatchHtml = (s.calendar_watch || []).map(e => `<li>${e}</li>`).join('') || '<li>—</li>';
+  return `
+    <div class="wa-section"><div class="wa-heading">Session Summary</div><div class="wa-body">${s.session_summary || '—'}</div></div>
+    <div class="wa-section"><div class="wa-heading">What Drove It</div><div class="wa-body">${s.what_drove_it || '—'}</div></div>
+    <div class="wa-section"><div class="wa-heading">Key Level Reactions</div><div class="wa-body">${s.key_level_reactions || '—'}</div></div>
+    <div class="wa-section"><div class="wa-heading">Setup for Tomorrow</div><div class="wa-body">${s.setup_for_tomorrow || '—'}</div></div>
+    <div class="wa-section"><div class="wa-heading">Tomorrow's Bias</div><div class="wa-body" style="color:${biasColorFor(s.tomorrows_bias)}; font-weight:600;">${s.tomorrows_bias || '—'}</div></div>
+    <div class="wa-section"><div class="wa-heading">Calendar Watch</div><ul class="wa-list">${calWatchHtml}</ul></div>
+  `;
+}
+
+async function refreshDailyReport() {
+  const d = await apiFetch('/api/mri/daily_report');
+  const bodyEl = document.getElementById('daily-report-body');
+  const metaEl = document.getElementById('daily-report-meta');
+  const pdfBtn = document.getElementById('daily-report-pdf-btn');
+  if (!d || !d.ok || !d.report) {
+    metaEl.textContent = "Today's report generates at 20:00 UTC";
+    bodyEl.innerHTML = '<div class="empty-state">No report generated yet. Today\'s report generates at 20:00 UTC.</div>';
+    pdfBtn.style.display = 'none';
+    return;
+  }
+  const report  = d.report;
+  const genDate = new Date(report.generated_at);
+  const genLabel = isNaN(genDate.getTime())
+    ? ('Generated ' + report.generated_at)
+    : ('Generated ' + genDate.toLocaleString('en-US', {
+        weekday: 'long', day: 'numeric', month: 'long',
+        hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
+      }));
+  metaEl.textContent = `${report.report_date} — ${genLabel}`;
+  bodyEl.innerHTML = renderDailyReportSections(report.sections);
+  pdfBtn.style.display = '';
+}
+
 /* ── Market status pill ────────────────────────────────────────────── */
 async function refreshStatus() {
   const d = await apiFetch('/api/status');
@@ -1273,6 +1350,7 @@ refreshMacro();
 refreshNews();
 refreshStatus();
 refreshWeekAhead();
+refreshDailyReport();
 
 setInterval(updateSessionBar, 1000);
 setInterval(refreshComposite, 30000);
@@ -1283,6 +1361,7 @@ setInterval(refreshMacro, 30000);
 setInterval(refreshNews, 300000);
 setInterval(refreshStatus, 30000);
 setInterval(refreshWeekAhead, 300000);
+setInterval(refreshDailyReport, 300000);
 </script>
 </body>
 </html>

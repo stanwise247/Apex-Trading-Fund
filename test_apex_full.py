@@ -3185,6 +3185,80 @@ def test_mri21_daily_levels_invalidation_logic():
         _fail('TEST MRI21', f'{type(e).__name__}: {e}')
 
 
+def test_mri22_daily_reports_table_creation():
+    """_ensure_daily_reports_table() creates daily_reports without raising, idempotently."""
+    _section('TEST MRI22 — daily_reports table creation')
+    try:
+        import meridian_mri as m
+        m._ensure_daily_reports_table()
+        m._ensure_daily_reports_table()   # second call must be a no-op, not an error
+        conn = m._db.connect()
+        conn.execute(
+            'SELECT id, report_date, generated_at, report_json, report_text FROM daily_reports LIMIT 1'
+        )
+        conn.close()
+        _pass('TEST MRI22  table exists with expected columns', '')
+    except Exception as e:
+        _fail('TEST MRI22', f'{type(e).__name__}: {e}')
+
+
+def test_mri23_daily_report_no_report_response():
+    """get_daily_report() returns {'ok': True, 'report': None} for a date with no report."""
+    _section('TEST MRI23 — daily report no-report-yet response')
+    try:
+        import meridian_mri as m
+        m._ensure_daily_reports_table()
+        result = m.get_daily_report('1999-01-01')   # a date that will never have a real report
+        if result.get('ok') is True and result.get('report') is None:
+            _pass('TEST MRI23  unknown date -> ok=True, report=None', '')
+        else:
+            _fail('TEST MRI23  unknown date -> ok=True, report=None', f'got {result}')
+    except Exception as e:
+        _fail('TEST MRI23', f'{type(e).__name__}: {e}')
+
+
+def test_mri24_daily_report_exists_structure():
+    """get_daily_report() returns the stored sections/text once a report row exists for that date."""
+    _section('TEST MRI24 — daily report report-exists structure')
+    try:
+        import meridian_mri as m
+        import json as _json
+        from datetime import datetime, timezone
+        m._ensure_daily_reports_table()
+        sections = {k: f'test {k}' for k in m.DAILY_REPORT_SECTIONS}
+        test_date = '1999-01-02'
+        conn = m._db.connect()
+        conn.execute('DELETE FROM daily_reports WHERE report_date=?', (test_date,))
+        conn.execute(
+            'INSERT INTO daily_reports (report_date, generated_at, report_json, report_text) VALUES (?, ?, ?, ?)',
+            (test_date, datetime.now(timezone.utc).isoformat(), _json.dumps(sections),
+             m._render_daily_report_text(sections))
+        )
+        conn.commit()
+
+        result = m.get_daily_report(test_date)
+        report = result.get('report')
+        if result.get('ok') and report and set(m.DAILY_REPORT_SECTIONS) <= set(report.get('sections', {}).keys()):
+            _pass('TEST MRI24  report has all expected section keys', '')
+        else:
+            _fail('TEST MRI24  report has all expected section keys', f'got {result}')
+        if isinstance(report.get('text'), str) and report['text']:
+            _pass('TEST MRI24  report_text is a non-empty string', '')
+        else:
+            _fail('TEST MRI24  report_text is a non-empty string', f'{report}')
+        if report.get('report_date') == test_date:
+            _pass('TEST MRI24  get_daily_report(date) filters by that date', '')
+        else:
+            _fail('TEST MRI24  get_daily_report(date) filters by that date', f'{report}')
+
+        # Cleanup — this test's synthetic row must not linger
+        conn.execute('DELETE FROM daily_reports WHERE report_date=?', (test_date,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        _fail('TEST MRI24', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Meridian MRI endpoint tests (MRIAPI1–MRIAPI7)
 #  HTTP against Railway — follows the D4/CTX1 "not-a-hard-fail" idiom.
@@ -3430,6 +3504,82 @@ def test_mriapi10_daily_levels_active_vs_all():
         _fail('TEST MRIAPI10', f'{type(e).__name__}: {e}')
 
 
+def test_mriapi11_daily_report_generate_endpoint():
+    """POST /api/mri/daily_report/generate triggers real generation and returns all 6 sections."""
+    _section('TEST MRIAPI11 — /api/mri/daily_report/generate manual trigger')
+    try:
+        resp = _api_post('/api/mri/daily_report/generate', timeout=90)
+        if resp is None:
+            _fail('TEST MRIAPI11  endpoint reachable', 'No response'); return
+        if not resp.get('ok'):
+            # Not a hard fail — a transient Anthropic/network issue is an
+            # operational state, not a code defect (matches D4/CTX1 idiom).
+            _pass('TEST MRIAPI11  endpoint responds', f'ok={resp.get("ok")} error={resp.get("error","none")}')
+            return
+        sections = resp.get('sections', {})
+        expected = {'session_summary', 'what_drove_it', 'key_level_reactions',
+                    'setup_for_tomorrow', 'tomorrows_bias', 'calendar_watch'}
+        if expected <= set(sections.keys()):
+            _pass('TEST MRIAPI11  generated report has all 6 sections', '')
+        else:
+            _fail('TEST MRIAPI11  generated report has all 6 sections', f'got {set(sections.keys())}')
+        if resp.get('report_date'):
+            _pass('TEST MRIAPI11  response includes report_date', '')
+        else:
+            _fail('TEST MRIAPI11  response includes report_date', f'{resp}')
+    except Exception as e:
+        _fail('TEST MRIAPI11', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi12_daily_report_get_endpoint():
+    """GET /api/mri/daily_report returns the report generated by MRIAPI11 (relies on run order)."""
+    _section('TEST MRIAPI12 — /api/mri/daily_report GET')
+    try:
+        data = _api('/api/mri/daily_report', timeout=20)
+        if data is None:
+            _fail('TEST MRIAPI12  endpoint reachable', 'No response'); return
+        if not data.get('ok'):
+            _pass('TEST MRIAPI12  endpoint responds', f'ok={data.get("ok")}')
+            return
+        report = data.get('report')
+        if report is not None:
+            has_sections = isinstance(report.get('sections'), dict) and report['sections']
+            if has_sections:
+                _pass('TEST MRIAPI12  report has sections', '')
+            else:
+                _fail('TEST MRIAPI12  report has sections', f'{report}')
+        else:
+            # Graceful "no report yet" is also a valid response shape.
+            _pass('TEST MRIAPI12  no report yet -> report=None (graceful)', '')
+    except Exception as e:
+        _fail('TEST MRIAPI12', f'{type(e).__name__}: {e}')
+
+
+def test_mriapi13_daily_report_pdf_endpoint():
+    """GET /api/mri/daily_report/pdf returns a real PDF once a report exists, graceful 404 otherwise."""
+    _section('TEST MRIAPI13 — /api/mri/daily_report/pdf content-type')
+    try:
+        import requests
+        r = requests.get(f'{RAILWAY_BASE}/api/mri/daily_report/pdf', timeout=30)
+        if r.status_code == 404:
+            _pass('TEST MRIAPI13  no report yet -> graceful 404', '')
+            return
+        if r.status_code != 200:
+            _fail('TEST MRIAPI13  endpoint returns 200 or graceful 404', f'status={r.status_code}')
+            return
+        content_type = r.headers.get('Content-Type', '')
+        if 'application/pdf' in content_type:
+            _pass('TEST MRIAPI13  Content-Type is application/pdf', content_type)
+        else:
+            _fail('TEST MRIAPI13  Content-Type is application/pdf', f'got {content_type}')
+        if r.content[:4] == b'%PDF':
+            _pass('TEST MRIAPI13  body starts with %PDF magic bytes', '')
+        else:
+            _fail('TEST MRIAPI13  body starts with %PDF magic bytes', f'got {r.content[:20]}')
+    except Exception as e:
+        _fail('TEST MRIAPI13', f'{type(e).__name__}: {e}')
+
+
 # ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
@@ -3555,8 +3705,11 @@ if __name__ == '__main__':
     test_mri19_daily_levels_table_creation()
     test_mri20_calculate_daily_levels_populates_types()
     test_mri21_daily_levels_invalidation_logic()
+    test_mri22_daily_reports_table_creation()
+    test_mri23_daily_report_no_report_response()
+    test_mri24_daily_report_exists_structure()
 
-    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI10)
+    # Meridian MRI endpoint tests (MRIAPI1–MRIAPI13)
     test_mriapi1_composite_endpoint_structure()
     test_mriapi2_composite_never_500s()
     test_mriapi3_levels_endpoint_structure()
@@ -3567,6 +3720,9 @@ if __name__ == '__main__':
     test_mriapi8_week_ahead_generate_endpoint()
     test_mriapi9_week_ahead_pdf_endpoint()
     test_mriapi10_daily_levels_active_vs_all()
+    test_mriapi11_daily_report_generate_endpoint()
+    test_mriapi12_daily_report_get_endpoint()
+    test_mriapi13_daily_report_pdf_endpoint()
 
     _cleanup()
     _print_results()

@@ -1944,6 +1944,23 @@ def background_scheduler():
                 except Exception as _wa_e:
                     logger.warning(f'Week Ahead: scheduled generation error: {_wa_e}')
 
+        # ── Meridian Daily Report — fires once, 20:00 UTC weekdays ───────
+        _now_utc_dr = datetime.now(timezone.utc)
+        if _now_utc_dr.weekday() < 5 and _now_utc_dr.hour == 20 and _now_utc_dr.minute < 5:
+            _today_str_dr = _now_utc_dr.strftime('%Y-%m-%d')
+            if getattr(background_scheduler, '_last_daily_report_date', None) != _today_str_dr:
+                background_scheduler._last_daily_report_date = _today_str_dr
+                logger.info('Daily Report: scheduled generation starting (20:00 UTC)')
+                try:
+                    import meridian_mri as _mri_dr
+                    _dr_result = _mri_dr.generate_daily_report()
+                    if _dr_result.get('ok'):
+                        logger.info('Daily Report: scheduled generation complete')
+                    else:
+                        logger.warning(f'Daily Report: scheduled generation failed — {_dr_result.get("error")}')
+                except Exception as _dr_e:
+                    logger.warning(f'Daily Report: scheduled generation error: {_dr_e}')
+
         # ── Meridian Daily Levels — calculate once, 13:00 UTC weekdays ───
         _now_utc_dl   = datetime.now(timezone.utc)
         _today_str_dl = _now_utc_dl.strftime('%Y-%m-%d')
@@ -6527,6 +6544,41 @@ def mri_week_ahead_pdf():
     try:
         import meridian_mri as _mri
         pdf_bytes, filename = _mri.build_week_ahead_pdf()
+        if pdf_bytes is None:
+            return jsonify({'ok': False, 'error': 'No report available yet'}), 404
+        from flask import Response
+        return Response(pdf_bytes, mimetype='application/pdf', headers={
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/mri/daily_report', methods=['GET'])
+def mri_daily_report():
+    try:
+        import meridian_mri as _mri
+        report_date = request.args.get('date')
+        return jsonify(_mri.get_daily_report(report_date))
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/daily_report/generate', methods=['POST'])
+def mri_daily_report_generate():
+    try:
+        import meridian_mri as _mri
+        return jsonify(_mri.generate_daily_report())
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/mri/daily_report/pdf', methods=['GET'])
+def mri_daily_report_pdf():
+    try:
+        import meridian_mri as _mri
+        report_date = request.args.get('date')
+        pdf_bytes, filename = _mri.build_daily_report_pdf(report_date)
         if pdf_bytes is None:
             return jsonify({'ok': False, 'error': 'No report available yet'}), 404
         from flask import Response
