@@ -698,7 +698,14 @@ def classify_news_item(headline: str, description: str = '') -> dict:
         # from a real Low/Irrelevant classification. refresh_news() still
         # shows these items, tagged 'Unclassified', rather than silently
         # dropping every headline whenever the AI call has a problem.
-        logger.debug(f'classify_news_item error: {e}')
+        #
+        # This was previously logged at DEBUG, which server.py's root logger
+        # config (logging.basicConfig(level=logging.INFO)) filters out
+        # entirely — every one of these failures was invisible in Railway
+        # logs, which is why "Classification unavailable" had no accompanying
+        # error anywhere. WARNING is the minimum level that actually reaches
+        # the log stream in production.
+        logger.warning(f'classify_news_item error for {headline[:80]!r}: {type(e).__name__}: {e}')
         return {'relevance': 'Unclassified', 'direction': 'Neutral',
                 'explanation': 'Classification unavailable', 'ok': False}
 

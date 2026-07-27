@@ -3291,11 +3291,16 @@ def test_mriapi5_news_endpoint_max_10_medium_high_only():
             _pass('TEST MRIAPI5  <=10 items', f'{len(items)}')
         else:
             _fail('TEST MRIAPI5  <=10 items', f'got {len(items)}')
-        bad = [it for it in items if it.get('relevance') not in ('Medium', 'High')]
+        # 'Unclassified' is an intentional third value (classify_news_item's
+        # AI-call-failed fallback — see docs/meridian_news.md) shown with a
+        # distinct badge rather than dropped; this test predates that
+        # feature and previously only allowed Medium/High, which fails for
+        # a real, documented state rather than a defect.
+        bad = [it for it in items if it.get('relevance') not in ('Medium', 'High', 'Unclassified')]
         if not bad:
-            _pass('TEST MRIAPI5  only Medium/High relevance shown', '')
+            _pass('TEST MRIAPI5  only Medium/High/Unclassified relevance shown', '')
         else:
-            _fail('TEST MRIAPI5  only Medium/High relevance shown', f'{len(bad)} bad items')
+            _fail('TEST MRIAPI5  only Medium/High/Unclassified relevance shown', f'{len(bad)} bad items')
     except Exception as e:
         _fail('TEST MRIAPI5', f'{type(e).__name__}: {e}')
 

@@ -74,18 +74,28 @@ def get_api_key() -> str:
 
 
 def _fetch_aggs(ticker: str, resolution: str, limit: int = 500,
-                 start_ns: int = None, end_ns: int = None) -> list:
+                 start_ns: int = None, end_ns: int = None, sort: str = 'window_start.asc') -> list:
     """
     Fetch futures aggregate bars from Polygon/Massive.
-    Returns list of (ts_unix, open, high, low, close, volume) tuples, oldest first.
+    Returns list of (ts_unix, open, high, low, close, volume) tuples, ALWAYS
+    oldest-first regardless of which `sort` was used to fetch them (see below).
     Never raises — logs and returns [] on any error, matching the rest of
     this module's fault-isolation style (one bad request never blocks others).
+
+    IMPORTANT: with no start_ns/end_ns bounds, sort='window_start.asc' (the
+    default, correct for the bounded historical-range callers below) returns
+    the OLDEST `limit` bars in Polygon's entire history for that ticker, not
+    the most recent ones — this was the root cause of the live poller
+    silently freezing on ancient data despite "succeeding" on every call
+    (non-empty response, no exception, health counters kept incrementing).
+    Callers that want "the latest N bars" with no explicit date range MUST
+    pass sort='window_start.desc' — see PolygonPoller._poll_once().
     """
     key = get_api_key()
     if not key:
         logger.error('No Polygon API key (POLYGON_API_KEY)')
         return []
-    params = {'apiKey': key, 'resolution': resolution, 'limit': limit, 'sort': 'window_start.asc'}
+    params = {'apiKey': key, 'resolution': resolution, 'limit': limit, 'sort': sort}
     if start_ns is not None:
         params['window_start.gte'] = start_ns
     if end_ns is not None:
@@ -105,6 +115,8 @@ def _fetch_aggs(ticker: str, resolution: str, limit: int = 500,
                 round(float(row['low']), 2), round(float(row['close']), 2),
                 float(row.get('volume', 0)),
             ))
+        if sort == 'window_start.desc':
+            bars.reverse()   # normalise to oldest-first regardless of fetch order
         return bars
     except Exception as e:
         logger.warning(f'Polygon aggs {ticker} {resolution} error: {e}')
@@ -225,19 +237,45 @@ class PolygonPoller:
         for symbol, ticker in INSTRUMENTS.items():
             for tf in TIMEFRAMES:
                 try:
-                    # Small window — polling every 60s, we only need the newest
-                    # bar or two, not a full history refetch each cycle.
-                    bars = _fetch_aggs(ticker, tf, limit=5)
+                    # sort='window_start.desc' is required here — with no
+                    # start_ns/end_ns bounds, the default ascending sort
+                    # returns the OLDEST bars in Polygon's entire history for
+                    # the ticker, not the latest (see _fetch_aggs docstring).
+                    # This was the actual bug: every poll "succeeded" (non-
+                    # empty response, no exception) but silently re-fetched
+                    # the same year-old bars every cycle, so ohlcv's max(ts)
+                    # never advanced past whatever the last real write was.
+                    bars = _fetch_aggs(ticker, tf, limit=5, sort='window_start.desc')
                     if not bars:
+                        logger.warning(f'PolygonPoller: {symbol} {tf} — empty response from Polygon')
                         continue
+
+                    latest_ts = bars[-1][0]
+                    staleness_s = time.time() - latest_ts
+                    if tf == '1min' and staleness_s > 1800:
+                        # >30 min stale on the finest timeframe during an
+                        # active poll cycle means something is wrong upstream
+                        # (Polygon delay, wrong ticker, etc) — surfaced at
+                        # WARNING (not DEBUG) so it actually reaches Railway
+                        # logs instead of looking like a normal quiet cycle.
+                        logger.warning(
+                            f'PolygonPoller: {symbol} {tf} latest bar is {staleness_s/60:.0f}min stale '
+                            f'(ts={latest_ts}) — Polygon may be delayed or ticker may be wrong'
+                        )
+
                     inserted = store_bars(symbol, tf, bars)
-                    if tf == '1min':
+                    if tf == '1min' and inserted > 0:
+                        # Only count real, newly-written bars toward the
+                        # health-check freshness stats — previously this
+                        # incremented whenever the HTTP call merely returned
+                        # *something*, which stayed "green" even while the
+                        # sort bug above caused zero real writes for hours.
                         self._bar_count += 1
                         self._last_bar_time = time.time()
                         self._last_bar_time_by_sym[symbol] = self._last_bar_time
                         self._bar_count_by_sym[symbol] = self._bar_count_by_sym.get(symbol, 0) + 1
                     if inserted > 0:
-                        logger.info(f'PolygonPoller: {symbol} {tf} +{inserted} new bars')
+                        logger.info(f'PolygonPoller: {symbol} {tf} +{inserted} new bars (latest ts={latest_ts})')
                 except Exception as e:
                     logger.warning(f'PolygonPoller: {symbol} {tf} poll error: {e}')
 
