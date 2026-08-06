@@ -3581,6 +3581,463 @@ def test_mriapi13_daily_report_pdf_endpoint():
 
 
 # ─────────────────────────────────────────────────────────────
+#  ICT Engine tests (ICT1–ICT11) — pure detection functions, no DB/HTTP
+# ─────────────────────────────────────────────────────────────
+
+def _ict_mkbars(spec, start_ts=1000, step=60):
+    """spec: list of (open, high, low, close[, volume]) tuples -> ascending bar list."""
+    bars = []
+    ts = start_ts
+    for row in spec:
+        if len(row) == 4:
+            o, h, l, c = row; vol = 100
+        else:
+            o, h, l, c, vol = row
+        bars.append({'ts': ts, 'open': o, 'high': h, 'low': l, 'close': c, 'volume': vol})
+        ts += step
+    return bars
+
+
+def test_ict1_swing_detection():
+    """N=2 swing high/low: candle's high/low strictly beyond the 2 candles before AND after it."""
+    _section('TEST ICT1 — swing detection (known OHLCV sequence)')
+    try:
+        import ict_engine as ict
+        spec = [
+            (100,101,99,100), (100,102,100,101), (101,110,101,109), (109,109,103,104),
+            (104,105,95,96), (96,97,90,91), (91,98,92,97), (97,99,96,98),
+        ]
+        bars = _ict_mkbars(spec)
+        swings = ict.detect_swings(bars, '5min')
+        has_high_110 = any(s['type'] == 'high' and s['price'] == 110 for s in swings)
+        has_low_90 = any(s['type'] == 'low' and s['price'] == 90 for s in swings)
+        if has_high_110:
+            _pass('TEST ICT1  swing high 110 detected', '')
+        else:
+            _fail('TEST ICT1  swing high 110 detected', f'{swings}')
+        if has_low_90:
+            _pass('TEST ICT1  swing low 90 detected', '')
+        else:
+            _fail('TEST ICT1  swing low 90 detected', f'{swings}')
+        if all(s['confirmed'] for s in swings):
+            _pass('TEST ICT1  every returned swing is confirmed', '')
+        else:
+            _fail('TEST ICT1  every returned swing is confirmed', f'{swings}')
+    except Exception as e:
+        _fail('TEST ICT1', f'{type(e).__name__}: {e}')
+
+
+def test_ict2_bos_detection():
+    """A bar closing above a prior swing high fires a bullish BOS at that exact level."""
+    _section('TEST ICT2 — BOS detection (known sequence with a clear BOS)')
+    try:
+        import ict_engine as ict
+        spec = [
+            (100,101,99,100), (100,102,100,101), (101,110,101,109), (109,109,103,104),
+            (104,105,95,96), (96,97,90,91), (91,98,92,97), (97,99,96,98),
+            (98,115,97,112),   # closes at 112 > 110 -> bullish BOS
+        ]
+        bars = _ict_mkbars(spec)
+        swings = ict.detect_swings(bars, '5min')
+        bos = ict.detect_bos(swings, bars)
+        found = any(e['type'] == 'bullish' and e['broken_level'] == 110 for e in bos)
+        if found:
+            _pass('TEST ICT2  bullish BOS at broken_level=110', '')
+        else:
+            _fail('TEST ICT2  bullish BOS at broken_level=110', f'{bos}')
+        # A wick-only breach (no close beyond) must NOT fire.
+        spec_wick = spec[:-1] + [(98,112,97,105)]   # high 112>110 but closes 105<110
+        bars_w = _ict_mkbars(spec_wick)
+        bos_w = ict.detect_bos(ict.detect_swings(bars_w, '5min'), bars_w)
+        if not any(e['broken_level'] == 110 for e in bos_w):
+            _pass('TEST ICT2  wick-only breach does not fire BOS (close required)', '')
+        else:
+            _fail('TEST ICT2  wick-only breach does not fire BOS (close required)', f'{bos_w}')
+    except Exception as e:
+        _fail('TEST ICT2', f'{type(e).__name__}: {e}')
+
+
+def test_ict3_choch_detection():
+    """Bullish structure (HH+HL), then a close below the last HL -> bearish CHoCH at that HL."""
+    _section('TEST ICT3 — CHoCH detection (known sequence with a clear CHoCH)')
+    try:
+        import ict_engine as ict
+        spec = [
+            (100,101,99,100), (100,103,100,102), (102,110,101,103), (103,106,102,104),
+            (104,105,96,97), (97,99,95,96), (96,100,98,99), (99,101,97,98),
+            (98,120,97,119), (119,119,110,111), (111,112,105,106), (106,109,101,102),
+            (102,108,103,105), (105,109,104,107),
+        ]
+        bars = _ict_mkbars(spec)
+        swings = ict.detect_swings(bars, '5min')
+        ms = ict.classify_market_structure(swings)
+        if ms['structure'] == 'BULLISH':
+            _pass('TEST ICT3  precondition: structure is BULLISH before the break', '')
+        else:
+            _fail('TEST ICT3  precondition: structure is BULLISH before the break', f'{ms}')
+        spec_c = spec + [(107,108,90,92)]   # close 92 < last_hl(101) -> bearish CHoCH
+        bars_c = _ict_mkbars(spec_c)
+        choch = ict.detect_choch(swings, bars_c)
+        if choch and choch[0]['type'] == 'bearish' and choch[0]['broken_level'] == ms['last_hl']:
+            _pass('TEST ICT3  bearish CHoCH at last_hl', f"{choch[0]['broken_level']}")
+        else:
+            _fail('TEST ICT3  bearish CHoCH at last_hl', f'{choch}')
+        if choch and choch[0]['significance'] == 'choch':
+            _pass('TEST ICT3  significance tagged choch', '')
+        else:
+            _fail('TEST ICT3  significance tagged choch', f'{choch}')
+    except Exception as e:
+        _fail('TEST ICT3', f'{type(e).__name__}: {e}')
+
+
+def test_ict4_fvg_detection():
+    """Three-candle gap: candle[i+2].low > candle[i].high -> bullish FVG with the exact zone bounds."""
+    _section('TEST ICT4 — FVG detection (three-candle pattern)')
+    try:
+        import ict_engine as ict
+        spec = [(98,100,97,99), (99,108,99,107), (107,110,105,108)]  # gap [100,105]
+        bars = _ict_mkbars(spec)
+        fvgs = ict.detect_fvgs(bars, min_gap_pct=0.05)
+        if len(fvgs) == 1 and fvgs[0]['type'] == 'bullish':
+            _pass('TEST ICT4  exactly one bullish FVG detected', '')
+        else:
+            _fail('TEST ICT4  exactly one bullish FVG detected', f'{fvgs}')
+        if fvgs and fvgs[0]['zone_low'] == 100 and fvgs[0]['zone_high'] == 105:
+            _pass('TEST ICT4  correct zone_low/zone_high', '')
+        else:
+            _fail('TEST ICT4  correct zone_low/zone_high', f'{fvgs}')
+        if fvgs and fvgs[0]['status'] == 'FRESH':
+            _pass('TEST ICT4  new FVG starts FRESH', '')
+        else:
+            _fail('TEST ICT4  new FVG starts FRESH', f'{fvgs}')
+    except Exception as e:
+        _fail('TEST ICT4', f'{type(e).__name__}: {e}')
+
+
+def test_ict5_fvg_status_update():
+    """Price trading 50%+ into a bullish FVG's zone -> MITIGATED with correct mitigation_pct."""
+    _section('TEST ICT5 — FVG status update (price entering the zone)')
+    try:
+        import ict_engine as ict
+        spec = [(98,100,97,99), (99,108,99,107), (107,110,105,108), (108,109,101,103)]
+        bars = _ict_mkbars(spec)
+        fvgs = ict.detect_fvgs(bars, min_gap_pct=0.05)
+        if fvgs and fvgs[0]['status'] == 'MITIGATED':
+            _pass('TEST ICT5  status MITIGATED after 50%+ penetration', '')
+        else:
+            _fail('TEST ICT5  status MITIGATED after 50%+ penetration', f'{fvgs}')
+        # low=101 into zone[100,105]: penetration = (105-101)/5*100 = 80%
+        if fvgs and abs(fvgs[0]['mitigation_pct'] - 80.0) < 0.01:
+            _pass('TEST ICT5  mitigation_pct == 80.0', f"{fvgs[0]['mitigation_pct']}")
+        else:
+            _fail('TEST ICT5  mitigation_pct == 80.0', f'{fvgs}')
+        # a close fully through -> VOID, 100%
+        spec_void = spec[:3] + [(108,109,95,96)]
+        fvgs_v = ict.detect_fvgs(_ict_mkbars(spec_void), min_gap_pct=0.05)
+        if fvgs_v and fvgs_v[0]['status'] == 'VOID' and fvgs_v[0]['mitigation_pct'] == 100.0:
+            _pass('TEST ICT5  close through zone -> VOID, 100%', '')
+        else:
+            _fail('TEST ICT5  close through zone -> VOID, 100%', f'{fvgs_v}')
+    except Exception as e:
+        _fail('TEST ICT5', f'{type(e).__name__}: {e}')
+
+
+def test_ict6_ob_detection():
+    """Last red candle before a BOS-confirming impulse >=1.5x its own range -> bullish OB at that candle."""
+    _section('TEST ICT6 — order block detection (impulse move with clear OB)')
+    try:
+        import ict_engine as ict
+        spec = [
+            (100,101,99,100), (100,103,100,102), (102,110,101,103), (103,106,102,104),
+            (104,105,96,97), (97,99,95,96), (96,100,98,99), (99,101,97,98),
+            (100,99,96,97),      # red OB candle: range 96-99
+            (97,115,97,114),     # impulse: 115-96=19 >= 1.5*3=4.5
+            (114,118,110,117), (117,125,116,124),   # closes above swing high 110 -> BOS
+        ]
+        bars = _ict_mkbars(spec)
+        swings = ict.detect_swings(bars, '5min')
+        obs = ict.detect_order_blocks(bars, swings)
+        found = any(o['type'] == 'bullish' and o['zone_high'] == 99 and o['zone_low'] == 96 for o in obs)
+        if found:
+            _pass('TEST ICT6  bullish OB zone [96,99] detected', '')
+        else:
+            _fail('TEST ICT6  bullish OB zone [96,99] detected', f'{obs}')
+        matching = [o for o in obs if o['zone_high'] == 99 and o['zone_low'] == 96]
+        if matching and matching[0]['impulse_size'] >= 1.5 * 3:
+            _pass('TEST ICT6  impulse_size satisfies the 1.5x threshold', f"{matching[0]['impulse_size']}")
+        else:
+            _fail('TEST ICT6  impulse_size satisfies the 1.5x threshold', f'{matching}')
+    except Exception as e:
+        _fail('TEST ICT6', f'{type(e).__name__}: {e}')
+
+
+def test_ict7_eql_detection():
+    """Two swing highs within tolerance_pct of each other cluster into one Equal Highs level."""
+    _section('TEST ICT7 — equal highs/lows detection (two swing highs within tolerance)')
+    try:
+        import ict_engine as ict
+        swings = [
+            {'type': 'high', 'price': 1000.0, 'timestamp': 100, 'timeframe': '5min', 'confirmed': True},
+            {'type': 'high', 'price': 1001.2, 'timestamp': 200, 'timeframe': '5min', 'confirmed': True},
+            {'type': 'low', 'price': 950.0, 'timestamp': 150, 'timeframe': '5min', 'confirmed': True},
+        ]
+        eq = ict.detect_equal_highs_lows(swings, tolerance_pct=0.15)
+        if len(eq) == 1 and eq[0]['type'] == 'equal_high' and eq[0]['swing_count'] == 2:
+            _pass('TEST ICT7  two swing highs within 0.15% -> one equal_high cluster', '')
+        else:
+            _fail('TEST ICT7  two swing highs within 0.15% -> one equal_high cluster', f'{eq}')
+        if eq and eq[0]['status'] == 'INTACT':
+            _pass('TEST ICT7  freshly detected cluster starts INTACT', '')
+        else:
+            _fail('TEST ICT7  freshly detected cluster starts INTACT', f'{eq}')
+        # a lone swing high (no partner within tolerance) must not cluster
+        lone = [swings[0], swings[2]]
+        eq_lone = ict.detect_equal_highs_lows(lone, tolerance_pct=0.15)
+        if not eq_lone:
+            _pass('TEST ICT7  single unmatched swing does not form a cluster', '')
+        else:
+            _fail('TEST ICT7  single unmatched swing does not form a cluster', f'{eq_lone}')
+    except Exception as e:
+        _fail('TEST ICT7', f'{type(e).__name__}: {e}')
+
+
+def test_ict8_sweep_detection():
+    """Price trades through an equal-high level then a close reclaims it within lookback -> sweep."""
+    _section('TEST ICT8 — liquidity sweep detection (through EQL then back inside)')
+    try:
+        import ict_engine as ict
+        eq = [{'type': 'equal_high', 'price_avg': 1000.6, 'price_range': 1.2,
+               'swing_count': 2, 'formed_at': 200, 'status': 'INTACT'}]
+        bars = []
+        ts = 300
+        for (o, h, l, c) in [(999,1000,998,999), (999,1005,998,1004), (1004,1006,995,997)]:
+            bars.append({'ts': ts, 'open': o, 'high': h, 'low': l, 'close': c, 'volume': 100})
+            ts += 60
+        sweeps = ict.detect_liquidity_sweep(bars, eq, lookback=5)
+        if len(sweeps) == 1 and sweeps[0]['type'] == 'buy_side_swept':
+            _pass('TEST ICT8  buy_side_swept detected on breach + reclaim', '')
+        else:
+            _fail('TEST ICT8  buy_side_swept detected on breach + reclaim', f'{sweeps}')
+        status = ict.resolve_eql_status(eq[0], bars, lookback=5)
+        if status == 'SWEPT':
+            _pass('TEST ICT8  resolve_eql_status -> SWEPT', '')
+        else:
+            _fail('TEST ICT8  resolve_eql_status -> SWEPT', f'{status}')
+        # breach with no reclaim within lookback -> no sweep event, PARTIAL status
+        bars_no_reclaim = bars[:2]  # breach only, no reclaim bar
+        sweeps_nr = ict.detect_liquidity_sweep(bars_no_reclaim, eq, lookback=5)
+        if not sweeps_nr:
+            _pass('TEST ICT8  breach without reclaim does not fire a sweep', '')
+        else:
+            _fail('TEST ICT8  breach without reclaim does not fire a sweep', f'{sweeps_nr}')
+    except Exception as e:
+        _fail('TEST ICT8', f'{type(e).__name__}: {e}')
+
+
+def test_ict9_ote_calculation():
+    """Known impulse leg (95 -> 120) produces the exact 0.618/0.786 retracement levels."""
+    _section('TEST ICT9 — OTE calculation (known impulse leg)')
+    try:
+        import ict_engine as ict
+        spec = [
+            (100,101,99,100), (100,103,100,102), (102,110,101,103), (103,106,102,104),
+            (104,105,96,97), (97,99,95,96), (96,100,98,99), (99,101,97,98),
+            (98,120,97,119), (119,119,110,111), (111,112,105,106), (106,109,101,102),
+            (102,108,103,105), (105,109,104,107),
+        ]
+        bars = _ict_mkbars(spec)
+        swings = ict.detect_swings(bars, '5min')
+        ote = ict.detect_ote_zones(swings, [], bars)
+        expected_618 = 120 - 0.618 * (120 - 95)
+        expected_786 = 120 - 0.786 * (120 - 95)
+        if ote and ote[0]['direction'] == 'bullish':
+            _pass('TEST ICT9  direction bullish (matches the BOS/CHoCH direction)', '')
+        else:
+            _fail('TEST ICT9  direction bullish (matches the BOS/CHoCH direction)', f'{ote}')
+        if ote and abs(ote[0]['fib_618'] - expected_618) < 0.01:
+            _pass('TEST ICT9  fib_618 matches hand calc', f"{ote[0]['fib_618']} == {expected_618}")
+        else:
+            _fail('TEST ICT9  fib_618 matches hand calc', f'{ote}')
+        if ote and abs(ote[0]['fib_786'] - expected_786) < 0.01:
+            _pass('TEST ICT9  fib_786 matches hand calc', f"{ote[0]['fib_786']} == {expected_786}")
+        else:
+            _fail('TEST ICT9  fib_786 matches hand calc', f'{ote}')
+    except Exception as e:
+        _fail('TEST ICT9', f'{type(e).__name__}: {e}')
+
+
+def test_ict10_killzone():
+    """Known UTC times map to the exact killzone windows from the brief."""
+    _section('TEST ICT10 — killzone classification (known UTC times)')
+    try:
+        import ict_engine as ict
+        cases = [
+            ((14, 0), 'NY Open', True), ((21, 30), 'Asian', True),
+            ((8, 0), 'London Open', True), ((19, 30), 'NY Close', True),
+            ((5, 0), 'Between killzones', False), ((0, 30), 'Asian', True),
+        ]
+        for (h, m), exp_name, exp_active in cases:
+            kz = ict.classify_killzone(h, m)
+            if kz['name'] == exp_name and kz['active'] == exp_active:
+                _pass(f'TEST ICT10  {h:02d}:{m:02d} UTC -> {exp_name}', '')
+            else:
+                _fail(f'TEST ICT10  {h:02d}:{m:02d} UTC -> {exp_name}', f'got {kz}')
+    except Exception as e:
+        _fail('TEST ICT10', f'{type(e).__name__}: {e}')
+
+
+def test_ict11_setup_score():
+    """A known full-signal combination scores exactly per the brief's point values (max 27)."""
+    _section('TEST ICT11 — setup score (known combination of signals)')
+    try:
+        import ict_engine as ict
+        active_setups = {
+            'ote_zones': [{'direction': 'bullish', 'active': True}],
+            'fvgs': [{'type': 'bullish', 'status': 'FRESH'}],
+            'obs': [{'type': 'bullish', 'status': 'ACTIVE'}],
+            'sweeps': [{'type': 'buy_side_swept'}],
+            'choch_5m': {'type': 'bullish'}, 'choch_15m': None,
+            'power_of_three': {'phase': 'manipulation'},
+            'killzone': {'name': 'NY Open', 'active': True},
+            'inducement_swept': True, 'htf_bias': 'bullish',
+        }
+        s4h = s1h = s15m = s5m = s1m = {'structure': 'BULLISH'}
+        result = ict.score_ict_setup(s1m, s5m, s15m, s1h, s4h, active_setups)
+        # 3(htf)+4(ote)+3(fvg)+3(ob)+4(sweep)+3(choch)+2(po3)+2(ny)+0(london)+2(inducement) = 26
+        if result['score'] == 26:
+            _pass('TEST ICT11  full-signal combination scores 26/27', '')
+        else:
+            _fail('TEST ICT11  full-signal combination scores 26/27', f"got {result['score']}")
+        if result['tier'] == 'VERY HIGH':
+            _pass('TEST ICT11  26 >= VERY_HIGH_THRESHOLD -> tier VERY HIGH', '')
+        else:
+            _fail('TEST ICT11  26 >= VERY_HIGH_THRESHOLD -> tier VERY HIGH', f"{result['tier']}")
+        # zero-signal case must score 0 and have no tier
+        empty = ict.score_ict_setup({'structure': None}, {'structure': None}, {'structure': None},
+                                     {'structure': None}, {'structure': None}, {})
+        if empty['score'] == 0 and empty['tier'] is None:
+            _pass('TEST ICT11  zero-signal combination scores 0, no tier', '')
+        else:
+            _fail('TEST ICT11  zero-signal combination scores 0, no tier', f'{empty}')
+        if ict.MAX_SCORE == 27:
+            _pass('TEST ICT11  MAX_SCORE constant is 27 (matches the brief)', '')
+        else:
+            _fail('TEST ICT11  MAX_SCORE constant is 27 (matches the brief)', f'{ict.MAX_SCORE}')
+    except Exception as e:
+        _fail('TEST ICT11', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
+#  ICT endpoints, tables, scheduler integration
+# ─────────────────────────────────────────────────────────────
+
+def test_ict_endpoints():
+    """All three /api/ict/* endpoints return the documented response shape."""
+    _section('TEST ICT-ENDPOINTS — /api/ict/analysis, /alerts, /levels')
+    try:
+        analysis = _api('/api/ict/analysis?symbol=ES', timeout=45)
+        if analysis is None:
+            _fail('TEST ICT-EP  /api/ict/analysis reachable', 'No response')
+        else:
+            required = {'symbol', 'timestamp', 'structure', 'active_fvgs', 'active_obs',
+                        'equal_levels', 'recent_sweeps', 'ote_zones', 'killzone',
+                        'power_of_three', 'opening_range', 'setup_score', 'narrative'}
+            missing = required - set(analysis.keys())
+            if not missing:
+                _pass('TEST ICT-EP  /api/ict/analysis has all documented keys', '')
+            else:
+                _fail('TEST ICT-EP  /api/ict/analysis has all documented keys', f'missing {missing}')
+            struct_keys = set(analysis.get('structure', {}).keys())
+            if struct_keys == {'1m', '5m', '15m', '1h', '4h'}:
+                _pass('TEST ICT-EP  structure has all 5 timeframes', '')
+            else:
+                _fail('TEST ICT-EP  structure has all 5 timeframes', f'{struct_keys}')
+            if isinstance(analysis.get('setup_score'), int) and 0 <= analysis['setup_score'] <= 27:
+                _pass('TEST ICT-EP  setup_score is an int in [0,27]', f"{analysis['setup_score']}")
+            else:
+                _fail('TEST ICT-EP  setup_score is an int in [0,27]', f"{analysis.get('setup_score')}")
+    except Exception as e:
+        _fail('TEST ICT-EP analysis', f'{type(e).__name__}: {e}')
+
+    try:
+        alerts = _api('/api/ict/alerts?symbol=ES&limit=5', timeout=20)
+        if alerts is None:
+            _fail('TEST ICT-EP  /api/ict/alerts reachable', 'No response')
+        elif alerts.get('ok') and isinstance(alerts.get('alerts'), list):
+            _pass('TEST ICT-EP  /api/ict/alerts returns ok + list', f"{len(alerts['alerts'])} alerts")
+        else:
+            _fail('TEST ICT-EP  /api/ict/alerts returns ok + list', f'{alerts}')
+    except Exception as e:
+        _fail('TEST ICT-EP alerts', f'{type(e).__name__}: {e}')
+
+    try:
+        levels = _api('/api/ict/levels?symbol=ES&timeframe=5m', timeout=30)
+        if levels is None:
+            _fail('TEST ICT-EP  /api/ict/levels reachable', 'No response')
+        elif levels.get('ok'):
+            required_lv = {'swings', 'structure', 'bos', 'choch', 'fvgs', 'obs',
+                            'equal_levels', 'sweeps', 'inducement', 'ote_zones'}
+            missing_lv = required_lv - set(levels.keys())
+            if not missing_lv:
+                _pass('TEST ICT-EP  /api/ict/levels has all documented keys', '')
+            else:
+                _fail('TEST ICT-EP  /api/ict/levels has all documented keys', f'missing {missing_lv}')
+        else:
+            _pass('TEST ICT-EP  /api/ict/levels responds (graceful ok=False)', f'{levels}')
+    except Exception as e:
+        _fail('TEST ICT-EP levels', f'{type(e).__name__}: {e}')
+
+
+def test_ict_tables():
+    """_ensure_ict_tables() creates all 8 ict_* tables without raising, idempotently."""
+    _section('TEST ICT-TABLES — all eight tables created correctly')
+    try:
+        import ict_store as store
+        store._ensure_ict_tables()
+        store._ensure_ict_tables()   # second call must be a no-op, not an error
+        conn = store._db.connect()
+        checks = [
+            ('ict_swings', 'symbol, timeframe, swing_type, price, timestamp, confirmed'),
+            ('ict_market_structure', 'symbol, timeframe, structure, last_hh, last_hl, last_lh, last_ll'),
+            ('ict_fvgs', 'symbol, timeframe, type, zone_high, zone_low, formed_at, status, mitigation_pct'),
+            ('ict_order_blocks', 'symbol, timeframe, type, zone_high, zone_low, formed_at, status, impulse_size'),
+            ('ict_equal_levels', 'symbol, timeframe, type, price_avg, price_range, swing_count, formed_at, status'),
+            ('ict_sweeps', 'symbol, timeframe, type, level, timestamp, close_back_bar'),
+            ('ict_ote_zones', 'symbol, timeframe, direction, fib_618, fib_786, zone_high, zone_low, confluence_level, active, formed_at'),
+            ('ict_alerts', 'symbol, timeframe, alert_type, description, score, timestamp, sent_telegram'),
+        ]
+        for table, cols in checks:
+            try:
+                conn.execute(f'SELECT {cols} FROM {table} LIMIT 1')
+                _pass(f'TEST ICT-TABLES  {table} exists with expected columns', '')
+            except Exception as te:
+                _fail(f'TEST ICT-TABLES  {table} exists with expected columns', f'{te}')
+        conn.close()
+    except Exception as e:
+        _fail('TEST ICT-TABLES', f'{type(e).__name__}: {e}')
+
+
+def test_scheduler_integration():
+    """run_ict_analysis() completes without error against real production OHLCV data.
+    Skips gracefully (not a hard fail) when no DATABASE_URL is available locally —
+    mirrors the NEW8/D4 idiom for tests that need real Railway Postgres data."""
+    _section('TEST SCHEDULER-INTEGRATION — run_ict_analysis() on real production data')
+    import os as _os_ict
+    if not _os_ict.environ.get('DATABASE_URL'):
+        _pass('TEST SCHEDULER-INTEGRATION  skip (no local DATABASE_URL)', '')
+        return
+    try:
+        import ict_store as store
+        report = store.run_ict_analysis()
+        if isinstance(report, dict) and set(report.keys()) <= set(store.SYMBOLS):
+            _pass('TEST SCHEDULER-INTEGRATION  run_ict_analysis() completes without error', f'{report}')
+        else:
+            _fail('TEST SCHEDULER-INTEGRATION  run_ict_analysis() completes without error', f'{report}')
+    except Exception as e:
+        _fail('TEST SCHEDULER-INTEGRATION', f'{type(e).__name__}: {e}')
+
+
+# ─────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────
 
@@ -3723,6 +4180,22 @@ if __name__ == '__main__':
     test_mriapi11_daily_report_generate_endpoint()
     test_mriapi12_daily_report_get_endpoint()
     test_mriapi13_daily_report_pdf_endpoint()
+
+    # ICT Analysis Engine tests (ICT1–ICT11 + endpoints/tables/integration)
+    test_ict1_swing_detection()
+    test_ict2_bos_detection()
+    test_ict3_choch_detection()
+    test_ict4_fvg_detection()
+    test_ict5_fvg_status_update()
+    test_ict6_ob_detection()
+    test_ict7_eql_detection()
+    test_ict8_sweep_detection()
+    test_ict9_ote_calculation()
+    test_ict10_killzone()
+    test_ict11_setup_score()
+    test_ict_endpoints()
+    test_ict_tables()
+    test_scheduler_integration()
 
     _cleanup()
     _print_results()

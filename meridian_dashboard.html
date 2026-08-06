@@ -410,6 +410,81 @@
   .wa-scenario.bullish { border-left: 3px solid var(--bullish); }
   .wa-scenario.bearish { border-left: 3px solid var(--bearish); }
   .wa-scenario strong  { font-size: 0.75rem; display: block; margin-bottom: 3px; }
+
+  /* ── Section 7: ICT Analysis ──────────────────────────────────────── */
+  .ict-topbar { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; margin-top: 4px; }
+  .ict-kz-indicator {
+    padding: 10px 16px; border-radius: 10px; min-width: 140px;
+    background: rgba(142,155,174,0.10); border: 1px solid var(--border);
+  }
+  .ict-kz-indicator.active { background: rgba(27,127,79,0.12); border-color: rgba(27,127,79,0.4); }
+  .ict-kz-name { font-size: 1.1rem; font-weight: 750; margin-top: 2px; }
+  .ict-kz-remaining { font-size: 0.7rem; color: var(--text-secondary); margin-top: 2px; }
+
+  .ict-score-block { min-width: 170px; }
+  .ict-gauge-track {
+    position: relative; height: 14px; border-radius: 7px; margin-top: 6px;
+    background: rgba(142,155,174,0.18); overflow: hidden;
+  }
+  .ict-gauge-fill { height: 100%; border-radius: 7px; transition: width 0.4s ease; }
+  .ict-gauge-label { font-size: 0.95rem; font-weight: 700; margin-top: 4px; }
+
+  .ict-po3-block { display: flex; flex-direction: column; gap: 6px; min-width: 150px; }
+  .ict-po3-badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+    border-radius: 7px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.03em; background: rgba(142,155,174,0.15); color: var(--text-secondary); width: fit-content;
+  }
+  .ict-po3-badge.accumulation { background: rgba(142,155,174,0.2); color: var(--text-secondary); }
+  .ict-po3-badge.manipulation { background: rgba(183,121,31,0.18); color: var(--amber); }
+  .ict-po3-badge.distribution { background: rgba(26,86,219,0.14); color: var(--highlight); }
+  .ict-po3-badge.unclear      { background: rgba(142,155,174,0.15); color: var(--text-secondary); }
+
+  .ict-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; margin-top: 20px; align-items: start; }
+  @media (max-width: 1100px) { .ict-layout { grid-template-columns: 1fr; } }
+  .ict-main-col { min-width: 0; }
+  .ict-side-col { display: flex; flex-direction: column; gap: 20px; }
+
+  .ict-structure-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .structure-badge {
+    display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
+    border-radius: 7px; font-size: 0.7rem; font-weight: 700; background: rgba(142,155,174,0.15);
+  }
+  .structure-badge .tf-tag { opacity: 0.7; font-weight: 600; }
+  .structure-badge.bullish { background: rgba(27,127,79,0.14); color: var(--bullish); }
+  .structure-badge.bearish { background: rgba(176,58,46,0.14); color: var(--bearish); }
+  .structure-badge.ranging { background: rgba(183,121,31,0.14); color: var(--amber); }
+  .structure-badge.choch   { background: rgba(107,70,168,0.16); color: var(--purple); }
+
+  .ict-narrative-body { font-size: 0.85rem; line-height: 1.6; color: var(--text-primary); }
+  .ict-alert-item { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.76rem; }
+  .ict-alert-item:last-child { border-bottom: none; }
+  .ict-alert-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+  .ict-alert-score { font-weight: 700; }
+  .ict-alert-outcome { font-size: 0.65rem; padding: 1px 6px; border-radius: 5px; font-weight: 700; }
+  .ict-alert-outcome.valid   { background: rgba(27,127,79,0.14); color: var(--bullish); }
+  .ict-alert-outcome.invalid { background: rgba(176,58,46,0.14); color: var(--bearish); }
+  .ict-alert-outcome.pending { background: rgba(142,155,174,0.15); color: var(--text-secondary); }
+
+  .ict-or-row { display: flex; justify-content: space-between; font-size: 0.82rem; padding: 5px 0; }
+  .ict-or-row .lbl { color: var(--text-secondary); }
+  .ict-or-row .val { font-weight: 700; }
+
+  /* ICT chart overlay extras: swing triangles, BOS/CHoCH markers, sweeps */
+  .ict-swing-marker { position: absolute; font-size: 10px; line-height: 1; pointer-events: none; transform: translate(-50%, -50%); }
+  .ict-swing-marker.high { color: var(--bearish); }
+  .ict-swing-marker.low  { color: var(--bullish); }
+  .ict-break-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed; pointer-events: none; }
+  .ict-break-label {
+    position: absolute; top: 4px; transform: translateX(-50%); font-size: 0.58rem; font-weight: 700;
+    padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,0.85); white-space: nowrap;
+  }
+  .ict-sweep-marker { position: absolute; font-size: 12px; transform: translate(-50%, -100%); pointer-events: none; }
+  .ict-ote-zone { position: absolute; background: rgba(107,70,168,0.18); pointer-events: none; }
+  .ict-ote-label {
+    position: absolute; left: 6px; top: 2px; font-size: 0.6rem; font-weight: 700; color: var(--purple);
+    text-transform: uppercase; letter-spacing: 0.02em;
+  }
 </style>
 </head>
 <body>
@@ -425,6 +500,7 @@
     <a class="nav-item" href="#sec-macro"><span class="nav-icon">&#9729;</span> Macro</a>
     <a class="nav-item" href="#sec-news"><span class="nav-icon">&#9993;</span> News</a>
     <a class="nav-item" href="#sec-mtf"><span class="nav-icon">&#9638;</span> MTF Trend</a>
+    <a class="nav-item" href="#sec-ict"><span class="nav-icon">&#127919;</span> ICT Analysis</a>
 
     <div class="sidebar-spacer"></div>
 
@@ -624,6 +700,103 @@
           <span class="live-badge" id="mtf-live"><span class="ring"></span>LIVE</span>
         </div>
         <div id="mtf-body"><div class="empty-state">Loading MTF table…</div></div>
+      </div>
+    </div>
+
+    <!-- SECTION 7 — ICT ANALYSIS -->
+    <div class="grid" id="sec-ict">
+      <div class="card" id="ict-topbar-card">
+        <div class="card-header">
+          <span class="card-title">ICT Analysis</span>
+          <span class="live-badge" id="ict-live"><span class="ring"></span>LIVE</span>
+        </div>
+        <div class="ict-topbar">
+          <div class="ict-kz-indicator" id="ict-kz-indicator">
+            <div class="eyebrow" style="margin:0;">Killzone</div>
+            <div class="ict-kz-name" id="ict-kz-name">—</div>
+            <div class="ict-kz-remaining" id="ict-kz-remaining"></div>
+          </div>
+          <div class="ict-score-block">
+            <div class="eyebrow" style="margin:0;">ES Setup Score</div>
+            <div class="ict-gauge-track"><div class="ict-gauge-fill" id="ict-gauge-fill-ES" style="width:0%; background:var(--neutral);"></div></div>
+            <div class="ict-gauge-label" id="ict-gauge-label-ES">—/27</div>
+          </div>
+          <div class="ict-score-block">
+            <div class="eyebrow" style="margin:0;">MNQ Setup Score</div>
+            <div class="ict-gauge-track"><div class="ict-gauge-fill" id="ict-gauge-fill-MNQ" style="width:0%; background:var(--neutral);"></div></div>
+            <div class="ict-gauge-label" id="ict-gauge-label-MNQ">—/27</div>
+          </div>
+          <div class="ict-po3-block">
+            <div class="eyebrow" style="margin:0;">Power of Three</div>
+            <span class="ict-po3-badge" id="ict-po3-ES">ES —</span>
+            <span class="ict-po3-badge" id="ict-po3-MNQ">MNQ —</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ict-layout">
+        <div class="ict-main-col">
+          <div class="chart-row">
+            <div class="chart-col" id="ict-chart-col-ES">
+              <div class="chart-col-header">
+                <div class="chart-col-title">ES <span class="delayed-badge">15-min delayed</span></div>
+                <div class="chart-col-actions">
+                  <a class="btn-ghost" href="https://www.tradingview.com/chart/?symbol=CME_MINI%3AES1%21" target="_blank" rel="noopener">Open in TradingView ↗</a>
+                </div>
+              </div>
+              <div class="tf-switcher" id="ict-tf-switcher-ES">
+                <button class="tf-btn" data-tf="1m" onclick="selectICTTimeframe('ES','1m')">1M</button>
+                <button class="tf-btn active" data-tf="5m" onclick="selectICTTimeframe('ES','5m')">5M</button>
+                <button class="tf-btn" data-tf="15m" onclick="selectICTTimeframe('ES','15m')">15M</button>
+                <button class="tf-btn" data-tf="1h" onclick="selectICTTimeframe('ES','1h')">1H</button>
+                <button class="tf-btn" data-tf="4h" onclick="selectICTTimeframe('ES','4h')">4H</button>
+              </div>
+              <div class="chart-canvas-wrap">
+                <div class="chart-container" id="ict-chart-ES"></div>
+                <div class="ict-overlay" id="ict-chart-overlay-ES"></div>
+              </div>
+              <div class="ict-structure-row" id="ict-structure-ES"></div>
+            </div>
+            <div class="chart-col" id="ict-chart-col-MNQ">
+              <div class="chart-col-header">
+                <div class="chart-col-title">MNQ <span class="delayed-badge">15-min delayed</span></div>
+                <div class="chart-col-actions">
+                  <a class="btn-ghost" href="https://www.tradingview.com/chart/?symbol=CME_MINI%3ANQ1%21" target="_blank" rel="noopener">Open in TradingView ↗</a>
+                </div>
+              </div>
+              <div class="tf-switcher" id="ict-tf-switcher-MNQ">
+                <button class="tf-btn" data-tf="1m" onclick="selectICTTimeframe('MNQ','1m')">1M</button>
+                <button class="tf-btn active" data-tf="5m" onclick="selectICTTimeframe('MNQ','5m')">5M</button>
+                <button class="tf-btn" data-tf="15m" onclick="selectICTTimeframe('MNQ','15m')">15M</button>
+                <button class="tf-btn" data-tf="1h" onclick="selectICTTimeframe('MNQ','1h')">1H</button>
+                <button class="tf-btn" data-tf="4h" onclick="selectICTTimeframe('MNQ','4h')">4H</button>
+              </div>
+              <div class="chart-canvas-wrap">
+                <div class="chart-container" id="ict-chart-MNQ"></div>
+                <div class="ict-overlay" id="ict-chart-overlay-MNQ"></div>
+              </div>
+              <div class="ict-structure-row" id="ict-structure-MNQ"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ict-side-col">
+          <div class="card" id="ict-narrative-card">
+            <div class="card-header">
+              <span class="card-title">ICT Narrative</span>
+              <span class="eyebrow" id="ict-narrative-meta" style="margin:0;">—</span>
+            </div>
+            <div class="ict-narrative-body" id="ict-narrative-body">Loading…</div>
+          </div>
+          <div class="card" id="ict-alerts-card">
+            <div class="card-header"><span class="card-title">Recent Alerts</span></div>
+            <div id="ict-alerts-body"><div class="empty-state">Loading…</div></div>
+          </div>
+          <div class="card" id="ict-or-card">
+            <div class="card-header"><span class="card-title">Opening Range — ES / MNQ</span></div>
+            <div id="ict-or-body"><div class="empty-state">Loading…</div></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1539,10 +1712,350 @@ async function refreshStatus() {
   }
 }
 
+/* ── Section 7: ICT Analysis ──────────────────────────────────────────
+   Reuses the DOM-overlay-synced-via-priceToCoordinate technique from the
+   Section 3 chart redesign, extended with time-coordinate placement for
+   swing triangles, BOS/CHoCH break lines, sweep markers and OTE zones —
+   elements tied to a specific candle, not just a price. Separate chart
+   instances (_ictCharts) from Section 3's (_charts), since this page's
+   overlay set is materially richer and driven by /api/ict/analysis. ── */
+const _ictCharts = {};
+let _ictChartTf = { ES: '5m', MNQ: '5m' };
+let _ictLastAnalysis = { ES: null, MNQ: null };
+
+function initICTCharts() {
+  if (typeof LightweightCharts === 'undefined') return;
+  ['ES', 'MNQ'].forEach(sym => {
+    const container = document.getElementById('ict-chart-' + sym);
+    if (!container) return;
+    const chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 450,
+      layout: { background: { color: 'transparent' }, textColor: '#6B7A8D', fontSize: 11 },
+      grid: { vertLines: { color: 'rgba(0,0,0,0.04)' }, horzLines: { color: 'rgba(0,0,0,0.04)' } },
+      rightPriceScale: { borderColor: 'rgba(0,0,0,0.08)' },
+      timeScale: { borderColor: 'rgba(0,0,0,0.08)', timeVisible: true, secondsVisible: false },
+    });
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#1B7F4F', downColor: '#B03A2E', borderVisible: false,
+      wickUpColor: '#1B7F4F', wickDownColor: '#B03A2E',
+    });
+    const overlayEl = document.getElementById('ict-chart-overlay-' + sym);
+    _ictCharts[sym] = { chart, candleSeries, overlayEl };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => renderICTOverlay(sym));
+    window.addEventListener('resize', () => {
+      chart.applyOptions({ width: container.clientWidth, height: 450 });
+      renderICTOverlay(sym);
+    });
+  });
+}
+
+function selectICTTimeframe(sym, tf) {
+  _ictChartTf[sym] = tf;
+  document.querySelectorAll(`#ict-tf-switcher-${sym} .tf-btn`).forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tf === tf);
+  });
+  refreshICTChartBars(sym);
+}
+
+async function refreshICTChartBars(sym) {
+  const state = _ictCharts[sym];
+  if (!state) return;
+  const tf = _ictChartTf[sym] || '5m';
+  const bars = await fetchBarsForTimeframe(sym, tf);
+  if (!bars || !bars.length) return;
+  state.candleSeries.setData(bars);
+  const barsPerSession = TF_BARS_PER_SESSION[tf] || 72;
+  const visibleCount = Math.min(bars.length, Math.max(barsPerSession * 2, 10));
+  state.chart.timeScale().setVisibleRange({
+    from: bars[bars.length - visibleCount].time,
+    to: bars[bars.length - 1].time,
+  });
+  renderICTOverlay(sym);
+}
+
+function _ictPriceY(state, price) {
+  if (price == null) return null;
+  try { return state.candleSeries.priceToCoordinate(price); } catch (e) { return null; }
+}
+function _ictTimeX(state, ts) {
+  try { return state.chart.timeScale().timeToCoordinate(ts); } catch (e) { return null; }
+}
+
+function _ictDrawZone(overlay, state, W, lvl, kind) {
+  const yTop = _ictPriceY(state, lvl.zone_high);
+  const yBot = _ictPriceY(state, lvl.zone_low);
+  if (yTop == null || yBot == null) return;
+  const top = Math.min(yTop, yBot);
+  const height = Math.max(3, Math.abs(yBot - yTop));
+  const bull = lvl.type === 'bullish';
+  const active = kind === 'fvg' ? (lvl.status === 'FRESH') : (lvl.status === 'ACTIVE' || lvl.status === 'TESTED');
+  let rgb, opacity, borderLeft = '';
+  if (kind === 'fvg') {
+    rgb = bull ? '26,86,219' : '217,119,6';
+    opacity = lvl.status === 'FRESH' ? 0.25 : 0.15;
+  } else {
+    rgb = bull ? '27,127,79' : '176,58,46';
+    opacity = lvl.status === 'ACTIVE' ? 0.30 : 0.15;
+    if (lvl.status === 'ACTIVE') borderLeft = `border-left:2px solid rgb(${rgb});`;
+  }
+  const div = document.createElement('div');
+  div.className = 'ict-zone';
+  div.title = `${lvl.type} ${kind.toUpperCase()} · ${lvl.status} · ${fmtNum(lvl.zone_low)}-${fmtNum(lvl.zone_high)}`;
+  div.style.cssText = `top:${top}px;height:${height}px;width:${W}px;background:rgba(${rgb},${opacity});${borderLeft}pointer-events:auto;cursor:help;`;
+  const lbl = document.createElement('span');
+  lbl.className = 'ict-zone-label';
+  lbl.style.color = `rgb(${rgb})`;
+  lbl.textContent = (kind === 'fvg' ? 'FVG ' : 'OB ') + lvl.status;
+  div.appendChild(lbl);
+  overlay.appendChild(div);
+}
+
+function _ictDrawOTE(overlay, state, W, ote) {
+  const yTop = _ictPriceY(state, ote.ote_zone_high);
+  const yBot = _ictPriceY(state, ote.ote_zone_low);
+  if (yTop == null || yBot == null) return;
+  const top = Math.min(yTop, yBot);
+  const height = Math.max(3, Math.abs(yBot - yTop));
+  const div = document.createElement('div');
+  div.className = 'ict-ote-zone';
+  div.title = `OTE ${ote.direction} · confluence: ${ote.confluence_level} · ${fmtNum(ote.ote_zone_low)}-${fmtNum(ote.ote_zone_high)}`;
+  div.style.cssText = `top:${top}px;height:${height}px;width:${W}px;pointer-events:auto;cursor:help;`;
+  const lbl = document.createElement('span');
+  lbl.className = 'ict-ote-label';
+  lbl.textContent = `OTE ${ote.direction} (${ote.confluence_level})`;
+  div.appendChild(lbl);
+  overlay.appendChild(div);
+}
+
+function _ictDrawEQLine(overlay, W, y, price, type) {
+  const div = document.createElement('div');
+  div.className = 'ict-hline';
+  div.style.cssText = `top:${y}px;width:${W}px;border-top:1.5px dashed #B7791F;`;
+  overlay.appendChild(div);
+  const badge = document.createElement('div');
+  badge.className = 'ict-badge';
+  badge.style.cssText = `top:${y}px;border-color:#B7791F;color:#B7791F;`;
+  badge.textContent = `${type === 'equal_high' ? 'EQH' : 'EQL'} ${fmtNum(price)}`;
+  overlay.appendChild(badge);
+}
+
+function _ictDrawSwing(overlay, state, ts, price, type) {
+  const x = _ictTimeX(state, ts);
+  const y = _ictPriceY(state, price);
+  if (x == null || y == null) return;
+  const div = document.createElement('div');
+  div.className = 'ict-swing-marker ' + type;
+  div.style.left = x + 'px';
+  div.style.top = (type === 'high' ? y - 10 : y + 10) + 'px';
+  div.textContent = type === 'high' ? '▲' : '▼';
+  overlay.appendChild(div);
+}
+
+function _ictDrawBreak(overlay, state, H, brk) {
+  const x = _ictTimeX(state, brk.break_candle_timestamp);
+  if (x == null) return;
+  const isChoch = brk.significance === 'choch';
+  const color = isChoch ? '#6B46A8' : (brk.type === 'bullish' ? '#1B7F4F' : '#B03A2E');
+  const line = document.createElement('div');
+  line.className = 'ict-break-line';
+  line.style.cssText = `left:${x}px;height:${H}px;border-color:${color};`;
+  overlay.appendChild(line);
+  const label = document.createElement('div');
+  label.className = 'ict-break-label';
+  label.style.cssText = `left:${x}px;color:${color};`;
+  label.textContent = isChoch ? 'CHoCH' : 'BOS';
+  overlay.appendChild(label);
+}
+
+function _ictDrawSweep(overlay, state, sweep) {
+  const x = _ictTimeX(state, sweep.close_back_inside_bar);
+  const price = sweep.type === 'buy_side_swept' ? sweep.sweep_high : sweep.sweep_low;
+  const y = _ictPriceY(state, price);
+  if (x == null || y == null) return;
+  const div = document.createElement('div');
+  div.className = 'ict-sweep-marker';
+  div.style.left = x + 'px';
+  div.style.top = y + 'px';
+  div.title = `${sweep.type} @ ${fmtNum(sweep.level)}`;
+  div.textContent = '⚡';
+  overlay.appendChild(div);
+}
+
+function renderICTOverlay(sym) {
+  const state = _ictCharts[sym];
+  if (!state || !state.overlayEl) return;
+  const overlay = state.overlayEl;
+  overlay.innerHTML = '';
+
+  const data = _ictLastAnalysis[sym];
+  if (!data) return;
+  const tfLabel = _ictChartTf[sym] || '5m';
+
+  const container = document.getElementById('ict-chart-' + sym);
+  if (!container) return;
+  let axisW = 58;
+  try { axisW = state.chart.priceScale('right').width() || 58; } catch (e) {}
+  const W = Math.max(0, container.clientWidth - axisW);
+  const H = container.clientHeight;
+  overlay.style.width = W + 'px';
+
+  // FVG / OB zones + OTE — only the levels detected on the currently
+  // displayed timeframe, so a 1M FVG doesn't span the width of a 4H chart.
+  (data.active_fvgs || []).filter(f => f.timeframe === tfLabel).forEach(f => _ictDrawZone(overlay, state, W, f, 'fvg'));
+  (data.active_obs || []).filter(o => o.timeframe === tfLabel).forEach(o => _ictDrawZone(overlay, state, W, o, 'ob'));
+  ((data.ote_by_tf || {})[tfLabel] || []).forEach(o => _ictDrawOTE(overlay, state, W, o));
+
+  // Equal highs/lows for this timeframe
+  (data.equal_levels || []).filter(e => e.timeframe === tfLabel).forEach(e => {
+    const y = _ictPriceY(state, e.price_avg);
+    if (y != null) _ictDrawEQLine(overlay, W, y, e.price_avg, e.type);
+  });
+
+  // Swing triangles
+  ((data.swings_by_tf || {})[tfLabel] || []).forEach(s => _ictDrawSwing(overlay, state, s.timestamp, s.price, s.type));
+
+  // BOS / CHoCH vertical markers
+  ((data.bos_by_tf || {})[tfLabel] || []).forEach(b => _ictDrawBreak(overlay, state, H, b));
+  ((data.choch_by_tf || {})[tfLabel] || []).forEach(c => _ictDrawBreak(overlay, state, H, c));
+
+  // Recent sweeps (lightning bolt)
+  (data.recent_sweeps || []).filter(s => s.timeframe === tfLabel).forEach(s => _ictDrawSweep(overlay, state, s));
+
+  // Opening range (ES/MNQ 5M/1M only — matches detect_opening_range's own scope)
+  if (data.opening_range && data.opening_range.orh != null && (tfLabel === '5m' || tfLabel === '1m')) {
+    const yTop = _ictPriceY(state, data.opening_range.orh);
+    const yBot = _ictPriceY(state, data.opening_range.orl);
+    if (yTop != null) {
+      const l1 = document.createElement('div');
+      l1.className = 'ict-hline';
+      l1.style.cssText = `top:${yTop}px;width:${W}px;border-top:1.5px dotted #8E9BAE;`;
+      overlay.appendChild(l1);
+    }
+    if (yBot != null) {
+      const l2 = document.createElement('div');
+      l2.className = 'ict-hline';
+      l2.style.cssText = `top:${yBot}px;width:${W}px;border-top:1.5px dotted #8E9BAE;`;
+      overlay.appendChild(l2);
+    }
+  }
+}
+
+const STRUCTURE_TF_ORDER = ['4h', '1h', '15m', '5m', '1m'];
+function renderICTStructureRow(sym, data) {
+  const el = document.getElementById('ict-structure-' + sym);
+  if (!el) return;
+  const chochTfs = new Set();
+  if ((data.choch_by_tf && data.choch_by_tf['5m'] || []).length) chochTfs.add('5m');
+  if ((data.choch_by_tf && data.choch_by_tf['15m'] || []).length) chochTfs.add('15m');
+  el.innerHTML = STRUCTURE_TF_ORDER.map(tf => {
+    const structure = (data.structure || {})[tf];
+    const hasChoch = chochTfs.has(tf);
+    const cls = hasChoch ? 'choch' : (structure === 'BULLISH' ? 'bullish' : structure === 'BEARISH' ? 'bearish' : 'ranging');
+    const label = hasChoch ? `${structure || '—'} CHoCH` : (structure || '—');
+    return `<span class="structure-badge ${cls}"><span class="tf-tag">${tf.toUpperCase()}</span> ${label}</span>`;
+  }).join('');
+}
+
+function renderICTGauge(sym, score, tier) {
+  const pct = Math.max(0, Math.min(100, (score / 27) * 100));
+  const color = tier === 'VERY HIGH' ? 'var(--bullish)' : tier === 'HIGH' ? 'var(--highlight)' : 'var(--neutral)';
+  const fill = document.getElementById('ict-gauge-fill-' + sym);
+  const label = document.getElementById('ict-gauge-label-' + sym);
+  if (fill) { fill.style.width = pct + '%'; fill.style.background = color; }
+  if (label) label.textContent = `${score}/27${tier ? ' · ' + tier : ''}`;
+}
+
+function renderICTPO3(sym, po3) {
+  const el = document.getElementById('ict-po3-' + sym);
+  if (!el) return;
+  const phase = (po3 && po3.phase) || 'unclear';
+  el.className = 'ict-po3-badge ' + phase;
+  el.textContent = `${sym} ${phase}${po3 && po3.direction_bias && po3.direction_bias !== 'neutral' ? ' (' + po3.direction_bias + ')' : ''}`;
+}
+
+function renderICTOpeningRangePanel(esData, mnqData) {
+  const el = document.getElementById('ict-or-body');
+  if (!el) return;
+  const row = (sym, data) => {
+    const or_ = data && data.opening_range;
+    if (!or_ || or_.orh == null) return `<div class="ict-or-row"><span class="lbl">${sym}</span><span class="val">insufficient data</span></div>`;
+    return `
+      <div class="ict-or-row"><span class="lbl">${sym} ORH</span><span class="val tabular">${fmtNum(or_.orh)}</span></div>
+      <div class="ict-or-row"><span class="lbl">${sym} ORL</span><span class="val tabular">${fmtNum(or_.orl)}</span></div>
+      <div class="ict-or-row"><span class="lbl">${sym} Position</span><span class="val">${or_.current_position}${or_.break_direction ? ' · ' + or_.break_direction + ' hold' : ''}</span></div>
+    `;
+  };
+  el.innerHTML = row('ES', esData) + '<div style="height:8px;"></div>' + row('MNQ', mnqData);
+}
+
+function renderICTAlerts(alerts) {
+  const el = document.getElementById('ict-alerts-body');
+  if (!el) return;
+  if (!alerts.length) { el.innerHTML = '<div class="empty-state">No ICT alerts yet this session.</div>'; return; }
+  el.innerHTML = alerts.slice(0, 10).map(a => {
+    const outcomeCls = a.outcome_valid === true ? 'valid' : a.outcome_valid === false ? 'invalid' : 'pending';
+    const outcomeTxt = a.outcome_valid === true ? 'VALID' : a.outcome_valid === false ? 'INVALID' : 'PENDING';
+    return `
+      <div class="ict-alert-item">
+        <div class="ict-alert-top">
+          <span>${a.symbol} · ${timeAgo(Date.parse(a.timestamp) / 1000)}</span>
+          <span class="ict-alert-score">${a.score}/27</span>
+        </div>
+        <div>${a.description || a.alert_type}</div>
+        <span class="ict-alert-outcome ${outcomeCls}">${outcomeTxt}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+async function refreshICT() {
+  const [esData, mnqData] = await Promise.all([
+    apiFetch('/api/ict/analysis?symbol=ES'),
+    apiFetch('/api/ict/analysis?symbol=MNQ'),
+  ]);
+  if (esData) {
+    _ictLastAnalysis.ES = esData;
+    renderICTGauge('ES', esData.setup_score, esData.setup_tier);
+    renderICTPO3('ES', esData.power_of_three);
+    renderICTStructureRow('ES', esData);
+    renderICTOverlay('ES');
+    document.getElementById('ict-narrative-body').textContent = esData.narrative || 'Narrative unavailable.';
+    document.getElementById('ict-narrative-meta').textContent = new Date(esData.timestamp).toISOString().substr(11, 5) + ' UTC';
+    const kz = esData.killzone || {};
+    const kzEl = document.getElementById('ict-kz-indicator');
+    document.getElementById('ict-kz-name').textContent = kz.name || '—';
+    document.getElementById('ict-kz-remaining').textContent = kz.active ? `${kz.minutes_remaining}m remaining` : '';
+    if (kzEl) kzEl.classList.toggle('active', !!kz.active);
+  }
+  if (mnqData) {
+    _ictLastAnalysis.MNQ = mnqData;
+    renderICTGauge('MNQ', mnqData.setup_score, mnqData.setup_tier);
+    renderICTPO3('MNQ', mnqData.power_of_three);
+    renderICTStructureRow('MNQ', mnqData);
+    renderICTOverlay('MNQ');
+  }
+  renderICTOpeningRangePanel(esData, mnqData);
+  markUpdated('ict-live');
+}
+
+async function refreshICTAlerts() {
+  const [esAlerts, mnqAlerts] = await Promise.all([
+    apiFetch('/api/ict/alerts?symbol=ES&limit=10'),
+    apiFetch('/api/ict/alerts?symbol=MNQ&limit=10'),
+  ]);
+  const combined = [...((esAlerts && esAlerts.alerts) || []), ...((mnqAlerts && mnqAlerts.alerts) || [])];
+  combined.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+  renderICTAlerts(combined);
+}
+
 /* ── Boot + polling ────────────────────────────────────────────────── */
 initCharts();
+initICTCharts();
 refreshChartBars('ES');
 refreshChartBars('MNQ');
+refreshICTChartBars('ES');
+refreshICTChartBars('MNQ');
 updateSessionBar();
 refreshComposite();
 refreshMtfAndInstruments();
@@ -1553,6 +2066,8 @@ refreshNews();
 refreshStatus();
 refreshWeekAhead();
 refreshDailyReport();
+refreshICT();
+refreshICTAlerts();
 
 setInterval(updateSessionBar, 1000);
 setInterval(refreshComposite, 30000);
@@ -1565,6 +2080,8 @@ setInterval(refreshNews, 300000);
 setInterval(refreshStatus, 30000);
 setInterval(refreshWeekAhead, 300000);
 setInterval(refreshDailyReport, 300000);
+setInterval(refreshICT, 60000);
+setInterval(refreshICTAlerts, 60000);
 </script>
 </body>
 </html>

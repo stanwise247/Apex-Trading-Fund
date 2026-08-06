@@ -2006,6 +2006,31 @@ def background_scheduler():
             except Exception as _inv_e:
                 logger.warning(f'Daily Levels: invalidation check error: {_inv_e}')
 
+        # ── ICT analysis engine — every 60s, 12:00-20:30 UTC weekdays ────
+        # (starts 1h before NY open to catch London/pre-market structure)
+        _now_utc_ict = datetime.now(timezone.utc)
+        _ict_session = (_now_utc_ict.weekday() < 5 and
+                        (12, 0) <= (_now_utc_ict.hour, _now_utc_ict.minute) < (20, 30))
+        if _ict_session and (not hasattr(background_scheduler, '_last_ict_run') or
+                              now - background_scheduler._last_ict_run >= 60):
+            background_scheduler._last_ict_run = now
+            try:
+                import ict_store as _ict_s
+                _ict_report = _ict_s.run_ict_analysis()
+                logger.info(f'ICT analysis: {_ict_report}')
+            except Exception as _ict_e:
+                logger.warning(f'ICT analysis error: {_ict_e}')
+
+        # ── ICT alert hindsight resolution — every 15 min ────────────────
+        if not hasattr(background_scheduler, '_last_ict_resolve') or \
+                now - background_scheduler._last_ict_resolve >= 900:
+            background_scheduler._last_ict_resolve = now
+            try:
+                import ict_store as _ict_r
+                _ict_r.resolve_ict_alerts()
+            except Exception as _ict_r_e:
+                logger.warning(f'ICT alert resolution error: {_ict_r_e}')
+
         # ── Economic calendar refresh (every 6 hours) + 15-min warnings ─
         if not hasattr(background_scheduler, '_last_cal_refresh') or \
                 now - background_scheduler._last_cal_refresh >= 21600:
@@ -6607,6 +6632,40 @@ def mri_daily_levels():
         return jsonify(_mri.get_daily_levels(symbol, include_invalidated=include_invalidated))
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/ict/analysis', methods=['GET'])
+def ict_analysis():
+    try:
+        import ict_store as _ict
+        symbol = request.args.get('symbol', 'ES').upper()
+        return jsonify(_ict.get_ict_analysis(symbol))
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ict/alerts', methods=['GET'])
+def ict_alerts():
+    try:
+        import ict_store as _ict
+        symbol = request.args.get('symbol', 'ES').upper()
+        limit = int(request.args.get('limit', 20))
+        return jsonify({'ok': True, 'alerts': _ict.get_ict_alerts(symbol, limit)})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ict/levels', methods=['GET'])
+def ict_levels():
+    try:
+        import ict_store as _ict
+        symbol = request.args.get('symbol', 'ES').upper()
+        timeframe = request.args.get('timeframe', '5m').lower()
+        tf_map = {'1m': '1min', '5m': '5min', '15m': '15min', '1h': '1hour', '4h': '4hour'}
+        timeframe = tf_map.get(timeframe, timeframe)
+        return jsonify(_ict.get_ict_levels(symbol, timeframe))
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/apex/forecast', methods=['GET'])

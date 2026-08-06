@@ -58,7 +58,7 @@ def load_telegram_config():
 
 
 def send_telegram(message: str, message_type: str = 'trade_signal') -> bool:
-    _ALLOWED_TYPES = {'trade_signal', 'trade_close', 'kill_switch', 'daily_limit', 'mri_alert'}
+    _ALLOWED_TYPES = {'trade_signal', 'trade_close', 'kill_switch', 'daily_limit', 'mri_alert', 'ict_alert'}
     if message_type not in _ALLOWED_TYPES:
         logger.debug(f'Telegram: suppressed non-trade message (type={message_type})')
         return False
